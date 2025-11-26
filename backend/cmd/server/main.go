@@ -13,11 +13,13 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/api/handlers"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/worker"
 )
 
 func main() {
 	database.Connect()
 	redisq.Connect()
+	go worker.Start()
 
 	app := fiber.New(fiber.Config{
 		AppName: "Hunt Engine API v0.3",

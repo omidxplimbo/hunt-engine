@@ -1,48 +1,56 @@
-# -------------------------------------------
-# Stage 1: Builder (مرحله ساخت باینری)
-# از ایمیج رسمی گولنگ استفاده می‌کنیم
-# -------------------------------------------
-FROM golang:1.24-alpine AS builder
+# ================================================
+# Stage 1: Massdns Builder (کامپایل ابزار C)
+# ================================================
+FROM alpine:3.18 AS massdns_builder
+RUN apk add --no-cache git build-base make gcc musl-dev linux-headers
+WORKDIR /tmp
+RUN git clone https://github.com/blechschmidt/massdns.git . && \
+    make && \
+    mv bin/massdns /usr/local/bin/massdns
 
-# نصب پکیج‌های ضروری برای بیلد (در صورت نیاز)
-# RUN apk add --no-cache git
-
-# تنظیم مسیر کاری داخل کانتینر
+# ================================================
+# Stage 2: Golang Builder (کامپایل ابزارهای Go و برنامه اصلی)
+# ================================================
+FROM golang:1.24-alpine AS go_builder
+RUN apk add --no-cache git build-base
 WORKDIR /app
 
-# کپی کردن فایل‌های مدیریت وابستگی‌ها برای استفاده از کش داکر
+# --- نصب ابزارهای شکار سریع ---
+RUN go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+RUN go install -v github.com/tomnomnom/assetfinder@latest
+RUN go install -v github.com/projectdiscovery/alterx/cmd/alterx@latest
+RUN go install -v github.com/d3mondev/puredns/v2@latest
+
+# --- بیلد برنامه اصلی ---
 COPY go.mod go.sum ./
-
-# دانلود وابستگی‌ها
 RUN go mod download
-
-# کپی کردن تمام کدهای منبع به داخل کانتینر
 COPY . .
-
-# بیلد کردن برنامه
-# CGO_ENABLED=0: ساخت باینری کاملاً استاتیک و مستقل از سیستم عامل
-# -ldflags="-s -w": حذف اطلاعات دیباگ برای کاهش حجم فایل نهایی
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o hunt-engine-api ./cmd/server
 
-# -------------------------------------------
-# Stage 2: Runner (مرحله اجرا - ایمیج نهایی سبک)
-# از یک ایمیج بسیار سبک آلپاین استفاده می‌کنیم
-# -------------------------------------------
-FROM alpine:latest
-
-# تنظیم اطلاعات نویسنده (اختیاری)
+# ================================================
+# Stage 3: Final Runner (ایمیج نهایی)
+# ================================================
+FROM alpine:3.18
 LABEL maintainer="Omid Security Researcher"
-
-# نصب سرتیفیکیت‌های SSL برای ارتباطات امن HTTPS (ضروری برای ریکان)
-RUN apk --no-cache add ca-certificates
-
+RUN apk --no-cache add ca-certificates bind-tools jq # jq برای پردازش JSON در شل مفیده
 WORKDIR /root/
 
-# کپی کردن فقط فایل باینری ساخته شده از مرحله قبل
-COPY --from=builder /app/hunt-engine-api .
+# --- کپی کردن ابزارها ---
+# 1. ابزارهای کامپایل شده
+COPY --from=massdns_builder /usr/local/bin/massdns /usr/local/bin/massdns
+COPY --from=go_builder /go/bin/subfinder /usr/local/bin/subfinder
+COPY --from=go_builder /go/bin/assetfinder /usr/local/bin/assetfinder
+COPY --from=go_builder /go/bin/alterx /usr/local/bin/alterx
+COPY --from=go_builder /go/bin/puredns /usr/local/bin/puredns
 
-# اکسپوز کردن پورتی که برنامه روی آن گوش می‌دهد
+# 👇👇👇 2. کپی کردن Amass از ایمیج رسمی خودش (سریع‌ترین روش نصب)
+COPY --from=caffix/amass:latest /bin/amass /usr/local/bin/amass
+
+# 3. برنامه اصلی
+COPY --from=go_builder /app/hunt-engine-api .
+
+# اطمینان از اجرایی بودن و نصب صحیح resolverهای puredns
+RUN chmod +x /usr/local/bin/*
+
 EXPOSE 8080
-
-# دستور اجرای برنامه در هنگام استارت کانتینر
 CMD ["./hunt-engine-api"]
