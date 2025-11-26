@@ -2,7 +2,7 @@
 # Stage 1: Builder (مرحله ساخت باینری)
 # از ایمیج رسمی گولنگ استفاده می‌کنیم
 # -------------------------------------------
-FROM golang:1.21-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 # نصب پکیج‌های ضروری برای بیلد (در صورت نیاز)
 # RUN apk add --no-cache git

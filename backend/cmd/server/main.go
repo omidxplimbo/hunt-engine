@@ -8,39 +8,40 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
+
+	// 👇👇👇 ایمپورت جدید
+	"github.com/omidxplimbo/hunt-engine/backend/internal/api/handlers"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 )
 
 func main() {
-	// 1. ساخت یک نمونه جدید از برنامه Fiber
-	// تنظیمات مربوط به پرفورمنس اینجا قرار می‌گیرد (بعداً تکمیل می‌کنیم)
+	database.Connect()
+	redisq.Connect()
+
 	app := fiber.New(fiber.Config{
-		AppName: "Hunt Engine API v0.1",
+		AppName: "Hunt Engine API v0.3",
 	})
 
-	// 2. اضافه کردن Middlewareهای حیاتی
-	app.Use(logger.New())  // برای لاگ کردن درخواست‌ها در کنسول
-	app.Use(recover.New()) // جلوگیری از کرش کردن برنامه در صورت بروز پنیک
+	app.Use(logger.New())
+	app.Use(recover.New())
 
-	// 3. تعریف روت‌ها (Routes)
-	// یک روت ساده برای تست سلامتی سیستم (Health Check)
-	api := app.Group("/api") // تمام APIها با پیشوند /api شروع می‌شوند
+	api := app.Group("/api")
+
+	// روت تست سلامتی قبلی
 	api.Get("/", func(c *fiber.Ctx) error {
-		// ارسال پاسخ به صورت JSON
-		return c.JSON(fiber.Map{
-			"status":  "success",
-			"message": "🚀 Hunt Engine Backend is Running Correctly!",
-			"stack":   "Golang + Fiber v2",
-		})
+		return c.JSON(fiber.Map{"status": "OK", "message": "Engine is running"})
 	})
 
-	// 4. تنظیم پورت و شروع سرور
-	// پورت را از متغیر محیطی می‌خوانیم (برای سازگاری با داکر)
+	// 👇👇👇 روت جدید برای ساخت تارگت
+	// متد POST روی آدرس /api/targets
+	api.Post("/targets", handlers.CreateTarget)
+
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080" // پورت پیشفرض
+		port = "8080"
 	}
 
 	fmt.Printf("🔥 Server is starting on port %s...\n", port)
-	// شروع گوش دادن به درخواست‌ها
 	log.Fatal(app.Listen(":" + port))
 }
