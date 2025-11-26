@@ -1,5 +1,5 @@
 # ================================================
-# Stage 1: Massdns Builder (کامپایل ابزار C)
+# Stage 1: Massdns Builder (برای Puredns)
 # ================================================
 FROM alpine:3.18 AS massdns_builder
 RUN apk add --no-cache git build-base make gcc musl-dev linux-headers
@@ -9,17 +9,22 @@ RUN git clone https://github.com/blechschmidt/massdns.git . && \
     mv bin/massdns /usr/local/bin/massdns
 
 # ================================================
-# Stage 2: Golang Builder (کامپایل ابزارهای Go و برنامه اصلی)
+# Stage 2: Golang Builder (همه ابزارهای Go)
 # ================================================
 FROM golang:1.24-alpine AS go_builder
 RUN apk add --no-cache git build-base
 WORKDIR /app
 
-# --- نصب ابزارهای شکار سریع ---
+# --- نصب ابزارهای شکار (فاز ۱) ---
 RUN go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
 RUN go install -v github.com/tomnomnom/assetfinder@latest
 RUN go install -v github.com/projectdiscovery/alterx/cmd/alterx@latest
 RUN go install -v github.com/d3mondev/puredns/v2@latest
+# 👇👇👇 ابزار جدید: dnsx (رقیب puredns)
+RUN go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest
+
+# --- نصب ابزارهای شکار (فاز ۲) ---
+RUN go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
 
 # --- بیلد برنامه اصلی ---
 COPY go.mod go.sum ./
@@ -28,28 +33,30 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o hunt-engine-api ./cmd/server
 
 # ================================================
-# Stage 3: Final Runner (ایمیج نهایی)
+# Stage 3: Final Runner (تجمیع همه چیز)
 # ================================================
 FROM alpine:3.18
 LABEL maintainer="Omid Security Researcher"
-RUN apk --no-cache add ca-certificates bind-tools jq # jq برای پردازش JSON در شل مفیده
+# نصب jq و bind-tools برای دیباگ و کارهای جانبی مفیده
+RUN apk --no-cache add ca-certificates bind-tools jq
 WORKDIR /root/
 
 # --- کپی کردن ابزارها ---
-# 1. ابزارهای کامپایل شده
 COPY --from=massdns_builder /usr/local/bin/massdns /usr/local/bin/massdns
 COPY --from=go_builder /go/bin/subfinder /usr/local/bin/subfinder
 COPY --from=go_builder /go/bin/assetfinder /usr/local/bin/assetfinder
 COPY --from=go_builder /go/bin/alterx /usr/local/bin/alterx
 COPY --from=go_builder /go/bin/puredns /usr/local/bin/puredns
+# 👇👇👇 کپی کردن dnsx
+COPY --from=go_builder /go/bin/dnsx /usr/local/bin/dnsx
+COPY --from=go_builder /go/bin/httpx /usr/local/bin/httpx
 
-# 👇👇👇 2. کپی کردن Amass از ایمیج رسمی خودش (سریع‌ترین روش نصب)
+# کپی کردن Amass (سنگین وزن)
 COPY --from=caffix/amass:latest /bin/amass /usr/local/bin/amass
 
-# 3. برنامه اصلی
+# کپی برنامه اصلی
 COPY --from=go_builder /app/hunt-engine-api .
 
-# اطمینان از اجرایی بودن و نصب صحیح resolverهای puredns
 RUN chmod +x /usr/local/bin/*
 
 EXPOSE 8080

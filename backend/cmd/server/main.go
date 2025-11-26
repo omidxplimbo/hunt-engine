@@ -38,6 +38,11 @@ func main() {
 	// 👇👇👇 روت جدید برای ساخت تارگت
 	// متد POST روی آدرس /api/targets
 	api.Post("/targets", handlers.CreateTarget)
+	api.Get("/targets", handlers.GetTargets)
+
+	// --- Asset Routes ---
+	// 👇👇👇 روت جدید: گرفتن دارایی‌های یک تارگت خاص (با قابلیت فیلتر)
+	api.Get("/targets/:id/assets", handlers.GetTargetAssets)
 
 	port := os.Getenv("PORT")
 	if port == "" {

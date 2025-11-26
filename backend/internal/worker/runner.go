@@ -164,6 +164,25 @@ func runPassiveCollection(domain string) []string {
 	return finalSlice
 }
 
+// runDnsx جایگزین مدرن و Pure Go برای puredns است.
+// این تابع آماده است تا در آینده بر اساس کانفیگ تارگت فراخوانی شود.
+func runDnsx(inputFile, outputFile string) ([]string, error) {
+	log.Println("🎯 Running active validation using DNSX...")
+
+	// dnsx -l mutated.txt -o live.txt -silent -resp (فقط پاسخ‌دهنده‌ها)
+	// نکته: dnsx به طور پیشفرض ریزالورهای خوبی داره، اما میشه بهش لیست هم داد.
+	cmd := exec.Command("dnsx", "-l", inputFile, "-o", outputFile, "-silent", "-resp")
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// dnsx هم اگر چیزی پیدا نکنه ممکنه exit code غیر صفر بده
+		log.Printf("⚠️ Dnsx finished with potential issues. Output: %s\n", string(output))
+	}
+
+	// خواندن نتایج زنده از فایل خروجی
+	return readSliceFromFile(outputFile)
+}
+
 // runAlterx حالا خروجی رو برمی‌گردونه به جای نوشتن در فایل
 func runAlterx(inputFile, rootDomain string) ([]string, error) {
 	// alterx از stdin می‌خونه. ما فایل رو می‌خونیم و پایپ می‌کنیم بهش

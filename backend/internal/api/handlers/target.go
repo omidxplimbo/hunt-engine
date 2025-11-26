@@ -8,6 +8,7 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/utils"
 )
 
 // CreateTarget هندلر ساخت یک هدف جدید است
@@ -66,4 +67,107 @@ func CreateTarget(c *fiber.Ctx) error {
 		"message": "Target created successfully AND discovery queued!", // پیام رو آپدیت کردیم
 		"data":    target,
 	})
+}
+
+// ==========================================
+// New Handlers for Data Retrieval
+// ==========================================
+
+// GetTargets لیست تمام تارگت‌ها رو به صورت صفحه‌بندی شده برمی‌گردونه
+func GetTargets(c *fiber.Ctx) error {
+	var targets []models.Target
+
+	// 👇👇👇 استفاده از Scope صفحه‌بندی
+	// قبل از Find، متد Scopes رو صدا می‌زنیم
+	result := database.DB.Scopes(utils.Paginate(c)).Order("created_at desc").Find(&targets)
+
+	if result.Error != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": result.Error.Error()})
+	}
+
+	// (بقیه کد تبدیل به DTO مثل قبله و تغییری نمی‌کنه)
+	targetResponses := make([]dto.TargetResponse, len(targets))
+	for i, t := range targets {
+		var count int64
+		database.DB.Model(&models.Asset{}).Where("target_id = ?", t.ID).Count(&count)
+		targetResponses[i] = toTargetResponse(t, count)
+	}
+
+	return c.JSON(fiber.Map{
+		"status": "success",
+		"data":   targetResponses,
+		"count":  len(targetResponses), // تعداد آیتم‌های این صفحه
+		// نکته: برای تارگت‌ها فعلا تعداد کل رو نمی‌فرستیم چون معمولا کمه
+	})
+}
+
+// GetTargetAssets لیست دارایی‌ها رو با فیلتر و صفحه‌بندی برمی‌گردونه
+func GetTargetAssets(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	// 1. ساخت کوئری پایه با فیلترها
+	db := database.DB.Model(&models.Asset{}).Where("target_id = ?", id)
+
+	if isLive := c.Query("is_live"); isLive != "" {
+		db = db.Where("is_live = ?", isLive == "true")
+	}
+	if isNew := c.Query("is_new"); isNew != "" {
+		db = db.Where("is_new = ?", isNew == "true")
+	}
+
+	// 👇👇👇 2. گرفتن تعداد کل نتایج (قبل از صفحه‌بندی)
+	var totalCount int64
+	// از db.Count استفاده می‌کنیم که کوئری رو اجرا نمی‌کنه، فقط می‌شماره
+	if err := db.Count(&totalCount).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	// 👇👇👇 3. گرفتن داده‌های صفحه فعلی (با اعمال limit و offset)
+	var assets []models.Asset
+	// اینجا Scopes رو روی کوئری فیلتر شده اعمال می‌کنیم
+	result := db.Scopes(utils.Paginate(c)).Order("value asc").Find(&assets)
+
+	if result.Error != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": result.Error.Error()})
+	}
+
+	// تبدیل به DTO
+	assetResponses := make([]dto.AssetResponse, len(assets))
+	for i, a := range assets {
+		assetResponses[i] = toAssetResponse(a)
+	}
+
+	// بازگشت پاسخ به همراه اطلاعات صفحه‌بندی
+	return c.JSON(fiber.Map{
+		"status":      "success",
+		"data":        assetResponses,
+		"page_count":  len(assetResponses), // تعداد آیتم‌های توی این صفحه
+		"total_count": totalCount,          // تعداد کل آیتم‌های موجود با این فیلترها
+	})
+}
+
+// ==========================================
+// Helper Functions (Model -> DTO Mapper)
+// ==========================================
+func toTargetResponse(t models.Target, assetCount int64) dto.TargetResponse {
+	return dto.TargetResponse{
+		ID:          t.ID,
+		Name:        t.Name,
+		RootDomain:  t.RootDomain,
+		Description: t.Description,
+		InScope:     t.InScope,
+		CreatedAt:   t.CreatedAt,
+		AssetCount:  assetCount,
+	}
+}
+
+func toAssetResponse(a models.Asset) dto.AssetResponse {
+	return dto.AssetResponse{
+		ID:        a.ID,
+		Value:     a.Value,
+		Type:      a.Type,
+		IsNew:     a.IsNew,
+		IsLive:    a.IsLive,
+		CreatedAt: a.CreatedAt,
+	}
 }
