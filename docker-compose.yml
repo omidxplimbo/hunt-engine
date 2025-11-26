@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  # -----------------------------
+  # 1. Backend API (Golang Engine)
+  # -----------------------------
+  backend:
+    container_name: hunt-backend
+    build:
+      context: ./backend  # داکر فایل گولنگ در این پوشه است
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080" # فقط پورت API
+    environment:
+      - DB_HOST=postgres
+      - DB_USER=hunter
+      - DB_PASSWORD=secretpassword
+      - DB_NAME=huntdb
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - hunt-net
+    restart: unless-stopped
+
+  # -----------------------------
+  # 2. Frontend Dashboard (React/Modern UI)
+  # -----------------------------
+  # فعلا این بخش را کامنت می‌کنیم تا وقتی کد فرانت را بزنیم
+  # frontend:
+  #   container_name: hunt-frontend
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile
+  #   ports:
+  #     - "3000:80" # داشبورد روی پورت 3000 در دسترس خواهد بود
+  #   depends_on:
+  #     - backend
+  #   networks:
+  #     - hunt-net
+
+  # -----------------------------
+  # 3. Databases & Cache
+  # -----------------------------
+  postgres:
+    container_name: hunt-postgres
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: hunter
+      POSTGRES_PASSWORD: secretpassword
+      POSTGRES_DB: huntdb
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - hunt-net
+    restart: unless-stopped
+
+  redis:
+    container_name: hunt-redis
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    networks:
+      - hunt-net
+    restart: unless-stopped
+
+# Networks & Volumes
+networks:
+  hunt-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

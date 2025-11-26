@@ -1,0 +1,21 @@
+# Go related
+/backend/bin/
+/backend/vendor/
+/backend/go.sum
+**/*.exe
+**/*.test
+
+# Node/Frontend related
+/frontend/node_modules/
+/frontend/build/
+/frontend/dist/
+/frontend/.env.local
+
+# Database & Storage related
+postgres_data/
+redis_data/
+*.db
+*.log
+
+# OS related
+.DS_Store
