@@ -20,6 +20,8 @@ services:
       - REDIS_PORT=6379
       - PROBE_BATCH_SIZE=1000
       - TRUSTED_RESOLVERS=1.1.1.1,8.8.8.8,1.0.0.1,8.8.4.4
+      - TELEGRAM_BOT_TOKEN=8186397853:AAGbnh2A5AnGgju9qobtL5joh9G8SSEYGV8
+      - TELEGRAM_CHAT_ID=-1003320492297
     depends_on:
       - postgres
       - redis
