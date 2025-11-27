@@ -13,12 +13,14 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/api/handlers"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/telegram"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker"
 )
 
 func main() {
 	database.Connect()
 	redisq.Connect()
+	telegram.Init()
 	go worker.Start()
 
 	app := fiber.New(fiber.Config{
@@ -44,6 +46,7 @@ func main() {
 	// 👇👇👇 روت جدید: گرفتن دارایی‌های یک تارگت خاص (با قابلیت فیلتر)
 	api.Get("/targets/:id/assets", handlers.GetTargetAssets)
 	api.Post("/targets/:id/probe", handlers.StartProbing)
+	api.Post("/targets/:id/discovery", handlers.StartDiscovery) // شروع فاز ۱
 
 	port := os.Getenv("PORT")
 	if port == "" {

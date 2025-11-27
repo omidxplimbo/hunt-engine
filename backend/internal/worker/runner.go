@@ -93,16 +93,16 @@ func processJobDispatcher(payload string) {
 // =================================================================
 // PHASE 1: Discovery Implementation
 // =================================================================
+// =================================================================
+// PHASE 1: Discovery Implementation (اصلاح شده: شامل کردن سوابق قبلی)
+// =================================================================
 func runDiscoveryPhase(targetID uint, rootDomain string) {
 	log.Printf("🚀 Starting PHASE 1 (DISCOVERY) for: %s (ID: %d)\n", rootDomain, targetID)
 	startTime := time.Now()
 
-	// 1. Passive
+	// 1. Passive Collection
 	passiveResults := runPassiveCollection(rootDomain)
-	if len(passiveResults) == 0 {
-		log.Println("⚠️ No subdomains found passively. Aborting.")
-		return
-	}
+	// نکته: اینجا دیگه اگر خالی بود Abort نمی‌کنیم، چون شاید سوابق قبلی رو بخوایم چک کنیم
 
 	// 2. Mutation
 	writeSliceToFile(allFoundFile, passiveResults)
@@ -111,11 +111,24 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		log.Printf("❌ Alterx failed: %v. Proceeding without mutations.\n", err)
 		mutatedResults = []string{}
 	}
-	masterList := mergeUnique(passiveResults, mutatedResults)
-	writeSliceToFile(allFoundFile, masterList)
-	log.Printf("📊 Master list created with %d potential subdomains. Starting validation...\n", len(masterList))
 
-	// 3. Validation (Puredns)
+	// 3. 👇👇👇 واکشی تمام سوابق قبلی از دیتابیس (The History Injection)
+	var existingAssets []string
+	database.DB.Model(&models.Asset{}).
+		Where("target_id = ?", targetID).
+		Pluck("value", &existingAssets) // فقط ستون value را می‌خوانیم
+
+	log.Printf("📜 Fetched %d existing assets from DB to re-verify.\n", len(existingAssets))
+
+	// 4. ادغام همه چیز (Passive + Mutation + Existing DB Records)
+	// لیست نهایی شامل هر چیزی است که تا حالا دیدیم یا جدید پیدا کردیم
+	masterList := mergeUnique(passiveResults, mutatedResults)
+	masterList = mergeUnique(masterList, existingAssets)
+
+	log.Printf("📊 Master list created with %d potential subdomains. Starting validation...\n", len(masterList))
+	writeSliceToFile(allFoundFile, masterList)
+
+	// 5. Validation (Puredns) - حالا روی همه چیز اجرا میشه
 	liveSubdomains, err := runPuredns(allFoundFile)
 	if err != nil {
 		log.Printf("❌ Puredns failed critically: %v\n", err)
@@ -124,7 +137,7 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		log.Printf("✅ [Stage 3] Confirmed %d LIVE subdomains.\n", len(liveSubdomains))
 	}
 
-	// 4. Saving
+	// 6. Saving
 	saveDiscoveryResultsToDB(targetID, masterList, liveSubdomains)
 
 	log.Printf("🏁 PHASE 1 finished for %s in %s.\n", rootDomain, time.Since(startTime))
@@ -507,20 +520,32 @@ func runAlterx(inputFile, rootDomain string) ([]string, error) {
 	return results, nil
 }
 
+// saveDiscoveryResultsToDB (نسخه نهایی: با نوتیفیکیشن تلگرام و ثبت تاریخچه)
 func saveDiscoveryResultsToDB(targetID uint, masterList []string, liveList []string) {
 	log.Printf("💾 Saving/Updating %d potential assets to DB (Smart Upsert)...", len(masterList))
 
+	// تبدیل لیست زنده‌ها به مپ برای سرعت بالا
 	liveMap := make(map[string]bool)
 	for _, l := range liveList {
 		liveMap[l] = true
+	}
+
+	// گرفتن نام تارگت برای ارسال در تلگرام
+	var targetName string
+	var target models.Target
+	if err := database.DB.First(&target, targetID).Error; err == nil {
+		targetName = target.RootDomain
+	} else {
+		targetName = fmt.Sprintf("Target-%d", targetID)
 	}
 
 	countNew := 0
 	countUpdated := 0
 
 	for _, val := range masterList {
-		isLive := liveMap[val]
+		isLive := liveMap[val] // وضعیت زنده بودن در این لحظه
 
+		// مدل پیش‌فرض برای رکورد جدید
 		asset := models.Asset{
 			TargetID:     targetID,
 			Value:        val,
@@ -533,22 +558,42 @@ func saveDiscoveryResultsToDB(targetID uint, masterList []string, liveList []str
 		}
 
 		var existingAsset models.Asset
+		// چک می‌کنیم آیا این دارایی قبلاً وجود داشته؟
 		result := database.DB.Where("value = ? AND target_id = ?", val, targetID).First(&existingAsset)
 
 		if result.Error == nil {
+			// --- سناریو ۱: دارایی قدیمی است ---
+			// چک می‌کنیم آیا وضعیت زنده بودنش تغییر کرده؟
 			if existingAsset.IsLive != isLive {
+				now := time.Now()
+
+				// 1. ثبت در تاریخچه
+				logChange(database.DB, existingAsset.ID, "is_live", strconv.FormatBool(existingAsset.IsLive), strconv.FormatBool(isLive))
+
+				// 2. ارسال نوتیفیکیشن تلگرام 🚨
+				telegram.SendChangeAlert(targetName, val, "is_live", strconv.FormatBool(existingAsset.IsLive), strconv.FormatBool(isLive))
+
+				// 3. آپدیت رکورد
 				database.DB.Model(&existingAsset).Updates(map[string]interface{}{
-					"is_live": isLive,
-					"is_new":  true,
+					"is_live":        isLive,
+					"is_new":         true, // دوباره جدید حساب میشه چون وضعیتش عوض شده
+					"last_change_at": &now,
 				})
 				countUpdated++
 			}
 		} else {
+			// --- سناریو ۲: دارایی کاملاً جدید است (Fresh Asset) ---
 			database.DB.Create(&asset)
+
+			// ارسال نوتیفیکیشن تلگرام برای دارایی جدید 🚨
+			// فقط اگر زنده باشه یا کلاً استراتژی‌مون این باشه که همه جدیدها رو بگیم
+			// اینجا برای همه جدیدها آلارم می‌فرستیم:
+			telegram.SendNewAssetAlert(targetName, val)
+
 			countNew++
 		}
 	}
-	log.Printf("✅ DB Sync Complete. New: %d, Status Changed: %d.\n", countNew, countUpdated)
+	log.Printf("✅ DB Sync Complete. New Assets: %d, Status Changed: %d.\n", countNew, countUpdated)
 }
 
 func mergeUnique(slice1, slice2 []string) []string {

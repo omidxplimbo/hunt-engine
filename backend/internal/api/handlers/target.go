@@ -228,3 +228,32 @@ func toAssetResponse(a models.Asset) dto.AssetResponse {
 		RawHttpx: rawHttpx,
 	}
 }
+
+// StartDiscovery هندلر شروع مجدد فاز ۱ (کشف) برای یک تارگت موجود است
+func StartDiscovery(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	// 1. چک می‌کنیم تارگت وجود داشته باشد
+	var target models.Target
+	if err := database.DB.First(&target, id).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Target not found"})
+	}
+
+	// 2. ارسال پیام به صف با تایپ DISCOVERY
+	// فرمت: "DISCOVERY:TargetID:RootDomain"
+	taskPayload := fmt.Sprintf("DISCOVERY:%d:%s", target.ID, target.RootDomain)
+
+	err := redisq.Client.RPush(redisq.Ctx, redisq.QueueName, taskPayload).Err()
+	if err != nil {
+		fmt.Printf("⚠️ Failed to enqueue discovery task for %s: %v\n", target.RootDomain, err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to enqueue job"})
+	}
+
+	fmt.Printf("🚀 Enqueued RE-DISCOVERY task for: %s [Payload: %s]\n", target.RootDomain, taskPayload)
+
+	// 3. بازگشت پاسخ موفقیت
+	return c.JSON(fiber.Map{
+		"status":  "success",
+		"message": fmt.Sprintf("Phase 1 (Discovery) started successfully for target: %s", target.Name),
+	})
+}
