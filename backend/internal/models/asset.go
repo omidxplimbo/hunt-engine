@@ -20,13 +20,15 @@ type Target struct {
 	Description string `json:"description"`
 	InScope     bool   `gorm:"default:true" json:"in_scope"`
 
-	// 👇👇👇 فیلدهای جدید برای مانیتورینگ (Continuous Recon)
-	// Frequency: فاصله زمانی بین اسکن‌ها به دقیقه (مثلاً 1440 برای ۲۴ ساعت)
-	// اگر 0 باشد، یعنی مانیتورینگ خودکار غیرفعال است.
-	Frequency int `gorm:"default:0" json:"frequency"`
-
-	// LastScanAt: زمانی که آخرین اسکن کامل (فاز ۱ و ۲) روی این تارگت تمام شده
+	// تنظیمات زمان‌بندی (دقیقه)
+	Frequency  int        `gorm:"default:0" json:"frequency"`
 	LastScanAt *time.Time `json:"last_scan_at"`
+	Status     string     `gorm:"size:50;default:'READY'" json:"status"`
+
+	// 👇👇👇 فیلد جدید: لیست ماژول‌های انتخابی برای اجرا
+	// مثال: ["DISCOVERY", "PROBING"]
+	// پیش‌فرض: فقط دیسکاوری
+	ScanModules string `gorm:"type:jsonb;default:'[\"DISCOVERY\", \"PROBING\"]'" json:"scan_modules"`
 
 	Assets []Asset `json:"-"`
 }

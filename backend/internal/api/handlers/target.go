@@ -26,12 +26,24 @@ func CreateTarget(c *fiber.Ctx) error {
 
 	// TODO: اینجا باید اعتبارسنجی (Validation) اضافه بشه که فعلا رد می‌شیم
 
-	// 2. Map to Model: داده‌های DTO رو تبدیل می‌کنیم به مدل دیتابیس
+	modulesJSON := "[]"
+	if len(req.Modules) > 0 {
+		// اینجا خیلی ساده تبدیل می‌کنیم، در کد واقعی بهتره از json.Marshal استفاده بشه
+		// فرض می‌کنیم کاربر درست می‌فرسته. برای سادگی فعلا از کتابخانه استفاده می‌کنیم:
+		bytes, _ := json.Marshal(req.Modules)
+		modulesJSON = string(bytes)
+	} else {
+		// پیش‌فرض
+		modulesJSON = "[\"DISCOVERY\", \"PROBING\"]"
+	}
+
 	target := models.Target{
 		Name:        req.Name,
 		RootDomain:  req.RootDomain,
 		Description: req.Description,
-		InScope:     true, // پیشفرض فعال است
+		InScope:     true,
+		Frequency:   req.Frequency, // 👈 ذخیره فرکانس
+		ScanModules: modulesJSON,   // 👈 ذخیره ماژول‌ها
 	}
 
 	// 3. Save to DB
@@ -157,6 +169,17 @@ func StartProbing(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Target not found"})
 	}
 
+	// 👇👇👇 چک کردن وضعیت قبل از شروع دستی
+	if target.Status == "SCANNING" {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Target is already being scanned. Please wait.",
+		})
+	}
+
+	// 👇👇👇 قفل کردن تارگت
+	database.DB.Model(&target).Update("status", "SCANNING")
+
 	// 2. ارسال پیام به صف با تایپ PROBING
 	// فرمت: "PROBING:TargetID:RootDomain"
 	taskPayload := fmt.Sprintf("PROBING:%d:%s", target.ID, target.RootDomain)
@@ -238,6 +261,17 @@ func StartDiscovery(c *fiber.Ctx) error {
 	if err := database.DB.First(&target, id).Error; err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Target not found"})
 	}
+
+	// 👇👇👇 چک کردن وضعیت قبل از شروع دستی
+	if target.Status == "SCANNING" {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Target is already being scanned. Please wait.",
+		})
+	}
+
+	// 👇👇👇 قفل کردن تارگت
+	database.DB.Model(&target).Update("status", "SCANNING")
 
 	// 2. ارسال پیام به صف با تایپ DISCOVERY
 	// فرمت: "DISCOVERY:TargetID:RootDomain"

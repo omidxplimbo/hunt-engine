@@ -13,6 +13,7 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/api/handlers"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/scheduler"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/telegram"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker"
 )
@@ -21,6 +22,7 @@ func main() {
 	database.Connect()
 	redisq.Connect()
 	telegram.Init()
+	go scheduler.Start()
 	go worker.Start()
 
 	app := fiber.New(fiber.Config{

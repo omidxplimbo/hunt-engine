@@ -141,6 +141,14 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	saveDiscoveryResultsToDB(targetID, masterList, liveSubdomains)
 
 	log.Printf("🏁 PHASE 1 finished for %s in %s.\n", rootDomain, time.Since(startTime))
+	log.Printf("🔗 Chaining: Auto-starting PHASE 2 (PROBING) for %s...\n", rootDomain)
+	probePayload := fmt.Sprintf("PROBING:%d:%s", targetID, rootDomain)
+	// ارسال به همان صف Redis
+	if err := redisq.Client.RPush(context.Background(), redisq.QueueName, probePayload).Err(); err != nil {
+		log.Printf("❌ Failed to auto-trigger Phase 2 for %s: %v\n", rootDomain, err)
+	} else {
+		log.Printf("🚀 Phase 2 enqueued successfully for %s.\n", rootDomain)
+	}
 }
 
 // =================================================================
@@ -156,6 +164,8 @@ func runProbingPhase(targetID uint, rootDomain string) {
 
 	if totalLive == 0 {
 		log.Println("⚠️ No live assets found for this target in DB. Aborting probing.")
+		// حتی اگر چیزی پیدا نشد، باید زنجیره رو ادامه بدیم (شاید فاز بعدی لازم باشه)
+		triggerNextModule(targetID, rootDomain, "PROBING")
 		return
 	}
 	log.Printf("✅ Found %d live assets in DB. Starting batch processing...\n", totalLive)
@@ -187,6 +197,7 @@ func runProbingPhase(targetID uint, rootDomain string) {
 		}
 
 		// اجرای httpx
+		// نکته: ما از -json استفاده می‌کنیم که خروجی کامل و غنی میده
 		cmd := exec.Command("httpx",
 			"-l", probingInputFile,
 			"-json",
@@ -203,6 +214,7 @@ func runProbingPhase(targetID uint, rootDomain string) {
 		if err != nil {
 			log.Printf("❌ Error reading batch httpx output: %v\n", err)
 		} else {
+			// استفاده از موتور مقایسه برای آپدیت هوشمند و نوتیفیکیشن
 			updateAssetsWithDiff(targetID, httpxResults)
 			processedCount += len(batchAssets)
 		}
@@ -211,10 +223,11 @@ func runProbingPhase(targetID uint, rootDomain string) {
 		log.Printf("✅ Batch finished. Progress: %d/%d\n", processedCount, totalLive)
 	}
 
-	now := time.Now()
-	database.DB.Model(&models.Target{}).Where("id = ?", targetID).Update("last_scan_at", &now)
-
 	log.Printf("🏁 PHASE 2 (PROBING) finished for target ID %d. Total processed: %d in %s.\n", targetID, processedCount, time.Since(startTime))
+
+	// 👇👇👇 تغییر مهم: مدیریت زنجیره هوشمند
+	// چک می‌کنه آیا مرحله بعدی (مثلاً VULN_SCAN) توی کانفیگ تارگت هست یا نه
+	triggerNextModule(targetID, rootDomain, "PROBING")
 }
 
 // ==========================================
@@ -614,4 +627,47 @@ func mergeUnique(slice1, slice2 []string) []string {
 func writeSliceToFile(filename string, data []string) error {
 	content := strings.Join(data, "\n")
 	return ioutil.WriteFile(filename, []byte(content), 0644)
+}
+
+// triggerNextModule تصمیم می‌گیرد بعد از اتمام یک فاز، چه کاری انجام دهد
+func triggerNextModule(targetID uint, rootDomain, currentModule string) {
+	var target models.Target
+	if err := database.DB.First(&target, targetID).Error; err != nil {
+		log.Printf("❌ Failed to fetch target config: %v\n", err)
+		// برای جلوگیری از گیر کردن در حالت SCANNING در صورت خطا
+		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Update("status", "READY")
+		return
+	}
+
+	var modules []string
+	json.Unmarshal([]byte(target.ScanModules), &modules)
+
+	currentIndex := -1
+	for i, m := range modules {
+		if m == currentModule {
+			currentIndex = i
+			break
+		}
+	}
+
+	if currentIndex != -1 && currentIndex+1 < len(modules) {
+		// --- هنوز کار داریم (زنجیره ادامه دارد) ---
+		nextModule := modules[currentIndex+1]
+		log.Printf("🔗 Chaining: Phase '%s' done. Auto-starting next phase: '%s'\n", currentModule, nextModule)
+
+		payload := fmt.Sprintf("%s:%d:%s", nextModule, targetID, rootDomain)
+		redisq.Client.RPush(context.Background(), redisq.QueueName, payload)
+
+		// نکته: وضعیت همچنان SCANNING باقی می‌مونه
+	} else {
+		// --- پایان خط (همه فازها تمام شدند) ---
+		log.Printf("🏁 Chain Complete. No more modules defined after '%s'.\n", currentModule)
+
+		now := time.Now()
+		// 👇👇👇 باز کردن قفل (تغییر وضعیت به READY) + آپدیت زمان آخرین اسکن
+		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{
+			"last_scan_at": &now,
+			"status":       "READY",
+		})
+	}
 }

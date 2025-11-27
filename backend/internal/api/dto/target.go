@@ -8,4 +8,8 @@ type CreateTargetRequest struct {
 	RootDomain string `json:"root_domain" validate:"required,hostname"`
 	// توضیحات اختیاری
 	Description string `json:"description"`
+
+	// 👇👇👇 فیلدهای جدید
+	Frequency int      `json:"frequency"` // 0 یعنی دستی، >0 یعنی اتوماتیک (دقیقه)
+	Modules   []string `json:"modules"`   // ["DISCOVERY", "PROBING"]
 }

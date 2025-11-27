@@ -10,60 +10,50 @@ import (
 	"time"
 )
 
-// ظرفیت صف پیام‌ها (مثلاً ۲۰۰۰ پیام در صف می‌مانند تا ارسال شوند)
-const QueueSize = 2000
+// 👇 افزایش ظرفیت صف به ۵۰ هزار پیام (برای هندل کردن اسپایک‌های ناگهانی)
+const QueueSize = 50000
 
-// Rate Limit: تلگرام حدود ۲۰ پیام در دقیقه اجازه می‌دهد.
-// ما ایمن عمل می‌کنیم: هر ۳ ثانیه یک پیام.
-const RateLimit = 3 * time.Second
+// 👇 افزایش سرعت ارسال (۱ پیام در ثانیه برای تلگرام امن است)
+const RateLimit = 1 * time.Second
 
-// کانال برای نگهداری پیام‌ها (این همان صف ماست)
+// کانال بافر دار
 var messageQueue = make(chan string, QueueSize)
 
-// Init Notification System
-// این تابع باید یکبار در main.go صدا زده شود تا ورکر تلگرام روشن شود
 func Init() {
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
 	chatID := os.Getenv("TELEGRAM_CHAT_ID")
 
 	if token == "" || chatID == "" {
-		log.Println("⚠️ Telegram credentials not found. Notification system disabled.")
+		log.Println("⚠️ Telegram config missing. Notification system disabled.")
 		return
 	}
 
-	// روشن کردن پردازشگر پس‌زمینه (Worker)
+	// روشن کردن پردازشگر پس‌زمینه
 	go processQueue()
-	log.Println("🚀 Telegram Notification Worker started (Rate Limited).")
+	log.Println("🚀 Telegram Notification Worker started (No-Drop Mode).")
 }
 
-// processQueue حلقه بی‌پایانی که پیام‌ها را یکی‌یکی برداشته و ارسال می‌کند
 func processQueue() {
-	// استفاده از Ticker برای کنترل دقیق زمان‌بندی
 	ticker := time.NewTicker(RateLimit)
 	defer ticker.Stop()
 
 	for msg := range messageQueue {
-		// منتظر می‌مانیم تا تیکر اجازه دهد (هر ۳ ثانیه یکبار)
+		// صبر برای تیکر (Rate Limit)
 		<-ticker.C
 
-		// حالا پیام را واقعاً به API می‌فرستیم
+		// ارسال واقعی
 		performHTTPRequest(msg)
 	}
 }
 
-// SendMessage پیام را به صف اضافه می‌کند (Non-blocking)
-// این تابع دیگر مستقیماً به تلگرام وصل نمی‌شود، فقط پیام را در صف می‌اندازد
+// SendMessage پیام را به صف اضافه می‌کند
+// 👇 تغییر مهم: این تابع دیگر Non-blocking نیست.
+// اگر صف ۵۰ هزارتایی پر شود، اینجا صبر می‌کند تا جا باز شود.
+// نتیجه: هیچ پیامی دور ریخته نمی‌شود.
 func SendMessage(text string) {
-	// چک می‌کنیم صف پر نشده باشد تا برنامه قفل نکند
-	select {
-	case messageQueue <- text:
-		// پیام با موفقیت به صف رفت
-	default:
-		log.Println("❌ Telegram Queue is FULL! Dropping notification to prevent blocking.")
-	}
+	messageQueue <- text
 }
 
-// performHTTPRequest کار واقعی ارسال به سرور تلگرام را انجام می‌دهد
 func performHTTPRequest(text string) {
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
 	chatID := os.Getenv("TELEGRAM_CHAT_ID")
@@ -74,24 +64,32 @@ func performHTTPRequest(text string) {
 		"chat_id":    chatID,
 		"text":       text,
 		"parse_mode": "Markdown",
+		// جلوگیری از پیش‌نمایش لینک‌ها برای تمیزتر شدن چت
+		"disable_web_page_preview": true,
 	})
 
-	client := http.Client{Timeout: 10 * time.Second}
+	// تایم‌اوت کوتاه برای جلوگیری از قفل شدن روی شبکه
+	client := http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Post(apiURL, "application/json", bytes.NewBuffer(reqBody))
 
 	if err != nil {
 		log.Printf("❌ Failed to send Telegram message: %v\n", err)
+		// نکته: در سیستم‌های خیلی حساس، اینجا باید پیام را دوباره به صف برگردانیم (Retry Queue)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		log.Printf("❌ Telegram API error: Status %d\n", resp.StatusCode)
-		// در سیستم‌های پیشرفته‌تر، اینجا می‌توانیم منطق Retry داشته باشیم
+		// خطای 429 یعنی Too Many Requests. اگر دیدی، باید RateLimit را زیاد کنی
+		if resp.StatusCode == 429 {
+			log.Println("⚠️ Rate limit hit! Slowing down...")
+			time.Sleep(5 * time.Second)
+		}
 	}
 }
 
-// SendChangeAlert فرمت پیام تغییر (بدون تغییر نسبت به قبل، فقط SendMessage را صدا می‌زند)
+// SendChangeAlert فرمت پیام تغییر
 func SendChangeAlert(targetDomain, assetValue, field, oldVal, newVal string) {
 	emoji := "🔄"
 	if field == "status_code" {
