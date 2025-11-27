@@ -9,6 +9,8 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,19 +19,16 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
+	"gorm.io/gorm"
 )
 
 // مسیرهای فایل‌های موقت
 const (
-	// فاز ۱
-	allFoundFile = "/tmp/all_found.txt"
-	// finalLiveFile = "/tmp/live.txt" // 👈 این دیگه لازم نیست
-	// فاز ۲
+	allFoundFile      = "/tmp/all_found.txt"
 	probingInputFile  = "/tmp/probing_input.txt"
 	probingOutputFile = "/tmp/probing_output.json"
 )
 
-// مقادیر پیش‌فرض کانفیگ
 const DefaultBatchSize = 500
 
 // HttpxResult ساختار برای پارس کردن خروجی JSON
@@ -116,7 +115,6 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	log.Printf("📊 Master list created with %d potential subdomains. Starting validation...\n", len(masterList))
 
 	// 3. Validation (Puredns)
-	// 👇👇👇 اصلاح فراخوانی (حذف پارامتر دوم)
 	liveSubdomains, err := runPuredns(allFoundFile)
 	if err != nil {
 		log.Printf("❌ Puredns failed critically: %v\n", err)
@@ -191,7 +189,7 @@ func runProbingPhase(targetID uint, rootDomain string) {
 		if err != nil {
 			log.Printf("❌ Error reading batch httpx output: %v\n", err)
 		} else {
-			updateAssetsInDB(targetID, httpxResults)
+			updateAssetsWithDiff(targetID, httpxResults)
 			processedCount += len(batchAssets)
 		}
 
@@ -199,11 +197,197 @@ func runProbingPhase(targetID uint, rootDomain string) {
 		log.Printf("✅ Batch finished. Progress: %d/%d\n", processedCount, totalLive)
 	}
 
+	now := time.Now()
+	database.DB.Model(&models.Target{}).Where("id = ?", targetID).Update("last_scan_at", &now)
+
 	log.Printf("🏁 PHASE 2 (PROBING) finished for target ID %d. Total processed: %d in %s.\n", targetID, processedCount, time.Since(startTime))
 }
 
 // ==========================================
-// Helper Functions
+// Helper Functions (Continuous Recon Engine)
+// ==========================================
+
+// updateAssetsWithDiff (موتور مقایسه: آپدیت هوشمند دارایی‌ها و ثبت تاریخچه تغییرات)
+func updateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
+	log.Printf("Does Smart Update (Diff Engine) for %d assets...", len(results))
+	countUpdated := 0
+	countChanges := 0
+
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		for hostInput, result := range results {
+			var asset models.Asset
+			if err := tx.Set("gorm:query_option", "FOR UPDATE").Where("value = ? AND target_id = ?", hostInput, targetID).First(&asset).Error; err != nil {
+				if err == gorm.ErrRecordNotFound {
+					log.Printf("⚠️ Warning: Httpx found result for '%s', but asset not found in DB for update.\n", hostInput)
+				}
+				continue
+			}
+
+			hasChanged := false
+			now := time.Now()
+
+			// مقایسه تمام فیلدهای مهم
+			if asset.StatusCode != result.StatusCode {
+				if err := logChange(tx, asset.ID, "status_code", strconv.Itoa(asset.StatusCode), strconv.Itoa(result.StatusCode)); err != nil {
+					return err
+				}
+				hasChanged = true
+			}
+			if asset.Title != result.Title {
+				oldTitle := shortenString(asset.Title, 50)
+				newTitle := shortenString(result.Title, 50)
+				if err := logChange(tx, asset.ID, "title", oldTitle, newTitle); err != nil {
+					return err
+				}
+				hasChanged = true
+			}
+			if asset.WebServer != result.WebServer {
+				if err := logChange(tx, asset.ID, "web_server", asset.WebServer, result.WebServer); err != nil {
+					return err
+				}
+				hasChanged = true
+			}
+			if asset.CDNName != result.CDNName {
+				if err := logChange(tx, asset.ID, "cdn_name", asset.CDNName, result.CDNName); err != nil {
+					return err
+				}
+				hasChanged = true
+			}
+			if asset.ContentLength != result.ContentLength {
+				if err := logChange(tx, asset.ID, "content_length", strconv.FormatInt(asset.ContentLength, 10), strconv.FormatInt(result.ContentLength, 10)); err != nil {
+					return err
+				}
+				hasChanged = true
+			}
+			if asset.BodyHash != result.BodyHash {
+				if err := logChange(tx, asset.ID, "body_hash", asset.BodyHash, result.BodyHash); err != nil {
+					return err
+				}
+				hasChanged = true
+			}
+			if asset.HeaderHash != result.HeaderHash {
+				if err := logChange(tx, asset.ID, "header_hash", asset.HeaderHash, result.HeaderHash); err != nil {
+					return err
+				}
+				hasChanged = true
+			}
+
+			newTechJSON := marshalJSONOrDefault(result.Technologies, "[]")
+			newIPsJSON := marshalJSONOrDefault(result.A, "[]")
+
+			// مقایسه فیلدهای JSON
+			if !areJSONArraysEqual(asset.Technologies, newTechJSON) {
+				if err := logChange(tx, asset.ID, "technologies", asset.Technologies, newTechJSON); err != nil {
+					return err
+				}
+				hasChanged = true
+			}
+			if !areJSONArraysEqual(asset.HostIP, newIPsJSON) {
+				if err := logChange(tx, asset.ID, "host_ip", asset.HostIP, newIPsJSON); err != nil {
+					return err
+				}
+				hasChanged = true
+			}
+
+			if hasChanged {
+				asset.LastChangeAt = &now
+				countChanges++
+			}
+
+			asset.FinalURL = result.URL
+			asset.StatusCode = result.StatusCode
+			asset.Title = result.Title
+			asset.ContentLength = result.ContentLength
+			asset.HostIP = newIPsJSON
+			asset.WebServer = result.WebServer
+			asset.CDNName = result.CDNName
+			asset.Technologies = newTechJSON
+			asset.BodyHash = result.BodyHash
+			asset.HeaderHash = result.HeaderHash
+			asset.RawHttpx = result.RawJSON
+			asset.ResponseTimeMs = parseResponseTime(result.ResponseTime)
+
+			if err := tx.Save(&asset).Error; err != nil {
+				log.Printf("❌ DB Error saving asset %s: %v\n", hostInput, err)
+				return err
+			}
+			countUpdated++
+		}
+		return nil
+	})
+
+	if err != nil {
+		log.Printf("❌ Transaction failed in updateAssetsWithDiff: %v\n", err)
+		countUpdated = 0
+		countChanges = 0
+	}
+
+	log.Printf("✅ Smart Update Complete. Updated: %d, Changes Detected: %d.\n", countUpdated, countChanges)
+}
+
+// logChange یک رکورد در جدول تاریخچه ثبت می‌کند (نسخه اصلاح‌شده با بازگشت خطا)
+func logChange(tx *gorm.DB, assetID uint, field, oldVal, newVal string) error {
+	if oldVal == newVal {
+		return nil
+	}
+	history := models.AssetHistory{
+		AssetID:   assetID,
+		FieldName: field,
+		OldValue:  oldVal,
+		NewValue:  newVal,
+		CreatedAt: time.Now(),
+	}
+	if err := tx.Create(&history).Error; err != nil {
+		log.Printf("❌ Failed to create history log for asset %d, field %s: %v\n", assetID, field, err)
+		return err
+	}
+	return nil
+}
+
+// areJSONArraysEqual دو رشته JSON که حاوی آرایه هستند را مقایسه می‌کند
+func areJSONArraysEqual(json1, json2 string) bool {
+	var arr1, arr2 []string
+	_ = json.Unmarshal([]byte(json1), &arr1)
+	_ = json.Unmarshal([]byte(json2), &arr2)
+
+	if len(arr1) != len(arr2) {
+		return false
+	}
+
+	sort.Strings(arr1)
+	sort.Strings(arr2)
+
+	return reflect.DeepEqual(arr1, arr2)
+}
+
+func marshalJSONOrDefault(v interface{}, defaultVal string) string {
+	if reflect.ValueOf(v).Kind() == reflect.Slice && reflect.ValueOf(v).Len() == 0 {
+		return defaultVal
+	}
+	jsonBytes, err := json.Marshal(v)
+	if err != nil || string(jsonBytes) == "null" || string(jsonBytes) == "" {
+		return defaultVal
+	}
+	return string(jsonBytes)
+}
+
+func parseResponseTime(timeStr string) int64 {
+	str := strings.TrimSuffix(timeStr, "ms")
+	if val, err := strconv.ParseFloat(str, 64); err == nil {
+		return int64(val)
+	}
+	return 0
+}
+
+func shortenString(s string, maxLen int) string {
+	if len(s) > maxLen {
+		return s[:maxLen] + "..."
+	}
+	return s
+}
+
+// ==========================================
+// Shared Utility Functions (Phase 1 & General)
 // ==========================================
 
 func getBatchSize() int {
@@ -218,40 +402,27 @@ func getBatchSize() int {
 	return size
 }
 
-// runPuredns (نسخه نهایی و اصلاح‌شده - خواندن مستقیم از Stdout)
 func runPuredns(inputFile string) ([]string, error) {
 	const resolversPath = "/root/trusted_resolvers.txt"
-
-	// حذف --write و استفاده از خروجی استاندارد
-	// حذف -q برای اینکه اگر خطایی داشت توی لاگ ببینیم
 	cmd := exec.Command("puredns", "resolve", inputFile,
 		"-r", resolversPath,
 		"--resolvers-trusted", resolversPath,
 		"-w", "20", "--rate-limit", "5000",
 	)
-
 	log.Printf("Executing puredns command and capturing stdout (resolvers: %s)\n", resolversPath)
-
-	// گرفتن مستقیم خروجی استاندارد (Stdout)
 	outputBytes, err := cmd.Output()
 	if err != nil {
-		// اگر puredns با خطا روبرو بشه، لاگ می‌کنیم ولی خروجی رو هم پردازش می‌کنیم
 		log.Printf("⚠️ Puredns command finished with error state: %v\n", err)
 	}
-
-	// تبدیل بایت به رشته و جداسازی خطوط
 	outputStr := string(outputBytes)
 	lines := strings.Split(outputStr, "\n")
-
 	var results []string
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		// فیلتر کردن خطوط خالی و لاگ‌های احتمالی puredns (که با [ شروع میشن)
 		if trimmed != "" && !strings.HasPrefix(trimmed, "[") {
 			results = append(results, trimmed)
 		}
 	}
-
 	log.Printf("✅ Puredns finished. Captured %d live domains from stdout.\n", len(results))
 	return results, nil
 }
@@ -278,58 +449,6 @@ func readHttpxResults(filename string) (map[string]HttpxResult, error) {
 	return results, scanner.Err()
 }
 
-func updateAssetsInDB(targetID uint, results map[string]HttpxResult) {
-	log.Printf("💾 Updating DB with probing data for %d assets...", len(results))
-	countUpdated := 0
-
-	for hostInput, result := range results {
-		techJSON, _ := json.Marshal(result.Technologies)
-		if string(techJSON) == "null" || string(techJSON) == "" {
-			techJSON = []byte("[]")
-		}
-
-		ipsJSON, _ := json.Marshal(result.A)
-		if string(ipsJSON) == "null" || string(ipsJSON) == "" {
-			ipsJSON = []byte("[]")
-		}
-
-		var respTime int64
-		timeStr := strings.TrimSuffix(result.ResponseTime, "ms")
-		if val, err := strconv.ParseFloat(timeStr, 64); err == nil {
-			respTime = int64(val)
-		}
-
-		dbResult := database.DB.Model(&models.Asset{}).
-			Where("value = ? AND target_id = ?", hostInput, targetID).
-			Updates(map[string]interface{}{
-				"final_url":        result.URL,
-				"status_code":      result.StatusCode,
-				"title":            result.Title,
-				"content_length":   result.ContentLength,
-				"host_ip":          string(ipsJSON),
-				"web_server":       result.WebServer,
-				"cdn_name":         result.CDNName,
-				"technologies":     string(techJSON),
-				"body_hash":        result.BodyHash,
-				"header_hash":      result.HeaderHash,
-				"response_time_ms": respTime,
-				"raw_httpx":        result.RawJSON,
-			})
-
-		if dbResult.Error != nil {
-			log.Printf("⚠️ DB Error updating asset %s: %v\n", hostInput, dbResult.Error)
-		} else if dbResult.RowsAffected > 0 {
-			countUpdated++
-		} else {
-			log.Printf("⚠️ Warning: Httpx found result for input '%s', but no matching asset found in DB.\n", hostInput)
-		}
-	}
-	log.Printf("✅ DB Update Complete. Successfully updated %d assets.\n", countUpdated)
-}
-
-// ==========================================
-// Shared Utility Functions (Phase 1)
-// ==========================================
 func runPassiveCollection(domain string) []string {
 	var wg sync.WaitGroup
 	results := make(chan string, 50000)
@@ -467,24 +586,4 @@ func mergeUnique(slice1, slice2 []string) []string {
 func writeSliceToFile(filename string, data []string) error {
 	content := strings.Join(data, "\n")
 	return ioutil.WriteFile(filename, []byte(content), 0644)
-}
-
-func readSliceFromFile(filename string) ([]string, error) {
-	file, err := os.Open(filename)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []string{}, nil
-		}
-		return []string{}, err
-	}
-	defer file.Close()
-	var lines []string
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line != "" {
-			lines = append(lines, line)
-		}
-	}
-	return lines, scanner.Err()
 }
