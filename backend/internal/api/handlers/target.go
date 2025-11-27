@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/gofiber/fiber/v2"
@@ -47,7 +48,7 @@ func CreateTarget(c *fiber.Ctx) error {
 
 	// یک پیام ساده می‌سازیم: "ID:Domain"
 	// مثال: "1:example.com"
-	taskPayload := fmt.Sprintf("%d:%s", target.ID, target.RootDomain)
+	taskPayload := fmt.Sprintf("DISCOVERY:%d:%s", target.ID, target.RootDomain)
 
 	// با دستور RPUSH پیام رو به انتهای صف اضافه می‌کنیم
 	err := redisq.Client.RPush(redisq.Ctx, redisq.QueueName, taskPayload).Err()
@@ -146,6 +147,36 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	})
 }
 
+// StartProbing هندلر شروع دستی فاز ۲ (پروبینگ) برای یک تارگت است
+func StartProbing(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	// 1. چک می‌کنیم تارگت وجود داشته باشه
+	var target models.Target
+	if err := database.DB.First(&target, id).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Target not found"})
+	}
+
+	// 2. ارسال پیام به صف با تایپ PROBING
+	// فرمت: "PROBING:TargetID:RootDomain"
+	taskPayload := fmt.Sprintf("PROBING:%d:%s", target.ID, target.RootDomain)
+
+	err := redisq.Client.RPush(redisq.Ctx, redisq.QueueName, taskPayload).Err()
+	if err != nil {
+		// لاگ خطا (در سیستم واقعی باید بهتر هندل بشه)
+		fmt.Printf("⚠️ Failed to enqueue probing task for %s: %v\n", target.RootDomain, err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to enqueue job"})
+	}
+
+	fmt.Printf("🚀 Enqueued PROBING task for: %s [Payload: %s]\n", target.RootDomain, taskPayload)
+
+	// 3. بازگشت پاسخ موفقیت
+	return c.JSON(fiber.Map{
+		"status":  "success",
+		"message": fmt.Sprintf("Phase 2 (Probing) started successfully for target: %s", target.Name),
+	})
+}
+
 // ==========================================
 // Helper Functions (Model -> DTO Mapper)
 // ==========================================
@@ -161,13 +192,39 @@ func toTargetResponse(t models.Target, assetCount int64) dto.TargetResponse {
 	}
 }
 
+// toAssetResponse مدل دیتابیس رو به DTO تبدیل می‌کنه
 func toAssetResponse(a models.Asset) dto.AssetResponse {
+	// پارس کردن فیلد Technologies (که یک رشته JSON هست) به یک آبجکت
+	var techs interface{}
+	if a.Technologies != "" && a.Technologies != "[]" && a.Technologies != "null" {
+		// خطا رو نادیده می‌گیریم، اگر پارس نشه null می‌مونه
+		_ = json.Unmarshal([]byte(a.Technologies), &techs)
+	}
+
+	// 👇👇👇 پارس کردن فیلد جدید RawHttpx
+	var rawHttpx interface{}
+	// چک می‌کنیم که خالی یا آبجکت خالی نباشه
+	if a.RawHttpx != "" && a.RawHttpx != "{}" && a.RawHttpx != "null" {
+		_ = json.Unmarshal([]byte(a.RawHttpx), &rawHttpx)
+	}
+
 	return dto.AssetResponse{
-		ID:        a.ID,
-		Value:     a.Value,
-		Type:      a.Type,
-		IsNew:     a.IsNew,
-		IsLive:    a.IsLive,
-		CreatedAt: a.CreatedAt,
+		ID:            a.ID,
+		Value:         a.Value,
+		Type:          a.Type,
+		IsNew:         a.IsNew,
+		IsLive:        a.IsLive,
+		CreatedAt:     a.CreatedAt,
+		FinalURL:      a.FinalURL,
+		StatusCode:    a.StatusCode,
+		Title:         a.Title,
+		ContentLength: a.ContentLength,
+		HostIP:        a.HostIP,
+		WebServer:     a.WebServer,
+		CDNName:       a.CDNName,
+		Technologies:  techs, // استفاده از آبجکت پارس شده
+		ResponseTime:  a.ResponseTimeMs,
+		// 👇👇👇 اضافه کردن فیلد خام به خروجی
+		RawHttpx: rawHttpx,
 	}
 }

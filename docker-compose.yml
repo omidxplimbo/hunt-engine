@@ -18,6 +18,8 @@ services:
       - DB_NAME=huntdb
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - PROBE_BATCH_SIZE=1000
+      - TRUSTED_RESOLVERS=1.1.1.1,8.8.8.8,1.0.0.1,8.8.4.4
     depends_on:
       - postgres
       - redis

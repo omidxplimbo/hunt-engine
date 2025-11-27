@@ -3,12 +3,13 @@ package worker
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,18 +19,39 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 )
 
+// مسیرهای فایل‌های موقت
 const (
-	resolversFile = "/tmp/resolvers.txt"
-	allFoundFile  = "/tmp/all_found.txt"
-	finalLiveFile = "/tmp/live.txt"
+	// فاز ۱
+	allFoundFile = "/tmp/all_found.txt"
+	// finalLiveFile = "/tmp/live.txt" // 👈 این دیگه لازم نیست
+	// فاز ۲
+	probingInputFile  = "/tmp/probing_input.txt"
+	probingOutputFile = "/tmp/probing_output.json"
 )
+
+// مقادیر پیش‌فرض کانفیگ
+const DefaultBatchSize = 500
+
+// HttpxResult ساختار برای پارس کردن خروجی JSON
+type HttpxResult struct {
+	Input         string   `json:"input"`
+	URL           string   `json:"url"`
+	StatusCode    int      `json:"status_code"`
+	Title         string   `json:"title"`
+	ContentLength int64    `json:"content_length"`
+	A             []string `json:"a"`
+	WebServer     string   `json:"webserver"`
+	CDNName       string   `json:"cdn_name"`
+	Technologies  []string `json:"tech"`
+	BodyHash      string   `json:"body_hash"`
+	HeaderHash    string   `json:"header_hash"`
+	ResponseTime  string   `json:"time"`
+	RawJSON       string   `json:"-"`
+}
 
 // Start موتور اصلی کارگر را روشن می‌کند.
 func Start() {
 	log.Println("👷 Worker started. Waiting for jobs...", redisq.QueueName)
-	if err := downloadResolvers(); err != nil {
-		log.Printf("⚠️ Warning: Could not download fresh resolvers. %v\n", err)
-	}
 
 	for {
 		result, err := redisq.Client.BLPop(context.Background(), 0*time.Second, redisq.QueueName).Result()
@@ -38,91 +60,279 @@ func Start() {
 			time.Sleep(5 * time.Second)
 			continue
 		}
-		log.Printf("👷 Worker picked up job: %s\n", result[1])
-		processJob(result[1])
+		go processJobDispatcher(result[1])
 	}
 }
 
-// processJob مدیر اجرایی پایپ‌لاین است
-func processJob(payload string) {
+func processJobDispatcher(payload string) {
 	parts := strings.Split(payload, ":")
-	if len(parts) != 2 {
+	if len(parts) < 3 {
+		log.Printf("⚠️ Invalid job payload format: %s\n", payload)
 		return
 	}
-	var targetID uint
-	fmt.Sscanf(parts[0], "%d", &targetID)
-	rootDomain := parts[1]
 
-	log.Printf("🚀 Starting FULL RECON for: %s (ID: %d)\n", rootDomain, targetID)
+	jobType := parts[0]
+	targetIDStr := parts[1]
+	rootDomain := parts[2]
+
+	var targetID uint
+	fmt.Sscanf(targetIDStr, "%d", &targetID)
+
+	log.Printf("👷 Worker received job type: %s for target ID: %d\n", jobType, targetID)
+
+	switch jobType {
+	case "DISCOVERY":
+		runDiscoveryPhase(targetID, rootDomain)
+	case "PROBING":
+		runProbingPhase(targetID, rootDomain)
+	default:
+		log.Printf("⚠️ Unknown job type: %s\n", jobType)
+	}
+}
+
+// =================================================================
+// PHASE 1: Discovery Implementation
+// =================================================================
+func runDiscoveryPhase(targetID uint, rootDomain string) {
+	log.Printf("🚀 Starting PHASE 1 (DISCOVERY) for: %s (ID: %d)\n", rootDomain, targetID)
 	startTime := time.Now()
 
-	// 1. Passive Collection
-	log.Println("📡 [Stage 1] Passive Collection...")
+	// 1. Passive
 	passiveResults := runPassiveCollection(rootDomain)
-	log.Printf("✅ [Stage 1] Found %d passive subdomains.\n", len(passiveResults))
-
 	if len(passiveResults) == 0 {
 		log.Println("⚠️ No subdomains found passively. Aborting.")
 		return
 	}
 
-	// 2. Mutation (Alterx)
-	log.Println("🧬 [Stage 2] Mutation (Alterx)...")
-	// برای آلترکس باید ورودی رو توی فایل بنویسیم
+	// 2. Mutation
 	writeSliceToFile(allFoundFile, passiveResults)
-
 	mutatedResults, err := runAlterx(allFoundFile, rootDomain)
 	if err != nil {
-		log.Printf("❌ [Stage 2] Alterx failed: %v. Proceeding without mutations.\n", err)
+		log.Printf("❌ Alterx failed: %v. Proceeding without mutations.\n", err)
 		mutatedResults = []string{}
-	} else {
-		log.Printf("✅ [Stage 2] Generated %d mutations.\n", len(mutatedResults))
 	}
-
-	// ادغام نتایج پسیو و جهش‌یافته در یک لیست اصلی
 	masterList := mergeUnique(passiveResults, mutatedResults)
-	log.Printf("📊 Total unique potential subdomains found: %d\n", len(masterList))
-
-	// نوشتن لیست نهایی برای puredns
 	writeSliceToFile(allFoundFile, masterList)
+	log.Printf("📊 Master list created with %d potential subdomains. Starting validation...\n", len(masterList))
 
 	// 3. Validation (Puredns)
-	log.Println("🎯 [Stage 3] Active Validation (Puredns)...")
-	liveSubdomains, err := runPuredns(allFoundFile, finalLiveFile, resolversFile)
+	// 👇👇👇 اصلاح فراخوانی (حذف پارامتر دوم)
+	liveSubdomains, err := runPuredns(allFoundFile)
 	if err != nil {
-		log.Printf("❌ [Stage 3] Puredns failed critically: %v\n", err)
-		// حتی اگر puredns فیل شد، ما باید نتایج پسیو رو ذخیره کنیم (به عنوان غیر زنده)
+		log.Printf("❌ Puredns failed critically: %v\n", err)
 		liveSubdomains = []string{}
 	} else {
 		log.Printf("✅ [Stage 3] Confirmed %d LIVE subdomains.\n", len(liveSubdomains))
 	}
 
-	// 4. Saving EVERYTHING (Smart Upsert)
-	// ما کل masterList رو ذخیره می‌کنیم، و از liveSubdomains برای تعیین وضعیت استفاده می‌کنیم
-	saveResultsToDB(targetID, masterList, liveSubdomains)
+	// 4. Saving
+	saveDiscoveryResultsToDB(targetID, masterList, liveSubdomains)
 
-	log.Printf("🏁 Pipeline finished for %s in %s.\n", rootDomain, time.Since(startTime))
+	log.Printf("🏁 PHASE 1 finished for %s in %s.\n", rootDomain, time.Since(startTime))
 }
 
-// ================= Helper Functions =================
+// =================================================================
+// PHASE 2: Probing Implementation
+// =================================================================
+func runProbingPhase(targetID uint, rootDomain string) {
+	batchSize := getBatchSize()
+	log.Printf("🚀 Starting PHASE 2 (PROBING) for target ID: %d (Batch Size: %d)\n", targetID, batchSize)
+	startTime := time.Now()
 
-func downloadResolvers() error {
-	log.Println("🔄 Downloading fresh DNS resolvers...")
-	resp, err := http.Get("https://raw.githubusercontent.com/proabiral/dns-validator/master/resolvers.txt")
-	if err != nil {
-		return err
+	var totalLive int64
+	database.DB.Model(&models.Asset{}).Where("target_id = ? AND is_live = true", targetID).Count(&totalLive)
+
+	if totalLive == 0 {
+		log.Println("⚠️ No live assets found for this target in DB. Aborting probing.")
+		return
 	}
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return err
+	log.Printf("✅ Found %d live assets in DB. Starting batch processing...\n", totalLive)
+
+	processedCount := 0
+	offset := 0
+
+	for {
+		var batchAssets []models.Asset
+		err := database.DB.Where("target_id = ? AND is_live = true", targetID).
+			Order("id").
+			Limit(batchSize).
+			Offset(offset).
+			Find(&batchAssets).Error
+
+		if err != nil || len(batchAssets) == 0 {
+			break
+		}
+
+		log.Printf("🔄 Processing batch: Offset %d, Size %d...\n", offset, len(batchAssets))
+
+		var hosts []string
+		for _, asset := range batchAssets {
+			hosts = append(hosts, asset.Value)
+		}
+		if err := writeSliceToFile(probingInputFile, hosts); err != nil {
+			log.Printf("❌ Error writing batch input file: %v\n", err)
+			break
+		}
+
+		// اجرای httpx
+		cmd := exec.Command("httpx",
+			"-l", probingInputFile,
+			"-json",
+			"-o", probingOutputFile,
+			"-silent",
+			"-threads", "50",
+			"-follow-redirects",
+		)
+		if err := cmd.Run(); err != nil {
+			log.Printf("⚠️ Httpx batch finished with issues: %v\n", err)
+		}
+
+		httpxResults, err := readHttpxResults(probingOutputFile)
+		if err != nil {
+			log.Printf("❌ Error reading batch httpx output: %v\n", err)
+		} else {
+			updateAssetsInDB(targetID, httpxResults)
+			processedCount += len(batchAssets)
+		}
+
+		offset += batchSize
+		log.Printf("✅ Batch finished. Progress: %d/%d\n", processedCount, totalLive)
 	}
-	return ioutil.WriteFile(resolversFile, body, 0644)
+
+	log.Printf("🏁 PHASE 2 (PROBING) finished for target ID %d. Total processed: %d in %s.\n", targetID, processedCount, time.Since(startTime))
 }
 
+// ==========================================
+// Helper Functions
+// ==========================================
+
+func getBatchSize() int {
+	envStr := os.Getenv("PROBE_BATCH_SIZE")
+	if envStr == "" {
+		return DefaultBatchSize
+	}
+	size, err := strconv.Atoi(envStr)
+	if err != nil || size <= 0 {
+		return DefaultBatchSize
+	}
+	return size
+}
+
+// runPuredns (نسخه نهایی و اصلاح‌شده - خواندن مستقیم از Stdout)
+func runPuredns(inputFile string) ([]string, error) {
+	const resolversPath = "/root/trusted_resolvers.txt"
+
+	// حذف --write و استفاده از خروجی استاندارد
+	// حذف -q برای اینکه اگر خطایی داشت توی لاگ ببینیم
+	cmd := exec.Command("puredns", "resolve", inputFile,
+		"-r", resolversPath,
+		"--resolvers-trusted", resolversPath,
+		"-w", "20", "--rate-limit", "5000",
+	)
+
+	log.Printf("Executing puredns command and capturing stdout (resolvers: %s)\n", resolversPath)
+
+	// گرفتن مستقیم خروجی استاندارد (Stdout)
+	outputBytes, err := cmd.Output()
+	if err != nil {
+		// اگر puredns با خطا روبرو بشه، لاگ می‌کنیم ولی خروجی رو هم پردازش می‌کنیم
+		log.Printf("⚠️ Puredns command finished with error state: %v\n", err)
+	}
+
+	// تبدیل بایت به رشته و جداسازی خطوط
+	outputStr := string(outputBytes)
+	lines := strings.Split(outputStr, "\n")
+
+	var results []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// فیلتر کردن خطوط خالی و لاگ‌های احتمالی puredns (که با [ شروع میشن)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "[") {
+			results = append(results, trimmed)
+		}
+	}
+
+	log.Printf("✅ Puredns finished. Captured %d live domains from stdout.\n", len(results))
+	return results, nil
+}
+
+func readHttpxResults(filename string) (map[string]HttpxResult, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	results := make(map[string]HttpxResult)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		var result HttpxResult
+		if err := json.Unmarshal([]byte(line), &result); err == nil {
+			if result.Input != "" {
+				result.RawJSON = line
+				results[result.Input] = result
+			}
+		}
+	}
+	return results, scanner.Err()
+}
+
+func updateAssetsInDB(targetID uint, results map[string]HttpxResult) {
+	log.Printf("💾 Updating DB with probing data for %d assets...", len(results))
+	countUpdated := 0
+
+	for hostInput, result := range results {
+		techJSON, _ := json.Marshal(result.Technologies)
+		if string(techJSON) == "null" || string(techJSON) == "" {
+			techJSON = []byte("[]")
+		}
+
+		ipsJSON, _ := json.Marshal(result.A)
+		if string(ipsJSON) == "null" || string(ipsJSON) == "" {
+			ipsJSON = []byte("[]")
+		}
+
+		var respTime int64
+		timeStr := strings.TrimSuffix(result.ResponseTime, "ms")
+		if val, err := strconv.ParseFloat(timeStr, 64); err == nil {
+			respTime = int64(val)
+		}
+
+		dbResult := database.DB.Model(&models.Asset{}).
+			Where("value = ? AND target_id = ?", hostInput, targetID).
+			Updates(map[string]interface{}{
+				"final_url":        result.URL,
+				"status_code":      result.StatusCode,
+				"title":            result.Title,
+				"content_length":   result.ContentLength,
+				"host_ip":          string(ipsJSON),
+				"web_server":       result.WebServer,
+				"cdn_name":         result.CDNName,
+				"technologies":     string(techJSON),
+				"body_hash":        result.BodyHash,
+				"header_hash":      result.HeaderHash,
+				"response_time_ms": respTime,
+				"raw_httpx":        result.RawJSON,
+			})
+
+		if dbResult.Error != nil {
+			log.Printf("⚠️ DB Error updating asset %s: %v\n", hostInput, dbResult.Error)
+		} else if dbResult.RowsAffected > 0 {
+			countUpdated++
+		} else {
+			log.Printf("⚠️ Warning: Httpx found result for input '%s', but no matching asset found in DB.\n", hostInput)
+		}
+	}
+	log.Printf("✅ DB Update Complete. Successfully updated %d assets.\n", countUpdated)
+}
+
+// ==========================================
+// Shared Utility Functions (Phase 1)
+// ==========================================
 func runPassiveCollection(domain string) []string {
 	var wg sync.WaitGroup
-	results := make(chan string, 50000) // بافر بزرگتر
+	results := make(chan string, 50000)
 
 	tools := []struct {
 		name string
@@ -155,7 +365,6 @@ func runPassiveCollection(domain string) []string {
 	uniqueMap := make(map[string]bool)
 	var finalSlice []string
 	for res := range results {
-		// فیلتر کردن دامنه‌های نامرتبط و تکراری
 		if res != "" && strings.HasSuffix(res, domain) && !uniqueMap[res] {
 			uniqueMap[res] = true
 			finalSlice = append(finalSlice, res)
@@ -164,30 +373,8 @@ func runPassiveCollection(domain string) []string {
 	return finalSlice
 }
 
-// runDnsx جایگزین مدرن و Pure Go برای puredns است.
-// این تابع آماده است تا در آینده بر اساس کانفیگ تارگت فراخوانی شود.
-func runDnsx(inputFile, outputFile string) ([]string, error) {
-	log.Println("🎯 Running active validation using DNSX...")
-
-	// dnsx -l mutated.txt -o live.txt -silent -resp (فقط پاسخ‌دهنده‌ها)
-	// نکته: dnsx به طور پیشفرض ریزالورهای خوبی داره، اما میشه بهش لیست هم داد.
-	cmd := exec.Command("dnsx", "-l", inputFile, "-o", outputFile, "-silent", "-resp")
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		// dnsx هم اگر چیزی پیدا نکنه ممکنه exit code غیر صفر بده
-		log.Printf("⚠️ Dnsx finished with potential issues. Output: %s\n", string(output))
-	}
-
-	// خواندن نتایج زنده از فایل خروجی
-	return readSliceFromFile(outputFile)
-}
-
-// runAlterx حالا خروجی رو برمی‌گردونه به جای نوشتن در فایل
 func runAlterx(inputFile, rootDomain string) ([]string, error) {
-	// alterx از stdin می‌خونه. ما فایل رو می‌خونیم و پایپ می‌کنیم بهش
 	cmd := exec.Command("alterx", "-silent")
-
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -211,7 +398,6 @@ func runAlterx(inputFile, rootDomain string) ([]string, error) {
 	var results []string
 	for _, line := range strings.Split(string(output), "\n") {
 		trimmed := strings.TrimSpace(line)
-		// مطمئن میشیم که alterx دامنه‌هایی خارج از اسکوپ نساخته باشه
 		if trimmed != "" && strings.HasSuffix(trimmed, rootDomain) {
 			results = append(results, trimmed)
 		}
@@ -219,21 +405,9 @@ func runAlterx(inputFile, rootDomain string) ([]string, error) {
 	return results, nil
 }
 
-func runPuredns(inputFile, outputFile, resolvers string) ([]string, error) {
-	cmd := exec.Command("puredns", "resolve", inputFile, "-r", resolvers, "--write", outputFile, "--resolvers-trusted", resolvers, "-q", "-w", "20")
-	if err := cmd.Run(); err != nil {
-		// Puredns اگر هیچ دامنه‌ای زنده نباشه هم exit code 1 میده گاهی.
-		// پس خطا رو لاگ می‌کنیم ولی فایل خروجی رو چک می‌کنیم.
-		log.Printf("⚠️ Puredns finished with potential issues: %v\n", err)
-	}
-	return readSliceFromFile(outputFile)
-}
+func saveDiscoveryResultsToDB(targetID uint, masterList []string, liveList []string) {
+	log.Printf("💾 Saving/Updating %d potential assets to DB (Smart Upsert)...", len(masterList))
 
-// saveResultsToDB منطق جدید ذخیره‌سازی
-func saveResultsToDB(targetID uint, masterList []string, liveList []string) {
-	log.Printf("💾 Saving/Updating %d potential assets to DB...", len(masterList))
-
-	// تبدیل لیست زنده‌ها به مپ برای جستجوی سریع (O(1))
 	liveMap := make(map[string]bool)
 	for _, l := range liveList {
 		liveMap[l] = true
@@ -243,33 +417,31 @@ func saveResultsToDB(targetID uint, masterList []string, liveList []string) {
 	countUpdated := 0
 
 	for _, val := range masterList {
-		isLive := liveMap[val] // چک می‌کنیم آیا این دامنه توی لیست زنده‌ها هست؟
+		isLive := liveMap[val]
 
 		asset := models.Asset{
 			TargetID:     targetID,
 			Value:        val,
 			Type:         "subdomain",
 			IsNew:        true,
-			IsLive:       isLive, // وضعیت واقعی رو ست می‌کنیم
+			IsLive:       isLive,
 			Technologies: "[]",
+			HostIP:       "[]",
+			RawHttpx:     "{}",
 		}
 
-		// تلاش برای پیدا کردن رکورد موجود
 		var existingAsset models.Asset
 		result := database.DB.Where("value = ? AND target_id = ?", val, targetID).First(&existingAsset)
 
 		if result.Error == nil {
-			// رکورد قبلاً وجود داشته. چک می‌کنیم وضعیتش عوض شده؟
 			if existingAsset.IsLive != isLive {
-				// وضعیت تغییر کرده! (مثلا قبلا مرده بود الان زنده شده)
 				database.DB.Model(&existingAsset).Updates(map[string]interface{}{
 					"is_live": isLive,
-					"is_new":  true, // دوباره مارکش می‌کنیم به عنوان جدید که توی داشبورد دیده بشه
+					"is_new":  true,
 				})
 				countUpdated++
 			}
 		} else {
-			// رکورد جدید است
 			database.DB.Create(&asset)
 			countNew++
 		}
@@ -300,6 +472,9 @@ func writeSliceToFile(filename string, data []string) error {
 func readSliceFromFile(filename string) ([]string, error) {
 	file, err := os.Open(filename)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return []string{}, nil
+		}
 		return []string{}, err
 	}
 	defer file.Close()

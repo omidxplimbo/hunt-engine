@@ -43,6 +43,7 @@ func main() {
 	// --- Asset Routes ---
 	// 👇👇👇 روت جدید: گرفتن دارایی‌های یک تارگت خاص (با قابلیت فیلتر)
 	api.Get("/targets/:id/assets", handlers.GetTargetAssets)
+	api.Post("/targets/:id/probe", handlers.StartProbing)
 
 	port := os.Getenv("PORT")
 	if port == "" {
