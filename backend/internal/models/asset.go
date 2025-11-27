@@ -24,7 +24,7 @@ type Target struct {
 	Frequency  int        `gorm:"default:0" json:"frequency"`
 	LastScanAt *time.Time `json:"last_scan_at"`
 	Status     string     `gorm:"size:50;default:'READY'" json:"status"`
-
+	ScanCount  int        `gorm:"default:0" json:"scan_count"`
 	// 👇👇👇 فیلد جدید: لیست ماژول‌های انتخابی برای اجرا
 	// مثال: ["DISCOVERY", "PROBING"]
 	// پیش‌فرض: فقط دیسکاوری

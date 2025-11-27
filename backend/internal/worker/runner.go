@@ -32,7 +32,6 @@ const (
 
 const DefaultBatchSize = 500
 
-// HttpxResult ساختار برای پارس کردن خروجی JSON
 type HttpxResult struct {
 	Input         string   `json:"input"`
 	URL           string   `json:"url"`
@@ -49,10 +48,8 @@ type HttpxResult struct {
 	RawJSON       string   `json:"-"`
 }
 
-// Start موتور اصلی کارگر را روشن می‌کند.
 func Start() {
 	log.Println("👷 Worker started. Waiting for jobs...", redisq.QueueName)
-
 	for {
 		result, err := redisq.Client.BLPop(context.Background(), 0*time.Second, redisq.QueueName).Result()
 		if err != nil {
@@ -70,11 +67,9 @@ func processJobDispatcher(payload string) {
 		log.Printf("⚠️ Invalid job payload format: %s\n", payload)
 		return
 	}
-
 	jobType := parts[0]
 	targetIDStr := parts[1]
 	rootDomain := parts[2]
-
 	var targetID uint
 	fmt.Sscanf(targetIDStr, "%d", &targetID)
 
@@ -93,62 +88,47 @@ func processJobDispatcher(payload string) {
 // =================================================================
 // PHASE 1: Discovery Implementation
 // =================================================================
-// =================================================================
-// PHASE 1: Discovery Implementation (اصلاح شده: شامل کردن سوابق قبلی)
-// =================================================================
 func runDiscoveryPhase(targetID uint, rootDomain string) {
 	log.Printf("🚀 Starting PHASE 1 (DISCOVERY) for: %s (ID: %d)\n", rootDomain, targetID)
 	startTime := time.Now()
 
-	// 1. Passive Collection
+	// 1. Passive
 	passiveResults := runPassiveCollection(rootDomain)
-	// نکته: اینجا دیگه اگر خالی بود Abort نمی‌کنیم، چون شاید سوابق قبلی رو بخوایم چک کنیم
-
 	// 2. Mutation
 	writeSliceToFile(allFoundFile, passiveResults)
 	mutatedResults, err := runAlterx(allFoundFile, rootDomain)
 	if err != nil {
-		log.Printf("❌ Alterx failed: %v. Proceeding without mutations.\n", err)
+		log.Printf("❌ Alterx failed: %v.\n", err)
 		mutatedResults = []string{}
 	}
-
-	// 3. 👇👇👇 واکشی تمام سوابق قبلی از دیتابیس (The History Injection)
+	// 3. History Injection (خواندن سوابق قبلی)
 	var existingAssets []string
-	database.DB.Model(&models.Asset{}).
-		Where("target_id = ?", targetID).
-		Pluck("value", &existingAssets) // فقط ستون value را می‌خوانیم
+	database.DB.Model(&models.Asset{}).Where("target_id = ?", targetID).Pluck("value", &existingAssets)
 
-	log.Printf("📜 Fetched %d existing assets from DB to re-verify.\n", len(existingAssets))
-
-	// 4. ادغام همه چیز (Passive + Mutation + Existing DB Records)
-	// لیست نهایی شامل هر چیزی است که تا حالا دیدیم یا جدید پیدا کردیم
+	// 4. Merge
 	masterList := mergeUnique(passiveResults, mutatedResults)
 	masterList = mergeUnique(masterList, existingAssets)
-
-	log.Printf("📊 Master list created with %d potential subdomains. Starting validation...\n", len(masterList))
 	writeSliceToFile(allFoundFile, masterList)
+	log.Printf("📊 Master list created with %d potential subdomains. Starting validation...\n", len(masterList))
 
-	// 5. Validation (Puredns) - حالا روی همه چیز اجرا میشه
+	// 5. Validation (Puredns)
 	liveSubdomains, err := runPuredns(allFoundFile)
 	if err != nil {
-		log.Printf("❌ Puredns failed critically: %v\n", err)
+		log.Printf("❌ Puredns failed: %v\n", err)
 		liveSubdomains = []string{}
-	} else {
-		log.Printf("✅ [Stage 3] Confirmed %d LIVE subdomains.\n", len(liveSubdomains))
 	}
+	log.Printf("✅ [Stage 3] Confirmed %d LIVE subdomains.\n", len(liveSubdomains))
 
-	// 6. Saving
-	saveDiscoveryResultsToDB(targetID, masterList, liveSubdomains)
+	// 6. Saving with Smart Logic
+	// 👇 اینجا باید اطلاعات تارگت رو بگیریم تا ببینیم بار چندمه
+	var target models.Target
+	database.DB.First(&target, targetID)
+
+	// ارسال اسکن کاونت به تابع ذخیره سازی
+	saveDiscoveryResultsToDB(target, masterList, liveSubdomains)
 
 	log.Printf("🏁 PHASE 1 finished for %s in %s.\n", rootDomain, time.Since(startTime))
-	log.Printf("🔗 Chaining: Auto-starting PHASE 2 (PROBING) for %s...\n", rootDomain)
-	probePayload := fmt.Sprintf("PROBING:%d:%s", targetID, rootDomain)
-	// ارسال به همان صف Redis
-	if err := redisq.Client.RPush(context.Background(), redisq.QueueName, probePayload).Err(); err != nil {
-		log.Printf("❌ Failed to auto-trigger Phase 2 for %s: %v\n", rootDomain, err)
-	} else {
-		log.Printf("🚀 Phase 2 enqueued successfully for %s.\n", rootDomain)
-	}
+	triggerNextModule(targetID, rootDomain, "DISCOVERY")
 }
 
 // =================================================================
@@ -163,93 +143,123 @@ func runProbingPhase(targetID uint, rootDomain string) {
 	database.DB.Model(&models.Asset{}).Where("target_id = ? AND is_live = true", targetID).Count(&totalLive)
 
 	if totalLive == 0 {
-		log.Println("⚠️ No live assets found for this target in DB. Aborting probing.")
-		// حتی اگر چیزی پیدا نشد، باید زنجیره رو ادامه بدیم (شاید فاز بعدی لازم باشه)
+		log.Println("⚠️ No live assets found. Aborting probing.")
 		triggerNextModule(targetID, rootDomain, "PROBING")
 		return
 	}
-	log.Printf("✅ Found %d live assets in DB. Starting batch processing...\n", totalLive)
 
 	processedCount := 0
 	offset := 0
 
 	for {
 		var batchAssets []models.Asset
-		err := database.DB.Where("target_id = ? AND is_live = true", targetID).
-			Order("id").
-			Limit(batchSize).
-			Offset(offset).
-			Find(&batchAssets).Error
-
+		err := database.DB.Where("target_id = ? AND is_live = true", targetID).Order("id").Limit(batchSize).Offset(offset).Find(&batchAssets).Error
 		if err != nil || len(batchAssets) == 0 {
 			break
 		}
 
 		log.Printf("🔄 Processing batch: Offset %d, Size %d...\n", offset, len(batchAssets))
-
 		var hosts []string
 		for _, asset := range batchAssets {
 			hosts = append(hosts, asset.Value)
 		}
 		if err := writeSliceToFile(probingInputFile, hosts); err != nil {
-			log.Printf("❌ Error writing batch input file: %v\n", err)
 			break
 		}
 
-		// اجرای httpx
-		// نکته: ما از -json استفاده می‌کنیم که خروجی کامل و غنی میده
-		cmd := exec.Command("httpx",
-			"-l", probingInputFile,
-			"-json",
-			"-o", probingOutputFile,
-			"-silent",
-			"-threads", "50",
-			"-follow-redirects",
-		)
-		if err := cmd.Run(); err != nil {
-			log.Printf("⚠️ Httpx batch finished with issues: %v\n", err)
-		}
+		cmd := exec.Command("httpx", "-l", probingInputFile, "-json", "-o", probingOutputFile, "-silent", "-threads", "50", "-follow-redirects")
+		cmd.Run()
 
 		httpxResults, err := readHttpxResults(probingOutputFile)
-		if err != nil {
-			log.Printf("❌ Error reading batch httpx output: %v\n", err)
-		} else {
-			// استفاده از موتور مقایسه برای آپدیت هوشمند و نوتیفیکیشن
+		if err == nil {
 			updateAssetsWithDiff(targetID, httpxResults)
 			processedCount += len(batchAssets)
 		}
-
 		offset += batchSize
-		log.Printf("✅ Batch finished. Progress: %d/%d\n", processedCount, totalLive)
 	}
 
-	log.Printf("🏁 PHASE 2 (PROBING) finished for target ID %d. Total processed: %d in %s.\n", targetID, processedCount, time.Since(startTime))
-
-	// 👇👇👇 تغییر مهم: مدیریت زنجیره هوشمند
-	// چک می‌کنه آیا مرحله بعدی (مثلاً VULN_SCAN) توی کانفیگ تارگت هست یا نه
+	log.Printf("🏁 PHASE 2 finished. Total processed: %d in %s.\n", processedCount, time.Since(startTime))
 	triggerNextModule(targetID, rootDomain, "PROBING")
 }
 
 // ==========================================
-// Helper Functions (Continuous Recon Engine)
+// Smart Storage & Notification Logic
 // ==========================================
 
-// updateAssetsWithDiff (موتور مقایسه: آپدیت هوشمند دارایی‌ها و ثبت تاریخچه تغییرات)
-func updateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
-	log.Printf("Does Smart Update (Diff Engine) for %d assets...", len(results))
-	countUpdated := 0
-	countChanges := 0
+// saveDiscoveryResultsToDB (نسخه هوشمند: کنترل نوتیفیکیشن بر اساس بار اول/دوم)
+func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveList []string) {
+	log.Printf("💾 Saving/Updating assets (Scan Count: %d)...", target.ScanCount)
 
-	// پیدا کردن نام تارگت برای نمایش در تلگرام (فقط یکبار کوئری می‌زنیم)
+	liveMap := make(map[string]bool)
+	for _, l := range liveList {
+		liveMap[l] = true
+	}
+
+	// 👇 آیا این اولین اسکن است؟
+	isFirstRun := target.ScanCount == 0
+
+	countNew := 0
+	countUpdated := 0
+
+	for _, val := range masterList {
+		isLive := liveMap[val]
+
+		var existingAsset models.Asset
+		result := database.DB.Where("value = ? AND target_id = ?", val, target.ID).First(&existingAsset)
+
+		if result.Error == nil {
+			// --- دارایی قدیمی ---
+			// اگر وضعیت زنده بودن تغییر کرد (مهم نیست بار چندمه، تغییر وضعیت همیشه مهمه)
+			if existingAsset.IsLive != isLive {
+				// اگر قبلا مرده بود و الان زنده شده -> این مهمه!
+				// اگر قبلا زنده بود و الان مرده -> شاید کمتر مهم باشه ولی ما ثبت می‌کنیم
+
+				// فقط اگر اسکن اول نیست نوتیفیکیشن بفرست (در اسکن اول همه چیز داره ست میشه)
+				// یا اگر میخوای حتی در اسکن اول هم وضعیت دقیق ثبت بشه، شرط نذار.
+				// اما معمولا در اسکن اول existingAsset پیدا نمیشه، پس اینجا وارد نمیشیم.
+				// اینجا یعنی در اسکن‌های بعدی هستیم.
+
+				logChange(database.DB, existingAsset.ID, "is_live", strconv.FormatBool(existingAsset.IsLive), strconv.FormatBool(isLive))
+				telegram.SendChangeAlert(target.RootDomain, val, "is_live", strconv.FormatBool(existingAsset.IsLive), strconv.FormatBool(isLive))
+
+				now := time.Now()
+				database.DB.Model(&existingAsset).Updates(map[string]interface{}{
+					"is_live":        isLive,
+					"is_new":         true,
+					"last_change_at": &now,
+				})
+				countUpdated++
+			}
+		} else {
+			// --- دارایی جدید ---
+			asset := models.Asset{
+				TargetID: target.ID, Value: val, Type: "subdomain", IsNew: true, IsLive: isLive,
+				Technologies: "[]", HostIP: "[]", RawHttpx: "{}",
+			}
+			database.DB.Create(&asset)
+
+			// 👇👇👇 شرط مهم: فقط اگر بار اول نیست نوتیفیکیشن بفرست
+			if !isFirstRun {
+				// فقط اگر زنده است خبر بده (یا همه رو، بسته به استراتژی)
+				// اینجا فرض می‌کنیم هر دارایی جدیدی مهمه
+				telegram.SendNewAssetAlert(target.RootDomain, val)
+			}
+			countNew++
+		}
+	}
+	log.Printf("✅ DB Sync Complete. New: %d, Status Changed: %d.\n", countNew, countUpdated)
+}
+
+// updateAssetsWithDiff (فاز ۲ - نوتیفیکیشن فقط در صورت تغییر واقعی)
+func updateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
+	// گرفتن نام تارگت برای تلگرام
 	var targetName string
 	var target models.Target
 	if err := database.DB.First(&target, targetID).Error; err == nil {
 		targetName = target.RootDomain
-	} else {
-		targetName = fmt.Sprintf("ID: %d", targetID)
 	}
 
-	database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
 		for hostInput, result := range results {
 			var asset models.Asset
 			if err := tx.Set("gorm:query_option", "FOR UPDATE").Where("value = ? AND target_id = ?", hostInput, targetID).First(&asset).Error; err != nil {
@@ -259,22 +269,20 @@ func updateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 			hasChanged := false
 			now := time.Now()
 
-			// تابع کمکی داخلی برای چک کردن تغییر و ارسال نوتیفیکیشن
+			// تابع کمکی برای چک کردن و ارسال
 			checkAndNotify := func(field, oldVal, newVal string) error {
 				if oldVal != newVal {
-					// 1. ثبت در دیتابیس
 					if err := logChange(tx, asset.ID, field, oldVal, newVal); err != nil {
 						return err
 					}
-					// 2. ارسال به تلگرام (فقط اگر تغییر واقعی بود)
-					// نکته: برای تغییرات خیلی جزئی یا نال ممکنه بخوای فیلتر بذاری
+					// در فاز ۲ چون همیشه روی داده‌های موجود کار می‌کنیم، هر تغییری یعنی اتفاق جدید
 					telegram.SendChangeAlert(targetName, hostInput, field, oldVal, newVal)
 					hasChanged = true
 				}
 				return nil
 			}
 
-			// مقایسه فیلدها با استفاده از تابع کمکی
+			// مقایسه‌ها
 			if err := checkAndNotify("status_code", strconv.Itoa(asset.StatusCode), strconv.Itoa(result.StatusCode)); err != nil {
 				return err
 			}
@@ -289,7 +297,7 @@ func updateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 				return err
 			}
 
-			// مقایسه آرایه‌ها
+			// برای JSON ها
 			newTechJSON := marshalJSONOrDefault(result.Technologies, "[]")
 			newIPsJSON := marshalJSONOrDefault(result.A, "[]")
 
@@ -306,10 +314,10 @@ func updateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 
 			if hasChanged {
 				asset.LastChangeAt = &now
-				countChanges++
 			}
 
-			// آپدیت مقادیر جدید
+			// آپدیت همیشه انجام میشه تا LastSeen آپدیت بشه (حتی اگر تغییری نباشه)
+			// اما ما اینجا فقط فیلدها رو ست می‌کنیم
 			asset.FinalURL = result.URL
 			asset.StatusCode = result.StatusCode
 			asset.Title = result.Title
@@ -326,46 +334,80 @@ func updateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 			if err := tx.Save(&asset).Error; err != nil {
 				return err
 			}
-			countUpdated++
 		}
 		return nil
 	})
-
-	// ... (بقیه تابع مثل قبل)
+	if err != nil {
+		log.Printf("❌ Transaction failed: %v\n", err)
+	}
 }
 
-// logChange یک رکورد در جدول تاریخچه ثبت می‌کند (نسخه اصلاح‌شده با بازگشت خطا)
+// triggerNextModule (مدیریت زنجیره + آپدیت ScanCount)
+func triggerNextModule(targetID uint, rootDomain, currentModule string) {
+	var target models.Target
+	if err := database.DB.First(&target, targetID).Error; err != nil {
+		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Update("status", "READY")
+		return
+	}
+
+	var modules []string
+	json.Unmarshal([]byte(target.ScanModules), &modules)
+
+	currentIndex := -1
+	for i, m := range modules {
+		if m == currentModule {
+			currentIndex = i
+			break
+		}
+	}
+
+	if currentIndex != -1 && currentIndex+1 < len(modules) {
+		nextModule := modules[currentIndex+1]
+		log.Printf("🔗 Chaining: Phase '%s' done. Starting '%s'\n", currentModule, nextModule)
+		payload := fmt.Sprintf("%s:%d:%s", nextModule, targetID, rootDomain)
+		redisq.Client.RPush(context.Background(), redisq.QueueName, payload)
+	} else {
+		// --- پایان کل زنجیره ---
+		log.Printf("🏁 Chain Complete for %s.\n", rootDomain)
+
+		now := time.Now()
+		// 👇👇👇 اینجا ScanCount را یکی زیاد می‌کنیم
+		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{
+			"last_scan_at": &now,
+			"status":       "READY",
+			"scan_count":   gorm.Expr("scan_count + 1"), // افزایش اتمیک شمارنده
+		})
+	}
+}
+
+// ... (بقیه توابع کمکی: logChange, getBatchSize, runPuredns, readHttpxResults, runPassiveCollection, runAlterx, mergeUnique, writeSliceToFile, areJSONArraysEqual, marshalJSONOrDefault, parseResponseTime, shortenString)
+// لطفاً کدهای قبلی این توابع را اینجا حفظ کن (تغییری نکرده‌اند).
+// ==========================================
+// (برای جلوگیری از تکرار، این بخش را کپی نکردم. از فایل قبلی استفاده کن)
+// ==========================================
 func logChange(tx *gorm.DB, assetID uint, field, oldVal, newVal string) error {
 	if oldVal == newVal {
 		return nil
 	}
 	history := models.AssetHistory{
-		AssetID:   assetID,
-		FieldName: field,
-		OldValue:  oldVal,
-		NewValue:  newVal,
-		CreatedAt: time.Now(),
+		AssetID: assetID, FieldName: field, OldValue: oldVal, NewValue: newVal, CreatedAt: time.Now(),
 	}
 	if err := tx.Create(&history).Error; err != nil {
-		log.Printf("❌ Failed to create history log for asset %d, field %s: %v\n", assetID, field, err)
+		log.Printf("❌ Failed to create history log: %v\n", err)
 		return err
 	}
 	return nil
 }
 
-// areJSONArraysEqual دو رشته JSON که حاوی آرایه هستند را مقایسه می‌کند
 func areJSONArraysEqual(json1, json2 string) bool {
 	var arr1, arr2 []string
 	_ = json.Unmarshal([]byte(json1), &arr1)
 	_ = json.Unmarshal([]byte(json2), &arr2)
-
 	if len(arr1) != len(arr2) {
 		return false
 	}
-
 	sort.Strings(arr1)
 	sort.Strings(arr2)
-
 	return reflect.DeepEqual(arr1, arr2)
 }
 
@@ -395,10 +437,6 @@ func shortenString(s string, maxLen int) string {
 	return s
 }
 
-// ==========================================
-// Shared Utility Functions (Phase 1 & General)
-// ==========================================
-
 func getBatchSize() int {
 	envStr := os.Getenv("PROBE_BATCH_SIZE")
 	if envStr == "" {
@@ -414,8 +452,7 @@ func getBatchSize() int {
 func runPuredns(inputFile string) ([]string, error) {
 	const resolversPath = "/root/trusted_resolvers.txt"
 	cmd := exec.Command("puredns", "resolve", inputFile,
-		"-r", resolversPath,
-		"--resolvers-trusted", resolversPath,
+		"-r", resolversPath, "--resolvers-trusted", resolversPath,
 		"-w", "20", "--rate-limit", "5000",
 	)
 	log.Printf("Executing puredns command and capturing stdout (resolvers: %s)\n", resolversPath)
@@ -442,7 +479,6 @@ func readHttpxResults(filename string) (map[string]HttpxResult, error) {
 		return nil, err
 	}
 	defer file.Close()
-
 	results := make(map[string]HttpxResult)
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -461,7 +497,6 @@ func readHttpxResults(filename string) (map[string]HttpxResult, error) {
 func runPassiveCollection(domain string) []string {
 	var wg sync.WaitGroup
 	results := make(chan string, 50000)
-
 	tools := []struct {
 		name string
 		cmd  *exec.Cmd
@@ -469,7 +504,6 @@ func runPassiveCollection(domain string) []string {
 		{"subfinder", exec.Command("subfinder", "-d", domain, "-silent", "-all")},
 		{"assetfinder", exec.Command("assetfinder", "--subs-only", domain)},
 	}
-
 	for _, tool := range tools {
 		wg.Add(1)
 		go func(t struct {
@@ -487,9 +521,7 @@ func runPassiveCollection(domain string) []string {
 			}
 		}(tool)
 	}
-
 	go func() { wg.Wait(); close(results) }()
-
 	uniqueMap := make(map[string]bool)
 	var finalSlice []string
 	for res := range results {
@@ -507,7 +539,6 @@ func runAlterx(inputFile, rootDomain string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	go func() {
 		defer stdin.Close()
 		file, _ := os.Open(inputFile)
@@ -517,12 +548,10 @@ func runAlterx(inputFile, rootDomain string) ([]string, error) {
 			fmt.Fprintln(stdin, scanner.Text())
 		}
 	}()
-
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, err
 	}
-
 	var results []string
 	for _, line := range strings.Split(string(output), "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -531,82 +560,6 @@ func runAlterx(inputFile, rootDomain string) ([]string, error) {
 		}
 	}
 	return results, nil
-}
-
-// saveDiscoveryResultsToDB (نسخه نهایی: با نوتیفیکیشن تلگرام و ثبت تاریخچه)
-func saveDiscoveryResultsToDB(targetID uint, masterList []string, liveList []string) {
-	log.Printf("💾 Saving/Updating %d potential assets to DB (Smart Upsert)...", len(masterList))
-
-	// تبدیل لیست زنده‌ها به مپ برای سرعت بالا
-	liveMap := make(map[string]bool)
-	for _, l := range liveList {
-		liveMap[l] = true
-	}
-
-	// گرفتن نام تارگت برای ارسال در تلگرام
-	var targetName string
-	var target models.Target
-	if err := database.DB.First(&target, targetID).Error; err == nil {
-		targetName = target.RootDomain
-	} else {
-		targetName = fmt.Sprintf("Target-%d", targetID)
-	}
-
-	countNew := 0
-	countUpdated := 0
-
-	for _, val := range masterList {
-		isLive := liveMap[val] // وضعیت زنده بودن در این لحظه
-
-		// مدل پیش‌فرض برای رکورد جدید
-		asset := models.Asset{
-			TargetID:     targetID,
-			Value:        val,
-			Type:         "subdomain",
-			IsNew:        true,
-			IsLive:       isLive,
-			Technologies: "[]",
-			HostIP:       "[]",
-			RawHttpx:     "{}",
-		}
-
-		var existingAsset models.Asset
-		// چک می‌کنیم آیا این دارایی قبلاً وجود داشته؟
-		result := database.DB.Where("value = ? AND target_id = ?", val, targetID).First(&existingAsset)
-
-		if result.Error == nil {
-			// --- سناریو ۱: دارایی قدیمی است ---
-			// چک می‌کنیم آیا وضعیت زنده بودنش تغییر کرده؟
-			if existingAsset.IsLive != isLive {
-				now := time.Now()
-
-				// 1. ثبت در تاریخچه
-				logChange(database.DB, existingAsset.ID, "is_live", strconv.FormatBool(existingAsset.IsLive), strconv.FormatBool(isLive))
-
-				// 2. ارسال نوتیفیکیشن تلگرام 🚨
-				telegram.SendChangeAlert(targetName, val, "is_live", strconv.FormatBool(existingAsset.IsLive), strconv.FormatBool(isLive))
-
-				// 3. آپدیت رکورد
-				database.DB.Model(&existingAsset).Updates(map[string]interface{}{
-					"is_live":        isLive,
-					"is_new":         true, // دوباره جدید حساب میشه چون وضعیتش عوض شده
-					"last_change_at": &now,
-				})
-				countUpdated++
-			}
-		} else {
-			// --- سناریو ۲: دارایی کاملاً جدید است (Fresh Asset) ---
-			database.DB.Create(&asset)
-
-			// ارسال نوتیفیکیشن تلگرام برای دارایی جدید 🚨
-			// فقط اگر زنده باشه یا کلاً استراتژی‌مون این باشه که همه جدیدها رو بگیم
-			// اینجا برای همه جدیدها آلارم می‌فرستیم:
-			telegram.SendNewAssetAlert(targetName, val)
-
-			countNew++
-		}
-	}
-	log.Printf("✅ DB Sync Complete. New Assets: %d, Status Changed: %d.\n", countNew, countUpdated)
 }
 
 func mergeUnique(slice1, slice2 []string) []string {
@@ -627,47 +580,4 @@ func mergeUnique(slice1, slice2 []string) []string {
 func writeSliceToFile(filename string, data []string) error {
 	content := strings.Join(data, "\n")
 	return ioutil.WriteFile(filename, []byte(content), 0644)
-}
-
-// triggerNextModule تصمیم می‌گیرد بعد از اتمام یک فاز، چه کاری انجام دهد
-func triggerNextModule(targetID uint, rootDomain, currentModule string) {
-	var target models.Target
-	if err := database.DB.First(&target, targetID).Error; err != nil {
-		log.Printf("❌ Failed to fetch target config: %v\n", err)
-		// برای جلوگیری از گیر کردن در حالت SCANNING در صورت خطا
-		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Update("status", "READY")
-		return
-	}
-
-	var modules []string
-	json.Unmarshal([]byte(target.ScanModules), &modules)
-
-	currentIndex := -1
-	for i, m := range modules {
-		if m == currentModule {
-			currentIndex = i
-			break
-		}
-	}
-
-	if currentIndex != -1 && currentIndex+1 < len(modules) {
-		// --- هنوز کار داریم (زنجیره ادامه دارد) ---
-		nextModule := modules[currentIndex+1]
-		log.Printf("🔗 Chaining: Phase '%s' done. Auto-starting next phase: '%s'\n", currentModule, nextModule)
-
-		payload := fmt.Sprintf("%s:%d:%s", nextModule, targetID, rootDomain)
-		redisq.Client.RPush(context.Background(), redisq.QueueName, payload)
-
-		// نکته: وضعیت همچنان SCANNING باقی می‌مونه
-	} else {
-		// --- پایان خط (همه فازها تمام شدند) ---
-		log.Printf("🏁 Chain Complete. No more modules defined after '%s'.\n", currentModule)
-
-		now := time.Now()
-		// 👇👇👇 باز کردن قفل (تغییر وضعیت به READY) + آپدیت زمان آخرین اسکن
-		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{
-			"last_scan_at": &now,
-			"status":       "READY",
-		})
-	}
 }
