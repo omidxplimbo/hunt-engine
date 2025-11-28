@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 
@@ -29,6 +30,11 @@ func main() {
 		AppName: "Hunt Engine API v0.3",
 	})
 
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: "*", // فعلاً برای راحتی همه جا را مجاز می‌کنیم (در پروداکشن محدودش کن)
+		AllowHeaders: "Origin, Content-Type, Accept",
+		AllowMethods: "GET, POST, HEAD, PUT, DELETE, PATCH",
+	}))
 	app.Use(logger.New())
 	app.Use(recover.New())
 

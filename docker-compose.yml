@@ -7,10 +7,10 @@ services:
   backend:
     container_name: hunt-backend
     build:
-      context: ./backend  # داکر فایل گولنگ در این پوشه است
+      context: ./backend
       dockerfile: Dockerfile
     ports:
-      - "8080:8080" # فقط پورت API
+      - "8080:8080"
     environment:
       - DB_HOST=postgres
       - DB_USER=hunter
@@ -20,8 +20,12 @@ services:
       - REDIS_PORT=6379
       - PROBE_BATCH_SIZE=1000
       - TRUSTED_RESOLVERS=1.1.1.1,8.8.8.8,1.0.0.1,8.8.4.4
+      # تنظیمات تلگرام (مقادیر خودت را جایگزین کردی که عالیه)
       - TELEGRAM_BOT_TOKEN=8186397853:AAGbnh2A5AnGgju9qobtL5joh9G8SSEYGV8
       - TELEGRAM_CHAT_ID=-1003320492297
+    volumes:
+      # 👇 این خط برای وردلیست‌های سفارشی اضافه شد (برای آینده)
+      - ./custom_wordlists:/wordlists/custom
     depends_on:
       - postgres
       - redis
@@ -32,18 +36,19 @@ services:
   # -----------------------------
   # 2. Frontend Dashboard (React/Modern UI)
   # -----------------------------
-  # فعلا این بخش را کامنت می‌کنیم تا وقتی کد فرانت را بزنیم
-  # frontend:
-  #   container_name: hunt-frontend
-  #   build:
-  #     context: ./frontend
-  #     dockerfile: Dockerfile
-  #   ports:
-  #     - "3000:80" # داشبورد روی پورت 3000 در دسترس خواهد بود
-  #   depends_on:
-  #     - backend
-  #   networks:
-  #     - hunt-net
+  # 👇👇👇 این بخش از کامنت خارج شد
+  frontend:
+    container_name: hunt-frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "4000:80" # داشبورد روی پورت 3000 در دسترس خواهد بود
+    depends_on:
+      - backend
+    networks:
+      - hunt-net
+    restart: unless-stopped
 
   # -----------------------------
   # 3. Databases & Cache

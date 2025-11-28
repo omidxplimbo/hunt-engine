@@ -436,9 +436,13 @@ func parseResponseTime(timeStr string) int64 {
 	return 0
 }
 
+// shortenString نسخه اصلاح‌شده: برش امن بر اساس کاراکتر (Rune) نه بایت
 func shortenString(s string, maxLen int) string {
-	if len(s) > maxLen {
-		return s[:maxLen] + "..."
+	// تبدیل به آرایه کاراکترها (Runes) برای پشتیبانی از فارسی/کره‌ای/ایموجی
+	runes := []rune(s)
+
+	if len(runes) > maxLen {
+		return string(runes[:maxLen]) + "..."
 	}
 	return s
 }
