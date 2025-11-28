@@ -49,6 +49,8 @@ func main() {
 	api.Get("/targets/:id/assets", handlers.GetTargetAssets)
 	api.Post("/targets/:id/probe", handlers.StartProbing)
 	api.Post("/targets/:id/discovery", handlers.StartDiscovery) // شروع فاز ۱
+	api.Patch("/targets/:id", handlers.UpdateTarget)            // ویرایش
+	api.Delete("/targets/:id", handlers.DeleteTarget)           //
 
 	port := os.Getenv("PORT")
 	if port == "" {

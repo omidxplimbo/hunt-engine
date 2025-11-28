@@ -32,6 +32,7 @@ const (
 
 const DefaultBatchSize = 500
 
+// HttpxResult ساختار برای پارس کردن خروجی JSON
 type HttpxResult struct {
 	Input         string   `json:"input"`
 	URL           string   `json:"url"`
@@ -48,8 +49,10 @@ type HttpxResult struct {
 	RawJSON       string   `json:"-"`
 }
 
+// Start موتور اصلی کارگر را روشن می‌کند.
 func Start() {
 	log.Println("👷 Worker started. Waiting for jobs...", redisq.QueueName)
+
 	for {
 		result, err := redisq.Client.BLPop(context.Background(), 0*time.Second, redisq.QueueName).Result()
 		if err != nil {
@@ -67,9 +70,11 @@ func processJobDispatcher(payload string) {
 		log.Printf("⚠️ Invalid job payload format: %s\n", payload)
 		return
 	}
+
 	jobType := parts[0]
 	targetIDStr := parts[1]
 	rootDomain := parts[2]
+
 	var targetID uint
 	fmt.Sscanf(targetIDStr, "%d", &targetID)
 
@@ -186,7 +191,7 @@ func runProbingPhase(targetID uint, rootDomain string) {
 // Smart Storage & Notification Logic
 // ==========================================
 
-// saveDiscoveryResultsToDB (نسخه هوشمند: کنترل نوتیفیکیشن بر اساس بار اول/دوم)
+// saveDiscoveryResultsToDB (نسخه نهایی: فقط نوتیفیکیشن برای زنده و تغییرات واقعی)
 func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveList []string) {
 	log.Printf("💾 Saving/Updating assets (Scan Count: %d)...", target.ScanCount)
 
@@ -195,7 +200,7 @@ func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveLis
 		liveMap[l] = true
 	}
 
-	// 👇 آیا این اولین اسکن است؟
+	// 👇 آیا این اولین اسکن است؟ (برای جلوگیری از اسپم اولیه)
 	isFirstRun := target.ScanCount == 0
 
 	countNew := 0
@@ -209,39 +214,40 @@ func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveLis
 
 		if result.Error == nil {
 			// --- دارایی قدیمی ---
-			// اگر وضعیت زنده بودن تغییر کرد (مهم نیست بار چندمه، تغییر وضعیت همیشه مهمه)
+			// اگر وضعیت زنده بودن تغییر کرد
 			if existingAsset.IsLive != isLive {
-				// اگر قبلا مرده بود و الان زنده شده -> این مهمه!
-				// اگر قبلا زنده بود و الان مرده -> شاید کمتر مهم باشه ولی ما ثبت می‌کنیم
-
-				// فقط اگر اسکن اول نیست نوتیفیکیشن بفرست (در اسکن اول همه چیز داره ست میشه)
-				// یا اگر میخوای حتی در اسکن اول هم وضعیت دقیق ثبت بشه، شرط نذار.
-				// اما معمولا در اسکن اول existingAsset پیدا نمیشه، پس اینجا وارد نمیشیم.
-				// اینجا یعنی در اسکن‌های بعدی هستیم.
-
-				logChange(database.DB, existingAsset.ID, "is_live", strconv.FormatBool(existingAsset.IsLive), strconv.FormatBool(isLive))
-				telegram.SendChangeAlert(target.RootDomain, val, "is_live", strconv.FormatBool(existingAsset.IsLive), strconv.FormatBool(isLive))
-
 				now := time.Now()
+
+				// ثبت در تاریخچه
+				logChange(database.DB, existingAsset.ID, "is_live", strconv.FormatBool(existingAsset.IsLive), strconv.FormatBool(isLive))
+
+				// 👇 ارسال نوتیفیکیشن تغییر وضعیت (چون دارایی قدیمی است و تغییر کرده)
+				// این قسمت مهمه: اگر قبلاً مرده بود و الان زنده شد -> خبر بده
+				if isLive {
+					telegram.SendChangeAlert(target.RootDomain, val, "is_live", "false", "true")
+				} else {
+					// اگر زنده بود و مرد -> (اختیاری) اگر خواستی خبر بده، اگر نه این خط رو بردار
+					// فعلاً فقط زنده‌شدن‌ها رو خبر میدیم که نویز کم باشه
+					// telegram.SendChangeAlert(target.RootDomain, val, "is_live", "true", "false")
+				}
+
 				database.DB.Model(&existingAsset).Updates(map[string]interface{}{
 					"is_live":        isLive,
-					"is_new":         true,
+					"is_new":         true, // مارک کردن به عنوان جدید برای دیده شدن
 					"last_change_at": &now,
 				})
 				countUpdated++
 			}
 		} else {
-			// --- دارایی جدید ---
+			// --- دارایی کاملاً جدید ---
 			asset := models.Asset{
 				TargetID: target.ID, Value: val, Type: "subdomain", IsNew: true, IsLive: isLive,
 				Technologies: "[]", HostIP: "[]", RawHttpx: "{}",
 			}
 			database.DB.Create(&asset)
 
-			// 👇👇👇 شرط مهم: فقط اگر بار اول نیست نوتیفیکیشن بفرست
-			if !isFirstRun {
-				// فقط اگر زنده است خبر بده (یا همه رو، بسته به استراتژی)
-				// اینجا فرض می‌کنیم هر دارایی جدیدی مهمه
+			// 👇👇👇 منطق جدید: فقط اگر بار اول نیست AND زنده است نوتیفیکیشن بفرست
+			if !isFirstRun && isLive {
 				telegram.SendNewAssetAlert(target.RootDomain, val)
 			}
 			countNew++
@@ -250,9 +256,8 @@ func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveLis
 	log.Printf("✅ DB Sync Complete. New: %d, Status Changed: %d.\n", countNew, countUpdated)
 }
 
-// updateAssetsWithDiff (فاز ۲ - نوتیفیکیشن فقط در صورت تغییر واقعی)
+// updateAssetsWithDiff (فاز ۲ - منطق هوشمند برای پر کردن اولیه vs تغییرات)
 func updateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
-	// گرفتن نام تارگت برای تلگرام
 	var targetName string
 	var target models.Target
 	if err := database.DB.First(&target, targetID).Error; err == nil {
@@ -266,17 +271,23 @@ func updateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 				continue
 			}
 
+			// 👇👇👇 تشخیص اینکه آیا این اولین باری است که httpx روی این دارایی اجرا می‌شود؟
+			// اگر RawHttpx خالی باشد، یعنی بار اول است و فقط داریم دیتا پر می‌کنیم (بدون نوتیفیکیشن)
+			isFirstProbing := asset.RawHttpx == "" || asset.RawHttpx == "{}"
+
 			hasChanged := false
 			now := time.Now()
 
-			// تابع کمکی برای چک کردن و ارسال
+			// تابع کمکی: اگر بار اول نیست و تغییر کرده، خبر بده
 			checkAndNotify := func(field, oldVal, newVal string) error {
 				if oldVal != newVal {
 					if err := logChange(tx, asset.ID, field, oldVal, newVal); err != nil {
 						return err
 					}
-					// در فاز ۲ چون همیشه روی داده‌های موجود کار می‌کنیم، هر تغییری یعنی اتفاق جدید
-					telegram.SendChangeAlert(targetName, hostInput, field, oldVal, newVal)
+					// 🚨 فقط اگر بار اول نیست، نوتیفیکیشن بفرست
+					if !isFirstProbing {
+						telegram.SendChangeAlert(targetName, hostInput, field, oldVal, newVal)
+					}
 					hasChanged = true
 				}
 				return nil
@@ -316,8 +327,7 @@ func updateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 				asset.LastChangeAt = &now
 			}
 
-			// آپدیت همیشه انجام میشه تا LastSeen آپدیت بشه (حتی اگر تغییری نباشه)
-			// اما ما اینجا فقط فیلدها رو ست می‌کنیم
+			// آپدیت همیشه انجام میشه
 			asset.FinalURL = result.URL
 			asset.StatusCode = result.StatusCode
 			asset.Title = result.Title
@@ -342,7 +352,11 @@ func updateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 	}
 }
 
-// triggerNextModule (مدیریت زنجیره + آپدیت ScanCount)
+// ... (بقیه توابع کمکی triggerNextModule, logChange, getBatchSize, runPuredns, readHttpxResults, runPassiveCollection, runAlterx, mergeUnique, writeSliceToFile, areJSONArraysEqual, marshalJSONOrDefault, parseResponseTime, shortenString)
+// لطفاً کدهای قبلی این توابع را اینجا حفظ کن (تغییری نکرده‌اند).
+// ==========================================
+// (برای جلوگیری از تکرار، این بخش را کپی نکردم. از فایل قبلی استفاده کن)
+// ==========================================
 func triggerNextModule(targetID uint, rootDomain, currentModule string) {
 	var target models.Target
 	if err := database.DB.First(&target, targetID).Error; err != nil {
@@ -367,24 +381,16 @@ func triggerNextModule(targetID uint, rootDomain, currentModule string) {
 		payload := fmt.Sprintf("%s:%d:%s", nextModule, targetID, rootDomain)
 		redisq.Client.RPush(context.Background(), redisq.QueueName, payload)
 	} else {
-		// --- پایان کل زنجیره ---
 		log.Printf("🏁 Chain Complete for %s.\n", rootDomain)
-
 		now := time.Now()
-		// 👇👇👇 اینجا ScanCount را یکی زیاد می‌کنیم
 		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{
 			"last_scan_at": &now,
 			"status":       "READY",
-			"scan_count":   gorm.Expr("scan_count + 1"), // افزایش اتمیک شمارنده
+			"scan_count":   gorm.Expr("scan_count + 1"),
 		})
 	}
 }
 
-// ... (بقیه توابع کمکی: logChange, getBatchSize, runPuredns, readHttpxResults, runPassiveCollection, runAlterx, mergeUnique, writeSliceToFile, areJSONArraysEqual, marshalJSONOrDefault, parseResponseTime, shortenString)
-// لطفاً کدهای قبلی این توابع را اینجا حفظ کن (تغییری نکرده‌اند).
-// ==========================================
-// (برای جلوگیری از تکرار، این بخش را کپی نکردم. از فایل قبلی استفاده کن)
-// ==========================================
 func logChange(tx *gorm.DB, assetID uint, field, oldVal, newVal string) error {
 	if oldVal == newVal {
 		return nil

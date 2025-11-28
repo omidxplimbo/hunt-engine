@@ -13,3 +13,12 @@ type CreateTargetRequest struct {
 	Frequency int      `json:"frequency"` // 0 یعنی دستی، >0 یعنی اتوماتیک (دقیقه)
 	Modules   []string `json:"modules"`   // ["DISCOVERY", "PROBING"]
 }
+
+// UpdateTargetRequest برای ویرایش تنظیمات تارگت
+type UpdateTargetRequest struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Frequency   *int     `json:"frequency"` // پوینتر: اگر نال بود یعنی تغییر نده
+	InScope     *bool    `json:"in_scope"`  // پوینتر: برای تشخیص false واقعی
+	Modules     []string `json:"modules"`
+}

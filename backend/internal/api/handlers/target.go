@@ -10,6 +10,7 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/utils"
+	"gorm.io/gorm"
 )
 
 // CreateTarget هندلر ساخت یک هدف جدید است
@@ -289,5 +290,97 @@ func StartDiscovery(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"status":  "success",
 		"message": fmt.Sprintf("Phase 1 (Discovery) started successfully for target: %s", target.Name),
+	})
+}
+
+// UpdateTarget ویرایش تنظیمات یک تارگت
+func UpdateTarget(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	// 1. یافتن تارگت
+	var target models.Target
+	if err := database.DB.First(&target, id).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Target not found"})
+	}
+
+	// 2. پارس کردن بادی درخواست
+	req := new(dto.UpdateTargetRequest)
+	if err := c.BodyParser(req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "Invalid body"})
+	}
+
+	// 3. اعمال تغییرات (فقط اگر مقدار ارسال شده باشد)
+	if req.Name != "" {
+		target.Name = req.Name
+	}
+	if req.Description != "" {
+		target.Description = req.Description
+	}
+	if req.Frequency != nil {
+		target.Frequency = *req.Frequency
+	}
+	if req.InScope != nil {
+		target.InScope = *req.InScope
+	}
+	if len(req.Modules) > 0 {
+		bytes, _ := json.Marshal(req.Modules)
+		target.ScanModules = string(bytes)
+	}
+
+	// 4. ذخیره
+	if err := database.DB.Save(&target).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to update target"})
+	}
+
+	return c.JSON(fiber.Map{
+		"status":  "success",
+		"message": "Target updated successfully",
+		"data":    target,
+	})
+}
+
+// DeleteTarget حذف کامل تارگت و تمام داده‌های وابسته (Cascade Delete دستی)
+func DeleteTarget(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	// استفاده از تراکنش برای اطمینان از حذف کامل
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		// 1. چک کردن وجود تارگت
+		var target models.Target
+		if err := tx.First(&target, id).Error; err != nil {
+			return err // اگر پیدا نشد، تراکنش لغو میشه
+		}
+
+		// 2. حذف تاریخچه‌ها (AssetHistory) - چون به Asset وابسته‌اند
+		// کوئری: حذف تاریخچه‌هایی که AssetID آن‌ها مربوط به این TargetID است
+		if err := tx.Exec("DELETE FROM asset_histories WHERE asset_id IN (SELECT id FROM assets WHERE target_id = ?)", id).Error; err != nil {
+			return err
+		}
+
+		// 3. حذف دارایی‌ها (Assets)
+		if err := tx.Exec("DELETE FROM assets WHERE target_id = ?", id).Error; err != nil {
+			return err
+		}
+
+		// 4. حذف خود تارگت (Target)
+		// استفاده از Unscoped برای حذف فیزیکی (نه Soft Delete)
+		if err := tx.Unscoped().Delete(&target).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Failed to delete target (DB Error)",
+			"details": err.Error(),
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"status":  "success",
+		"message": "Target and all associated data deleted successfully",
 	})
 }
