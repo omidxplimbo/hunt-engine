@@ -27,6 +27,7 @@ type AssetResponse struct {
 	Title         string      `json:"title"`
 	ContentLength int64       `json:"content_length"`
 	HostIP        string      `json:"host_ip"`
+	DnsxIP        string      `json:"dnsx_ip"`
 	WebServer     string      `json:"web_server"`
 	CDNName       string      `json:"cdn_name"`
 	Technologies  interface{} `json:"technologies"`

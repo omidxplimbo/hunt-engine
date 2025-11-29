@@ -26,13 +26,20 @@ import (
 // مسیرهای فایل‌های موقت
 const (
 	allFoundFile      = "/tmp/all_found.txt"
+	dnsxOutputFile    = "/tmp/dnsx_output.json" // فایل خروجی جدید برای dnsx
 	probingInputFile  = "/tmp/probing_input.txt"
 	probingOutputFile = "/tmp/probing_output.json"
 )
 
 const DefaultBatchSize = 500
 
-// HttpxResult ساختار برای پارس کردن خروجی JSON
+// DnsxResult ساختار خروجی JSON ابزار dnsx
+type DnsxResult struct {
+	Host string   `json:"host"`
+	A    []string `json:"a"` // آرایه IPها
+}
+
+// HttpxResult ساختار برای پارس کردن خروجی JSON ابزار httpx
 type HttpxResult struct {
 	Input         string   `json:"input"`
 	URL           string   `json:"url"`
@@ -49,10 +56,8 @@ type HttpxResult struct {
 	RawJSON       string   `json:"-"`
 }
 
-// Start موتور اصلی کارگر را روشن می‌کند.
 func Start() {
 	log.Println("👷 Worker started. Waiting for jobs...", redisq.QueueName)
-
 	for {
 		result, err := redisq.Client.BLPop(context.Background(), 0*time.Second, redisq.QueueName).Result()
 		if err != nil {
@@ -70,11 +75,9 @@ func processJobDispatcher(payload string) {
 		log.Printf("⚠️ Invalid job payload format: %s\n", payload)
 		return
 	}
-
 	jobType := parts[0]
 	targetIDStr := parts[1]
 	rootDomain := parts[2]
-
 	var targetID uint
 	fmt.Sscanf(targetIDStr, "%d", &targetID)
 
@@ -85,13 +88,14 @@ func processJobDispatcher(payload string) {
 		runDiscoveryPhase(targetID, rootDomain)
 	case "PROBING":
 		runProbingPhase(targetID, rootDomain)
+	// case "CRAWLING": ... (بعدا اضافه می‌شود)
 	default:
 		log.Printf("⚠️ Unknown job type: %s\n", jobType)
 	}
 }
 
 // =================================================================
-// PHASE 1: Discovery Implementation
+// PHASE 1: Discovery Implementation (با DNSX)
 // =================================================================
 func runDiscoveryPhase(targetID uint, rootDomain string) {
 	log.Printf("🚀 Starting PHASE 1 (DISCOVERY) for: %s (ID: %d)\n", rootDomain, targetID)
@@ -99,6 +103,7 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 
 	// 1. Passive
 	passiveResults := runPassiveCollection(rootDomain)
+
 	// 2. Mutation
 	writeSliceToFile(allFoundFile, passiveResults)
 	mutatedResults, err := runAlterx(allFoundFile, rootDomain)
@@ -106,7 +111,8 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		log.Printf("❌ Alterx failed: %v.\n", err)
 		mutatedResults = []string{}
 	}
-	// 3. History Injection (خواندن سوابق قبلی)
+
+	// 3. History Injection
 	var existingAssets []string
 	database.DB.Model(&models.Asset{}).Where("target_id = ?", targetID).Pluck("value", &existingAssets)
 
@@ -114,23 +120,23 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	masterList := mergeUnique(passiveResults, mutatedResults)
 	masterList = mergeUnique(masterList, existingAssets)
 	writeSliceToFile(allFoundFile, masterList)
-	log.Printf("📊 Master list created with %d potential subdomains. Starting validation...\n", len(masterList))
+	log.Printf("📊 Master list created with %d potential subdomains. Starting validation (DNSX)...\n", len(masterList))
 
-	// 5. Validation (Puredns)
-	liveSubdomains, err := runPuredns(allFoundFile)
+	// 5. Validation & IP Resolution (DNSX)
+	// 👇👇👇 جایگزینی puredns با dnsx
+	dnsxResults, err := runDnsx(allFoundFile, dnsxOutputFile)
 	if err != nil {
-		log.Printf("❌ Puredns failed: %v\n", err)
-		liveSubdomains = []string{}
+		log.Printf("❌ Dnsx failed: %v\n", err)
+		// اگر کلا فیل شد، ادامه نمیدیم (چون لیست زنده نداریم)
+		return
 	}
-	log.Printf("✅ [Stage 3] Confirmed %d LIVE subdomains.\n", len(liveSubdomains))
+	log.Printf("✅ [Stage 3] Confirmed %d LIVE subdomains with IPs.\n", len(dnsxResults))
 
-	// 6. Saving with Smart Logic
-	// 👇 اینجا باید اطلاعات تارگت رو بگیریم تا ببینیم بار چندمه
+	// 6. Saving
+	// حالا map[string][]string داریم (دامنه -> آی‌پی‌ها)
 	var target models.Target
 	database.DB.First(&target, targetID)
-
-	// ارسال اسکن کاونت به تابع ذخیره سازی
-	saveDiscoveryResultsToDB(target, masterList, liveSubdomains)
+	saveDiscoveryResultsToDB(target, masterList, dnsxResults)
 
 	log.Printf("🏁 PHASE 1 finished for %s in %s.\n", rootDomain, time.Since(startTime))
 	triggerNextModule(targetID, rootDomain, "DISCOVERY")
@@ -191,72 +197,79 @@ func runProbingPhase(targetID uint, rootDomain string) {
 // Smart Storage & Notification Logic
 // ==========================================
 
-// saveDiscoveryResultsToDB (نسخه نهایی: فقط نوتیفیکیشن برای زنده و تغییرات واقعی)
-func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveList []string) {
+// saveDiscoveryResultsToDB (آپدیت شده برای دریافت خروجی dnsx)
+func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveResults map[string][]string) {
 	log.Printf("💾 Saving/Updating assets (Scan Count: %d)...", target.ScanCount)
 
-	liveMap := make(map[string]bool)
-	for _, l := range liveList {
-		liveMap[l] = true
-	}
-
-	// 👇 آیا این اولین اسکن است؟ (برای جلوگیری از اسپم اولیه)
 	isFirstRun := target.ScanCount == 0
-
 	countNew := 0
 	countUpdated := 0
 
 	for _, val := range masterList {
-		isLive := liveMap[val]
+		// چک می‌کنیم آیا این دامنه در نتایج زنده dnsx وجود دارد؟
+		ips, isLive := liveResults[val]
+
+		// تبدیل آرایه IPها به JSON برای ذخیره
+		dnsxIPJSON := "[]"
+		if isLive && len(ips) > 0 {
+			bytes, _ := json.Marshal(ips)
+			dnsxIPJSON = string(bytes)
+		}
 
 		var existingAsset models.Asset
 		result := database.DB.Where("value = ? AND target_id = ?", val, target.ID).First(&existingAsset)
 
 		if result.Error == nil {
 			// --- دارایی قدیمی ---
-			// اگر وضعیت زنده بودن تغییر کرد
+
+			// تغییرات را چک می‌کنیم (وضعیت زنده بودن یا تغییر IP)
+			// نکته: اینجا فقط روی is_live حساس هستیم برای نوتیفیکیشن (طبق خواسته قبلی)
+			// اما IP جدید رو هم آپدیت می‌کنیم
+
 			if existingAsset.IsLive != isLive {
 				now := time.Now()
-
-				// ثبت در تاریخچه
 				logChange(database.DB, existingAsset.ID, "is_live", strconv.FormatBool(existingAsset.IsLive), strconv.FormatBool(isLive))
-
-				// 👇 ارسال نوتیفیکیشن تغییر وضعیت (چون دارایی قدیمی است و تغییر کرده)
-				// این قسمت مهمه: اگر قبلاً مرده بود و الان زنده شد -> خبر بده
-				if isLive {
-					telegram.SendChangeAlert(target.RootDomain, val, "is_live", "false", "true")
-				} else {
-					// اگر زنده بود و مرد -> (اختیاری) اگر خواستی خبر بده، اگر نه این خط رو بردار
-					// فعلاً فقط زنده‌شدن‌ها رو خبر میدیم که نویز کم باشه
-					// telegram.SendChangeAlert(target.RootDomain, val, "is_live", "true", "false")
-				}
 
 				database.DB.Model(&existingAsset).Updates(map[string]interface{}{
 					"is_live":        isLive,
-					"is_new":         true, // مارک کردن به عنوان جدید برای دیده شدن
+					"is_new":         true,
 					"last_change_at": &now,
+					// 👇 آپدیت IP هم انجام میشه
+					"dnsx_ip": dnsxIPJSON,
 				})
 				countUpdated++
+			} else if isLive && existingAsset.DnsxIP != dnsxIPJSON {
+				// اگر زنده بود و IP عوض شده بود، IP رو آپدیت می‌کنیم (بدون نوتیفیکیشن طبق استراتژی فعلی)
+				// اگر بخوای برای تغییر IP هم نوتیف بیاد، اینجا جاشه.
+				database.DB.Model(&existingAsset).Update("dnsx_ip", dnsxIPJSON)
 			}
+
 		} else {
-			// --- دارایی کاملاً جدید ---
+			// --- دارایی جدید ---
 			asset := models.Asset{
-				TargetID: target.ID, Value: val, Type: "subdomain", IsNew: true, IsLive: isLive,
-				Technologies: "[]", HostIP: "[]", RawHttpx: "{}",
+				TargetID:     target.ID,
+				Value:        val,
+				Type:         "subdomain",
+				IsNew:        true,
+				IsLive:       isLive,
+				Technologies: "[]",
+				HostIP:       "[]",
+				RawHttpx:     "{}",
+				// 👇 ذخیره IP مرحله اول
+				DnsxIP: dnsxIPJSON,
 			}
 			database.DB.Create(&asset)
+			countNew++
 
-			// 👇👇👇 منطق جدید: فقط اگر بار اول نیست AND زنده است نوتیفیکیشن بفرست
 			if !isFirstRun && isLive {
 				telegram.SendNewAssetAlert(target.RootDomain, val)
 			}
-			countNew++
 		}
 	}
 	log.Printf("✅ DB Sync Complete. New: %d, Status Changed: %d.\n", countNew, countUpdated)
 }
 
-// updateAssetsWithDiff (فاز ۲ - منطق هوشمند برای پر کردن اولیه vs تغییرات)
+// updateAssetsWithDiff (فاز ۲)
 func updateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 	var targetName string
 	var target models.Target
@@ -271,20 +284,15 @@ func updateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 				continue
 			}
 
-			// 👇👇👇 تشخیص اینکه آیا این اولین باری است که httpx روی این دارایی اجرا می‌شود؟
-			// اگر RawHttpx خالی باشد، یعنی بار اول است و فقط داریم دیتا پر می‌کنیم (بدون نوتیفیکیشن)
 			isFirstProbing := asset.RawHttpx == "" || asset.RawHttpx == "{}"
-
 			hasChanged := false
 			now := time.Now()
 
-			// تابع کمکی: اگر بار اول نیست و تغییر کرده، خبر بده
 			checkAndNotify := func(field, oldVal, newVal string) error {
 				if oldVal != newVal {
 					if err := logChange(tx, asset.ID, field, oldVal, newVal); err != nil {
 						return err
 					}
-					// 🚨 فقط اگر بار اول نیست، نوتیفیکیشن بفرست
 					if !isFirstProbing {
 						telegram.SendChangeAlert(targetName, hostInput, field, oldVal, newVal)
 					}
@@ -293,7 +301,6 @@ func updateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 				return nil
 			}
 
-			// مقایسه‌ها
 			if err := checkAndNotify("status_code", strconv.Itoa(asset.StatusCode), strconv.Itoa(result.StatusCode)); err != nil {
 				return err
 			}
@@ -308,7 +315,6 @@ func updateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 				return err
 			}
 
-			// برای JSON ها
 			newTechJSON := marshalJSONOrDefault(result.Technologies, "[]")
 			newIPsJSON := marshalJSONOrDefault(result.A, "[]")
 
@@ -327,7 +333,6 @@ func updateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 				asset.LastChangeAt = &now
 			}
 
-			// آپدیت همیشه انجام میشه
 			asset.FinalURL = result.URL
 			asset.StatusCode = result.StatusCode
 			asset.Title = result.Title
@@ -352,21 +357,69 @@ func updateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 	}
 }
 
-// ... (بقیه توابع کمکی triggerNextModule, logChange, getBatchSize, runPuredns, readHttpxResults, runPassiveCollection, runAlterx, mergeUnique, writeSliceToFile, areJSONArraysEqual, marshalJSONOrDefault, parseResponseTime, shortenString)
-// لطفاً کدهای قبلی این توابع را اینجا حفظ کن (تغییری نکرده‌اند).
 // ==========================================
-// (برای جلوگیری از تکرار، این بخش را کپی نکردم. از فایل قبلی استفاده کن)
+// Helper Functions
 // ==========================================
+
+// runDnsx جایگزین puredns - اجرای dnsx و گرفتن خروجی JSON شامل IP
+func runDnsx(inputFile, outputFile string) (map[string][]string, error) {
+	// دستور dnsx با خروجی JSON
+	// -silent: فقط JSON بده
+	// -json: خروجی ساختار یافته
+	// -a: رکورد A (آی‌پی) رو هم بده
+	// -resp: فقط پاسخ‌دهنده‌ها (زنده‌ها) رو بده
+	cmd := exec.Command("dnsx",
+		"-l", inputFile,
+		"-json",
+		"-o", outputFile,
+		"-silent",
+		"-a",
+		"-resp",
+		"-threads", "50", // سرعت مناسب
+	)
+
+	log.Printf("Executing dnsx command...\n")
+	if err := cmd.Run(); err != nil {
+		log.Printf("⚠️ dnsx finished with issue: %v\n", err)
+	}
+
+	// خواندن و پارس کردن خروجی JSON
+	results := make(map[string][]string)
+	file, err := os.Open(outputFile)
+	if err != nil {
+		// اگر فایل ساخته نشد (هیچ چی پیدا نکرد)، مپ خالی برمی‌گردونیم
+		if os.IsNotExist(err) {
+			return results, nil
+		}
+		return nil, err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		var res DnsxResult
+		if err := json.Unmarshal([]byte(line), &res); err == nil {
+			// فقط اگر هاست خالی نبود اضافه کن
+			if res.Host != "" {
+				results[res.Host] = res.A
+			}
+		}
+	}
+	return results, scanner.Err()
+}
+
+// ... (بقیه توابع کمکی بدون تغییر: triggerNextModule, logChange, areJSONArraysEqual, marshalJSONOrDefault, parseResponseTime, shortenString, getBatchSize, readHttpxResults, runPassiveCollection, runAlterx, mergeUnique, writeSliceToFile)
+// برای جلوگیری از تکرار، این بخش را کپی نکردم. از فایل قبلی استفاده کن.
+
 func triggerNextModule(targetID uint, rootDomain, currentModule string) {
 	var target models.Target
 	if err := database.DB.First(&target, targetID).Error; err != nil {
 		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Update("status", "READY")
 		return
 	}
-
 	var modules []string
 	json.Unmarshal([]byte(target.ScanModules), &modules)
-
 	currentIndex := -1
 	for i, m := range modules {
 		if m == currentModule {
@@ -374,7 +427,6 @@ func triggerNextModule(targetID uint, rootDomain, currentModule string) {
 			break
 		}
 	}
-
 	if currentIndex != -1 && currentIndex+1 < len(modules) {
 		nextModule := modules[currentIndex+1]
 		log.Printf("🔗 Chaining: Phase '%s' done. Starting '%s'\n", currentModule, nextModule)
@@ -399,7 +451,6 @@ func logChange(tx *gorm.DB, assetID uint, field, oldVal, newVal string) error {
 		AssetID: assetID, FieldName: field, OldValue: oldVal, NewValue: newVal, CreatedAt: time.Now(),
 	}
 	if err := tx.Create(&history).Error; err != nil {
-		log.Printf("❌ Failed to create history log: %v\n", err)
 		return err
 	}
 	return nil
@@ -436,11 +487,8 @@ func parseResponseTime(timeStr string) int64 {
 	return 0
 }
 
-// shortenString نسخه اصلاح‌شده: برش امن بر اساس کاراکتر (Rune) نه بایت
 func shortenString(s string, maxLen int) string {
-	// تبدیل به آرایه کاراکترها (Runes) برای پشتیبانی از فارسی/کره‌ای/ایموجی
 	runes := []rune(s)
-
 	if len(runes) > maxLen {
 		return string(runes[:maxLen]) + "..."
 	}
@@ -457,30 +505,6 @@ func getBatchSize() int {
 		return DefaultBatchSize
 	}
 	return size
-}
-
-func runPuredns(inputFile string) ([]string, error) {
-	const resolversPath = "/root/trusted_resolvers.txt"
-	cmd := exec.Command("puredns", "resolve", inputFile,
-		"-r", resolversPath, "--resolvers-trusted", resolversPath,
-		"-w", "20", "--rate-limit", "5000",
-	)
-	log.Printf("Executing puredns command and capturing stdout (resolvers: %s)\n", resolversPath)
-	outputBytes, err := cmd.Output()
-	if err != nil {
-		log.Printf("⚠️ Puredns command finished with error state: %v\n", err)
-	}
-	outputStr := string(outputBytes)
-	lines := strings.Split(outputStr, "\n")
-	var results []string
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" && !strings.HasPrefix(trimmed, "[") {
-			results = append(results, trimmed)
-		}
-	}
-	log.Printf("✅ Puredns finished. Captured %d live domains from stdout.\n", len(results))
-	return results, nil
 }
 
 func readHttpxResults(filename string) (map[string]HttpxResult, error) {

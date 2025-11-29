@@ -247,6 +247,7 @@ func toAssetResponse(a models.Asset) dto.AssetResponse {
 		Title:         a.Title,
 		ContentLength: a.ContentLength,
 		HostIP:        a.HostIP,
+		DnsxIP:        a.DnsxIP, // 👈 اضافه شد
 		WebServer:     a.WebServer,
 		CDNName:       a.CDNName,
 		Technologies:  techs, // استفاده از آبجکت پارس شده

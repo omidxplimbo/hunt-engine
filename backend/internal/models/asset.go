@@ -58,6 +58,7 @@ type Asset struct {
 	Title          string `gorm:"size:512" json:"title"`
 	ContentLength  int64  `json:"content_length"`
 	HostIP         string `gorm:"type:jsonb;default:'[]'" json:"host_ip"` // آرایه IPها
+	DnsxIP         string `gorm:"type:jsonb;default:'[]'" json:"dnsx_ip"`
 	WebServer      string `gorm:"size:255" json:"web_server"`
 	CDNName        string `gorm:"size:100;index" json:"cdn_name"`
 	Technologies   string `gorm:"type:jsonb;default:'[]'" json:"technologies"`

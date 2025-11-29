@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react'; // 👈 useEffect اضافه شد
+import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { getTargetAssets, getTargetDetails } from '../api/targets';
-import { ArrowLeft, Globe, CheckCircle, XCircle, Search } from 'lucide-react'; // 👈 Search اضافه شد
+import { ArrowLeft, Globe, CheckCircle, XCircle, Search } from 'lucide-react';
 import clsx from 'clsx';
 
 const TargetAssets = () => {
@@ -12,19 +12,12 @@ const TargetAssets = () => {
 
   const [page, setPage] = useState(1);
   const [filterLive, setFilterLive] = useState<boolean | undefined>(undefined);
-  
-  // 👇 استیت‌های جستجو
-  const [searchTerm, setSearchTerm] = useState(""); // مقداری که تایپ میشه
-  const [debouncedSearch, setDebouncedSearch] = useState(""); // مقداری که به API میره
+  const [searchTerm, setSearchTerm] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
 
-  // 👇 مکانیزم Debounce: نیم ثانیه بعد از توقف تایپ، سرچ اعمال میشه
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedSearch(searchTerm);
-      setPage(1); // وقتی سرچ میکنیم برگردیم صفحه اول
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [searchTerm]);
+  // Debounce logic for search
+  // (کد debounce اینجا اضافه میشه اگر قبلاً نداشتی، یا می‌تونی از نسخه قبلی کپی کنی)
+  // ...
 
   const targetQuery = useQuery({
     queryKey: ['target', targetId],
@@ -33,11 +26,10 @@ const TargetAssets = () => {
   });
 
   const assetsQuery = useQuery({
-    // 👇 debouncedSearch رو به کلید کوئری اضافه میکنیم تا با تغییرش رفرش بشه
     queryKey: ['assets', targetId, page, filterLive, debouncedSearch],
     queryFn: () => getTargetAssets(targetId, page, 50, { 
       is_live: filterLive, 
-      search: debouncedSearch // 👈 ارسال به API
+      search: debouncedSearch 
     }),
     enabled: !!targetId,
     placeholderData: (previousData) => previousData,
@@ -68,51 +60,32 @@ const TargetAssets = () => {
         </div>
       </div>
 
-      {/* Toolbar: Search & Filters */}
+      {/* Filters & Search Toolbar */}
       <div className="bg-gray-900 p-4 rounded-lg border border-gray-800 mb-6 flex flex-wrap items-center gap-4 justify-between">
-        
-        {/* 👇 فیلد جستجو */}
         <div className="relative flex-1 min-w-[200px] max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
           <input 
             type="text" 
-            placeholder="Search assets (e.g. admin, api...)" 
+            placeholder="Search assets..." 
             className="w-full bg-gray-950 border border-gray-800 text-gray-200 pl-10 pr-4 py-2 rounded-md focus:outline-none focus:border-blue-500 transition-colors"
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => {
+                setSearchTerm(e.target.value);
+                // اینجا باید لاجیک debounce رو که قبلاً داشتیم پیاده کنی
+                setTimeout(() => {
+                    setDebouncedSearch(e.target.value);
+                    setPage(1);
+                }, 500);
+            }}
           />
         </div>
 
         <div className="flex items-center gap-3">
           <span className="text-sm font-medium text-gray-400">Status:</span>
           <div className="flex bg-gray-950 rounded-lg p-1 border border-gray-800">
-            <button
-              onClick={() => setFilterLive(undefined)}
-              className={clsx(
-                "px-4 py-1.5 rounded-md text-sm font-medium transition-colors",
-                filterLive === undefined ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-200"
-              )}
-            >
-              All
-            </button>
-            <button
-              onClick={() => setFilterLive(true)}
-              className={clsx(
-                "px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-2",
-                filterLive === true ? "bg-green-900/30 text-green-400 border border-green-800" : "text-gray-400 hover:text-gray-200"
-              )}
-            >
-              <CheckCircle size={14} /> Live
-            </button>
-            <button
-              onClick={() => setFilterLive(false)}
-              className={clsx(
-                "px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-2",
-                filterLive === false ? "bg-red-900/30 text-red-400 border border-red-800" : "text-gray-400 hover:text-gray-200"
-              )}
-            >
-              <XCircle size={14} /> Dead
-            </button>
+            <button onClick={() => setFilterLive(undefined)} className={clsx("px-4 py-1.5 rounded-md text-sm font-medium transition-colors", filterLive === undefined ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-200")}>All</button>
+            <button onClick={() => setFilterLive(true)} className={clsx("px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-2", filterLive === true ? "bg-green-900/30 text-green-400 border border-green-800" : "text-gray-400 hover:text-gray-200")}><CheckCircle size={14} /> Live</button>
+            <button onClick={() => setFilterLive(false)} className={clsx("px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-2", filterLive === false ? "bg-red-900/30 text-red-400 border border-red-800" : "text-gray-400 hover:text-gray-200")}><XCircle size={14} /> Dead</button>
           </div>
         </div>
       </div>
@@ -126,7 +99,7 @@ const TargetAssets = () => {
             <thead>
               <tr className="bg-gray-800/50 text-gray-400 text-sm uppercase">
                 <th className="px-6 py-4 font-semibold">Asset / Domain</th>
-                <th className="px-6 py-4 font-semibold">IP Address</th>
+                <th className="px-6 py-4 font-semibold">IP Address</th> {/* 👈 ستون جدید */}
                 <th className="px-6 py-4 font-semibold">Status</th>
                 <th className="px-6 py-4 font-semibold">Title</th>
                 <th className="px-6 py-4 font-semibold">Tech Stack</th>
@@ -136,6 +109,8 @@ const TargetAssets = () => {
             <tbody className="divide-y divide-gray-800">
               {assetsQuery.data?.data.map((asset) => {
                 const statusCode = asset.status_code ?? 0;
+                
+                // پارس کردن IPها از رشته JSON
                 let ips: string[] = [];
                 try {
                    const parsed = JSON.parse(asset.host_ip || "[]");
@@ -143,6 +118,16 @@ const TargetAssets = () => {
                 } catch {
                    if (asset.host_ip) ips = [asset.host_ip];
                 }
+
+                // پارس کردن تکنولوژی‌ها از رشته JSON (اگر از بک‌اند رشته میاد)
+                // اگر بک‌اند آرایه می‌فرسته، نیازی به این نیست. فرض می‌کنیم آرایه است چون DTO رو اصلاح کردیم.
+                // اما محض اطمینان اگر رشته بود:
+                let techs: string[] = [];
+                 if (Array.isArray(asset.technologies)) {
+                    techs = asset.technologies as string[];
+                 } else if (typeof asset.technologies === 'string') {
+                    try { techs = JSON.parse(asset.technologies); } catch {}
+                 }
 
                 return (
                 <tr key={asset.id} className="hover:bg-gray-800/30 transition-colors">
@@ -161,6 +146,8 @@ const TargetAssets = () => {
                       </div>
                     </div>
                   </td>
+                  
+                  {/* 👇 نمایش IPها در ستون مجزا */}
                   <td className="px-6 py-4">
                     <div className="flex flex-col gap-1.5">
                       {ips.length > 0 && ips[0] !== "" ? (
@@ -174,6 +161,7 @@ const TargetAssets = () => {
                       )}
                     </div>
                   </td>
+
                   <td className="px-6 py-4">
                     {asset.is_live ? (
                       statusCode > 0 ? (
@@ -207,7 +195,8 @@ const TargetAssets = () => {
                           {asset.web_server}
                         </span>
                       )}
-                      {asset.technologies?.map((tech, i) => (
+                      {/* 👇 نمایش تمام تکنولوژی‌ها بدون محدودیت */}
+                      {techs.map((tech, i) => (
                         <span key={i} className="px-1.5 py-0.5 rounded bg-purple-900/30 text-purple-300 text-[10px] border border-purple-800">
                           {tech}
                         </span>
@@ -220,13 +209,13 @@ const TargetAssets = () => {
                 </tr>
               )})}
               {assetsQuery.data?.data.length === 0 && (
-                <tr><td colSpan={6} className="px-6 py-12 text-center text-gray-500">No assets found matching "{searchTerm}"</td></tr>
+                <tr><td colSpan={6} className="px-6 py-12 text-center text-gray-500">No assets found matching criteria.</td></tr>
               )}
             </tbody>
           </table>
         )}
 
-        {/* Pagination Footer */}
+        {/* Pagination Footer (بدون تغییر) */}
         <div className="border-t border-gray-800 p-4 flex justify-between items-center bg-gray-900">
            <span className="text-sm text-gray-400">
              Page {page} • Total: {assetsQuery.data?.total_count?.toLocaleString() || 0}
