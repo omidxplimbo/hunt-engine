@@ -1,18 +1,19 @@
 import { apiClient } from './client';
-import type { Target,TargetResponse } from '../types/target';
+import type { Target, TargetResponse } from '../types/target';
 import type { AssetResponse, AssetFilters } from '../types/asset';
 
+// --- بخش مدیریت تارگت‌ها (Targets) ---
+
+// دریافت لیست تارگت‌ها (با صفحه‌بندی)
 export const getTargets = async (page = 1, limit = 50) => {
-  // محاسبه آفست بر اساس شماره صفحه
   const offset = (page - 1) * limit;
-  
   const response = await apiClient.get<TargetResponse>('/targets', {
     params: { limit, offset },
   });
-  
   return response.data;
 };
 
+// ساخت تارگت جدید
 export interface CreateTargetPayload {
   name: string;
   root_domain: string;
@@ -29,6 +30,28 @@ export const createTarget = async (payload: CreateTargetPayload) => {
   return response.data;
 };
 
+// ویرایش تارگت
+export interface UpdateTargetPayload {
+  name?: string;
+  description?: string;
+  frequency?: number;
+  in_scope?: boolean;
+  modules?: string[];
+}
+
+export const updateTarget = async (id: number, payload: UpdateTargetPayload) => {
+  const response = await apiClient.patch<{ status: string; data: Target }>(`/targets/${id}`, payload);
+  return response.data;
+};
+
+// حذف تارگت
+export const deleteTarget = async (id: number) => {
+  await apiClient.delete(`/targets/${id}`);
+};
+
+// --- بخش مدیریت دارایی‌ها (Assets) ---
+
+// دریافت لیست دارایی‌های یک تارگت (با فیلتر و سرچ)
 export const getTargetAssets = async (
   targetId: number, 
   page = 1, 
@@ -50,10 +73,8 @@ export const getTargetAssets = async (
   return response.data;
 };
 
-// 👇 تابع جدید برای گرفتن جزئیات خود تارگت (برای هدر صفحه)
+// دریافت جزئیات یک تارگت خاص (برای هدر صفحه دارایی‌ها)
 export const getTargetDetails = async (targetId: number) => {
-  // ما از همون تایپ TargetResponse استفاده می‌کنیم ولی دیتای تکی برمی‌گردونه
-  // برای سادگی اینجا any می‌ذاریم یا اینترفیس جدید می‌سازیم. فعلا any:
-  const response = await apiClient.get<{ status: string; data: any }>(`/targets/${targetId}`);
+  const response = await apiClient.get<{ status: string; data: Target }>(`/targets/${targetId}`);
   return response.data.data;
 };

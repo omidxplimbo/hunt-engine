@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { getTargetAssets, getTargetDetails } from '../api/targets';
@@ -15,9 +15,14 @@ const TargetAssets = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
 
-  // Debounce logic for search
-  // (کد debounce اینجا اضافه میشه اگر قبلاً نداشتی، یا می‌تونی از نسخه قبلی کپی کنی)
-  // ...
+  // Debounce Logic
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchTerm);
+      setPage(1);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
 
   const targetQuery = useQuery({
     queryKey: ['target', targetId],
@@ -69,14 +74,7 @@ const TargetAssets = () => {
             placeholder="Search assets..." 
             className="w-full bg-gray-950 border border-gray-800 text-gray-200 pl-10 pr-4 py-2 rounded-md focus:outline-none focus:border-blue-500 transition-colors"
             value={searchTerm}
-            onChange={(e) => {
-                setSearchTerm(e.target.value);
-                // اینجا باید لاجیک debounce رو که قبلاً داشتیم پیاده کنی
-                setTimeout(() => {
-                    setDebouncedSearch(e.target.value);
-                    setPage(1);
-                }, 500);
-            }}
+            onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
 
@@ -90,133 +88,166 @@ const TargetAssets = () => {
         </div>
       </div>
 
-      {/* Table */}
-      <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden">
+      {/* Table Container */}
+      <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden flex flex-col">
         {assetsQuery.isLoading ? (
           <div className="p-12 text-center text-gray-500">Loading assets...</div>
         ) : (
-          <table className="w-full text-left">
-            <thead>
-              <tr className="bg-gray-800/50 text-gray-400 text-sm uppercase">
-                <th className="px-6 py-4 font-semibold">Asset / Domain</th>
-                <th className="px-6 py-4 font-semibold">IP Address</th> {/* 👈 ستون جدید */}
-                <th className="px-6 py-4 font-semibold">Status</th>
-                <th className="px-6 py-4 font-semibold">Title</th>
-                <th className="px-6 py-4 font-semibold">Tech Stack</th>
-                <th className="px-6 py-4 font-semibold text-right">Size</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-800">
-              {assetsQuery.data?.data.map((asset) => {
-                const statusCode = asset.status_code ?? 0;
-                
-                // پارس کردن IPها از رشته JSON
-                let ips: string[] = [];
-                try {
-                   const parsed = JSON.parse(asset.host_ip || "[]");
-                   ips = Array.isArray(parsed) ? parsed : [parsed];
-                } catch {
-                   if (asset.host_ip) ips = [asset.host_ip];
-                }
-
-                // پارس کردن تکنولوژی‌ها از رشته JSON (اگر از بک‌اند رشته میاد)
-                // اگر بک‌اند آرایه می‌فرسته، نیازی به این نیست. فرض می‌کنیم آرایه است چون DTO رو اصلاح کردیم.
-                // اما محض اطمینان اگر رشته بود:
-                let techs: string[] = [];
-                 if (Array.isArray(asset.technologies)) {
-                    techs = asset.technologies as string[];
-                 } else if (typeof asset.technologies === 'string') {
-                    try { techs = JSON.parse(asset.technologies); } catch {}
-                 }
-
-                return (
-                <tr key={asset.id} className="hover:bg-gray-800/30 transition-colors">
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-3">
-                      <Globe size={18} className={asset.is_live ? "text-blue-500" : "text-gray-600"} />
-                      <div>
-                        <a 
-                          href={`http://${asset.value}`} 
-                          target="_blank" 
-                          rel="noreferrer"
-                          className="font-medium text-gray-200 hover:text-blue-400 transition-colors"
-                        >
-                          {asset.value}
-                        </a>
-                      </div>
-                    </div>
-                  </td>
-                  
-                  {/* 👇 نمایش IPها در ستون مجزا */}
-                  <td className="px-6 py-4">
-                    <div className="flex flex-col gap-1.5">
-                      {ips.length > 0 && ips[0] !== "" ? (
-                        ips.map((ip, idx) => (
-                          <span key={idx} className="text-xs font-mono text-gray-400 bg-gray-950 px-2 py-0.5 rounded border border-gray-800 w-fit">
-                            {ip}
-                          </span>
-                        ))
-                      ) : (
-                        <span className="text-gray-600 text-xs">-</span>
-                      )}
-                    </div>
-                  </td>
-
-                  <td className="px-6 py-4">
-                    {asset.is_live ? (
-                      statusCode > 0 ? (
-                        <div className="flex items-center gap-2">
-                          <span className={`px-2 py-1 rounded text-xs font-bold ${
-                            statusCode >= 200 && statusCode < 300 ? 'bg-green-900/30 text-green-400 border border-green-800' :
-                            statusCode >= 300 && statusCode < 400 ? 'bg-yellow-900/30 text-yellow-400 border border-yellow-800' :
-                            'bg-red-900/30 text-red-400 border border-red-800'
-                          }`}>
-                            {statusCode}
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-gray-600 text-xs">-</span>
-                      )
-                    ) : (
-                      <span className="px-2 py-1 rounded text-xs font-bold bg-gray-800 text-gray-500 border border-gray-700">
-                        DEAD
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="text-sm text-gray-300 truncate max-w-[200px] block" title={asset.title}>
-                      {asset.title || '-'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex flex-wrap gap-1">
-                      {asset.web_server && (
-                        <span className="px-1.5 py-0.5 rounded bg-indigo-900/30 text-indigo-300 text-[10px] border border-indigo-800">
-                          {asset.web_server}
-                        </span>
-                      )}
-                      {/* 👇 نمایش تمام تکنولوژی‌ها بدون محدودیت */}
-                      {techs.map((tech, i) => (
-                        <span key={i} className="px-1.5 py-0.5 rounded bg-purple-900/30 text-purple-300 text-[10px] border border-purple-800">
-                          {tech}
-                        </span>
-                      ))}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 text-right text-sm text-gray-500 font-mono">
-                    {asset.content_length ? `${(asset.content_length / 1024).toFixed(1)} KB` : '-'}
-                  </td>
+          <div className="overflow-x-auto">
+            {/* min-w-[1400px] برای اسکرول خوردن در صفحات کوچک */}
+            <table className="w-full text-left min-w-[1400px]"> 
+              <thead>
+                <tr className="bg-gray-800/50 text-gray-400 text-sm uppercase border-b border-gray-800">
+                  <th className="px-6 py-4 font-semibold w-[300px]">Asset / Domain</th>
+                  <th className="px-6 py-4 font-semibold w-[250px]">DNSX IP (Phase 1)</th>
+                  <th className="px-6 py-4 font-semibold w-[250px]">HTTPX IP (Phase 2)</th>
+                  <th className="px-6 py-4 font-semibold w-[120px]">Status</th>
+                  <th className="px-6 py-4 font-semibold w-[200px]">Title</th>
+                  <th className="px-6 py-4 font-semibold">Tech Stack</th>
+                  <th className="px-6 py-4 font-semibold text-right w-[100px]">Size</th>
                 </tr>
-              )})}
-              {assetsQuery.data?.data.length === 0 && (
-                <tr><td colSpan={6} className="px-6 py-12 text-center text-gray-500">No assets found matching criteria.</td></tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-gray-800">
+                {assetsQuery.data?.data.map((asset) => {
+                  const statusCode = asset.status_code ?? 0;
+                  
+                  // 1. پارس کردن DNSX IPs
+                  let dnsxIps: string[] = [];
+                  try {
+                     const parsed = JSON.parse(asset.dnsx_ip || "[]");
+                     dnsxIps = Array.isArray(parsed) ? parsed : [parsed];
+                  } catch {
+                     if (asset.dnsx_ip) dnsxIps = [asset.dnsx_ip];
+                  }
+
+                  // 2. پارس کردن HTTPX IPs
+                  let httpxIps: string[] = [];
+                  try {
+                     const parsed = JSON.parse(asset.host_ip || "[]");
+                     httpxIps = Array.isArray(parsed) ? parsed : [parsed];
+                  } catch {
+                     if (asset.host_ip) httpxIps = [asset.host_ip];
+                  }
+
+                  // 3. پارس کردن Technologies
+                  let techs: string[] = [];
+                   if (Array.isArray(asset.technologies)) {
+                      techs = asset.technologies as string[];
+                   } else if (typeof asset.technologies === 'string') {
+                      try { techs = JSON.parse(asset.technologies); } catch {}
+                   }
+
+                  return (
+                  <tr key={asset.id} className="hover:bg-gray-800/30 transition-colors">
+                    {/* Col 1: Domain */}
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-3">
+                        <Globe size={18} className={asset.is_live ? "text-blue-500" : "text-gray-600"} />
+                        <div>
+                          <a 
+                            href={`http://${asset.value}`} 
+                            target="_blank" 
+                            rel="noreferrer"
+                            className="font-medium text-gray-200 hover:text-blue-400 transition-colors"
+                          >
+                            {asset.value}
+                          </a>
+                        </div>
+                      </div>
+                    </td>
+                    
+                    {/* Col 2: DNSX IPs */}
+                    <td className="px-6 py-4">
+                      <div className="flex flex-col gap-1.5">
+                        {dnsxIps.length > 0 && dnsxIps[0] !== "" ? (
+                          dnsxIps.map((ip, idx) => (
+                            <span key={idx} className="text-xs font-mono text-cyan-400 bg-cyan-950/30 px-2 py-0.5 rounded border border-cyan-900 w-fit">
+                              {ip}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-gray-600 text-xs">-</span>
+                        )}
+                      </div>
+                    </td>
+
+                    {/* Col 3: HTTPX IPs */}
+                    <td className="px-6 py-4">
+                      <div className="flex flex-col gap-1.5">
+                        {httpxIps.length > 0 && httpxIps[0] !== "" ? (
+                          httpxIps.map((ip, idx) => (
+                            <span key={idx} className="text-xs font-mono text-gray-400 bg-gray-950 px-2 py-0.5 rounded border border-gray-800 w-fit">
+                              {ip}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-gray-600 text-xs">-</span>
+                        )}
+                      </div>
+                    </td>
+
+                    {/* Col 4: Status */}
+                    <td className="px-6 py-4">
+                      {asset.is_live ? (
+                        statusCode > 0 ? (
+                          <div className="flex items-center gap-2">
+                            <span className={`px-2 py-1 rounded text-xs font-bold ${
+                              statusCode >= 200 && statusCode < 300 ? 'bg-green-900/30 text-green-400 border border-green-800' :
+                              statusCode >= 300 && statusCode < 400 ? 'bg-yellow-900/30 text-yellow-400 border border-yellow-800' :
+                              'bg-red-900/30 text-red-400 border border-red-800'
+                            }`}>
+                              {statusCode}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-gray-600 text-xs">-</span>
+                        )
+                      ) : (
+                        <span className="px-2 py-1 rounded text-xs font-bold bg-gray-800 text-gray-500 border border-gray-700">
+                          DEAD
+                        </span>
+                      )}
+                    </td>
+
+                    {/* Col 5: Title */}
+                    <td className="px-6 py-4">
+                      <span className="text-sm text-gray-300 truncate max-w-[200px] block" title={asset.title}>
+                        {asset.title || '-'}
+                      </span>
+                    </td>
+
+                    {/* Col 6: Tech Stack */}
+                    <td className="px-6 py-4">
+                      <div className="flex flex-wrap gap-1 max-h-[100px] overflow-y-auto">
+                        {asset.web_server && (
+                          <span className="px-1.5 py-0.5 rounded bg-indigo-900/30 text-indigo-300 text-[10px] border border-indigo-800 whitespace-nowrap">
+                            {asset.web_server}
+                          </span>
+                        )}
+                        {techs.map((tech, i) => (
+                          <span key={i} className="px-1.5 py-0.5 rounded bg-purple-900/30 text-purple-300 text-[10px] border border-purple-800 whitespace-nowrap">
+                            {tech}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+
+                    {/* Col 7: Size */}
+                    <td className="px-6 py-4 text-right text-sm text-gray-500 font-mono">
+                      {asset.content_length ? `${(asset.content_length / 1024).toFixed(1)} KB` : '-'}
+                    </td>
+                  </tr>
+                )})}
+                {assetsQuery.data?.data.length === 0 && (
+                  <tr><td colSpan={7} className="px-6 py-12 text-center text-gray-500">No assets found matching "{searchTerm}"</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         )}
 
-        {/* Pagination Footer (بدون تغییر) */}
-        <div className="border-t border-gray-800 p-4 flex justify-between items-center bg-gray-900">
+        {/* Pagination Footer */}
+        <div className="border-t border-gray-800 p-4 flex justify-between items-center bg-gray-900 mt-auto">
            <span className="text-sm text-gray-400">
              Page {page} • Total: {assetsQuery.data?.total_count?.toLocaleString() || 0}
            </span>

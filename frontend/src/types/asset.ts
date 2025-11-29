@@ -12,6 +12,7 @@ export interface Asset {
   title?: string;
   content_length?: number;
   host_ip?: string; // نکته: این فیلد فعلا به صورت رشته JSON میاد
+  dnsx_ip?: string; // 👈 فیلد جدید
   web_server?: string;
   cdn_name?: string;
   technologies?: string[]; // آرایه‌ای از نام تکنولوژی‌ها

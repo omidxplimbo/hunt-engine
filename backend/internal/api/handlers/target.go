@@ -166,41 +166,30 @@ func GetTargetAssets(c *fiber.Ctx) error {
 // StartProbing هندلر شروع دستی فاز ۲ (پروبینگ) برای یک تارگت است
 func StartProbing(c *fiber.Ctx) error {
 	id := c.Params("id")
-
-	// 1. چک می‌کنیم تارگت وجود داشته باشه
 	var target models.Target
 	if err := database.DB.First(&target, id).Error; err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Target not found"})
 	}
 
-	// 👇👇👇 چک کردن وضعیت قبل از شروع دستی
 	if target.Status == "SCANNING" {
-		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
-			"status":  "error",
-			"message": "Target is already being scanned. Please wait.",
-		})
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"status": "error", "message": "Target is already being scanned."})
 	}
 
-	// 👇👇👇 قفل کردن تارگت
-	database.DB.Model(&target).Update("status", "SCANNING")
+	// 👇👇👇 فیکس باگ ۲
+	database.DB.Model(&target).Updates(map[string]interface{}{
+		"status":        "SCANNING",
+		"current_phase": "QUEUED: STARTING PHASE 2...",
+	})
 
-	// 2. ارسال پیام به صف با تایپ PROBING
-	// فرمت: "PROBING:TargetID:RootDomain"
 	taskPayload := fmt.Sprintf("PROBING:%d:%s", target.ID, target.RootDomain)
-
-	err := redisq.Client.RPush(redisq.Ctx, redisq.QueueName, taskPayload).Err()
-	if err != nil {
-		// لاگ خطا (در سیستم واقعی باید بهتر هندل بشه)
-		fmt.Printf("⚠️ Failed to enqueue probing task for %s: %v\n", target.RootDomain, err)
+	if err := redisq.Client.RPush(redisq.Ctx, redisq.QueueName, taskPayload).Err(); err != nil {
+		database.DB.Model(&target).Update("status", "READY")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to enqueue job"})
 	}
 
-	fmt.Printf("🚀 Enqueued PROBING task for: %s [Payload: %s]\n", target.RootDomain, taskPayload)
-
-	// 3. بازگشت پاسخ موفقیت
 	return c.JSON(fiber.Map{
 		"status":  "success",
-		"message": fmt.Sprintf("Phase 2 (Probing) started successfully for target: %s", target.Name),
+		"message": fmt.Sprintf("Phase 2 started for target: %s", target.Name),
 	})
 }
 
@@ -216,6 +205,12 @@ func toTargetResponse(t models.Target, assetCount int64) dto.TargetResponse {
 		InScope:     t.InScope,
 		CreatedAt:   t.CreatedAt,
 		AssetCount:  assetCount,
+
+		// 👇👇👇 مپ کردن فیلدهای جدید
+		Frequency:    t.Frequency,
+		LastScanAt:   t.LastScanAt,
+		Status:       t.Status,
+		CurrentPhase: t.CurrentPhase,
 	}
 }
 
@@ -260,40 +255,31 @@ func toAssetResponse(a models.Asset) dto.AssetResponse {
 // StartDiscovery هندلر شروع مجدد فاز ۱ (کشف) برای یک تارگت موجود است
 func StartDiscovery(c *fiber.Ctx) error {
 	id := c.Params("id")
-
-	// 1. چک می‌کنیم تارگت وجود داشته باشد
 	var target models.Target
 	if err := database.DB.First(&target, id).Error; err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Target not found"})
 	}
 
-	// 👇👇👇 چک کردن وضعیت قبل از شروع دستی
 	if target.Status == "SCANNING" {
-		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
-			"status":  "error",
-			"message": "Target is already being scanned. Please wait.",
-		})
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"status": "error", "message": "Target is already being scanned."})
 	}
 
-	// 👇👇👇 قفل کردن تارگت
-	database.DB.Model(&target).Update("status", "SCANNING")
+	// 👇👇👇 فیکس باگ ۲: تنظیم وضعیت و فاز اولیه بلافاصله
+	database.DB.Model(&target).Updates(map[string]interface{}{
+		"status":        "SCANNING",
+		"current_phase": "QUEUED: STARTING PHASE 1...", // تا کاربر بفهمد دستور ثبت شده
+	})
 
-	// 2. ارسال پیام به صف با تایپ DISCOVERY
-	// فرمت: "DISCOVERY:TargetID:RootDomain"
 	taskPayload := fmt.Sprintf("DISCOVERY:%d:%s", target.ID, target.RootDomain)
-
-	err := redisq.Client.RPush(redisq.Ctx, redisq.QueueName, taskPayload).Err()
-	if err != nil {
-		fmt.Printf("⚠️ Failed to enqueue discovery task for %s: %v\n", target.RootDomain, err)
+	if err := redisq.Client.RPush(redisq.Ctx, redisq.QueueName, taskPayload).Err(); err != nil {
+		// اگر خطا داد، وضعیت را برگردان
+		database.DB.Model(&target).Update("status", "READY")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to enqueue job"})
 	}
 
-	fmt.Printf("🚀 Enqueued RE-DISCOVERY task for: %s [Payload: %s]\n", target.RootDomain, taskPayload)
-
-	// 3. بازگشت پاسخ موفقیت
 	return c.JSON(fiber.Map{
 		"status":  "success",
-		"message": fmt.Sprintf("Phase 1 (Discovery) started successfully for target: %s", target.Name),
+		"message": fmt.Sprintf("Phase 1 started for target: %s", target.Name),
 	})
 }
 

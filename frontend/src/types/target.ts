@@ -5,9 +5,11 @@ export interface Target {
   description: string;
   in_scope: boolean;
   created_at: string;
-  asset_count: number; // این فیلد خیلی مهمه که تعداد شکارها رو نشون میده
+  asset_count: number;
   frequency?: number;
   last_scan_at?: string;
+  status: string; // READY, SCANNING
+  current_phase?: string; // 👇 فیلد جدید (PHASE 1: ..., PHASE 2: ...)
 }
 
 export interface TargetResponse {

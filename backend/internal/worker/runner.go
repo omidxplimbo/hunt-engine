@@ -26,20 +26,14 @@ import (
 // مسیرهای فایل‌های موقت
 const (
 	allFoundFile      = "/tmp/all_found.txt"
-	dnsxOutputFile    = "/tmp/dnsx_output.json" // فایل خروجی جدید برای dnsx
+	dnsxOutputFile    = "/tmp/dnsx_output.json"
 	probingInputFile  = "/tmp/probing_input.txt"
 	probingOutputFile = "/tmp/probing_output.json"
 )
 
 const DefaultBatchSize = 500
 
-// DnsxResult ساختار خروجی JSON ابزار dnsx
-type DnsxResult struct {
-	Host string   `json:"host"`
-	A    []string `json:"a"` // آرایه IPها
-}
-
-// HttpxResult ساختار برای پارس کردن خروجی JSON ابزار httpx
+// HttpxResult ساختار برای پارس کردن خروجی JSON
 type HttpxResult struct {
 	Input         string   `json:"input"`
 	URL           string   `json:"url"`
@@ -56,8 +50,15 @@ type HttpxResult struct {
 	RawJSON       string   `json:"-"`
 }
 
+// DnsxResult ساختار خروجی JSON ابزار dnsx
+type DnsxResult struct {
+	Host string   `json:"host"`
+	A    []string `json:"a"`
+}
+
 func Start() {
 	log.Println("👷 Worker started. Waiting for jobs...", redisq.QueueName)
+
 	for {
 		result, err := redisq.Client.BLPop(context.Background(), 0*time.Second, redisq.QueueName).Result()
 		if err != nil {
@@ -75,9 +76,11 @@ func processJobDispatcher(payload string) {
 		log.Printf("⚠️ Invalid job payload format: %s\n", payload)
 		return
 	}
+
 	jobType := parts[0]
 	targetIDStr := parts[1]
 	rootDomain := parts[2]
+
 	var targetID uint
 	fmt.Sscanf(targetIDStr, "%d", &targetID)
 
@@ -88,23 +91,30 @@ func processJobDispatcher(payload string) {
 		runDiscoveryPhase(targetID, rootDomain)
 	case "PROBING":
 		runProbingPhase(targetID, rootDomain)
-	// case "CRAWLING": ... (بعدا اضافه می‌شود)
 	default:
 		log.Printf("⚠️ Unknown job type: %s\n", jobType)
 	}
 }
 
+// تابع کمکی برای آپدیت سریع وضعیت در دیتابیس (برای نمایش در فرانت)
+func updateTargetPhase(targetID uint, phase string) {
+	database.DB.Model(&models.Target{}).Where("id = ?", targetID).Update("current_phase", phase)
+}
+
 // =================================================================
-// PHASE 1: Discovery Implementation (با DNSX)
+// PHASE 1: Discovery Implementation
 // =================================================================
 func runDiscoveryPhase(targetID uint, rootDomain string) {
 	log.Printf("🚀 Starting PHASE 1 (DISCOVERY) for: %s (ID: %d)\n", rootDomain, targetID)
+	updateTargetPhase(targetID, "PHASE 1: STARTED") // 👈 آپدیت وضعیت
 	startTime := time.Now()
 
 	// 1. Passive
+	updateTargetPhase(targetID, "PHASE 1: PASSIVE ENUM") // 👈 آپدیت وضعیت
 	passiveResults := runPassiveCollection(rootDomain)
 
 	// 2. Mutation
+	updateTargetPhase(targetID, "PHASE 1: MUTATION") // 👈 آپدیت وضعیت
 	writeSliceToFile(allFoundFile, passiveResults)
 	mutatedResults, err := runAlterx(allFoundFile, rootDomain)
 	if err != nil {
@@ -123,17 +133,16 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	log.Printf("📊 Master list created with %d potential subdomains. Starting validation (DNSX)...\n", len(masterList))
 
 	// 5. Validation & IP Resolution (DNSX)
-	// 👇👇👇 جایگزینی puredns با dnsx
+	updateTargetPhase(targetID, "PHASE 1: DNSX VALIDATION") // 👈 آپدیت وضعیت
 	dnsxResults, err := runDnsx(allFoundFile, dnsxOutputFile)
 	if err != nil {
 		log.Printf("❌ Dnsx failed: %v\n", err)
-		// اگر کلا فیل شد، ادامه نمیدیم (چون لیست زنده نداریم)
 		return
 	}
 	log.Printf("✅ [Stage 3] Confirmed %d LIVE subdomains with IPs.\n", len(dnsxResults))
 
 	// 6. Saving
-	// حالا map[string][]string داریم (دامنه -> آی‌پی‌ها)
+	updateTargetPhase(targetID, "PHASE 1: SAVING RESULTS") // 👈 آپدیت وضعیت
 	var target models.Target
 	database.DB.First(&target, targetID)
 	saveDiscoveryResultsToDB(target, masterList, dnsxResults)
@@ -148,6 +157,7 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 func runProbingPhase(targetID uint, rootDomain string) {
 	batchSize := getBatchSize()
 	log.Printf("🚀 Starting PHASE 2 (PROBING) for target ID: %d (Batch Size: %d)\n", targetID, batchSize)
+	updateTargetPhase(targetID, "PHASE 2: INITIALIZING") // 👈 آپدیت وضعیت
 	startTime := time.Now()
 
 	var totalLive int64
@@ -158,11 +168,20 @@ func runProbingPhase(targetID uint, rootDomain string) {
 		triggerNextModule(targetID, rootDomain, "PROBING")
 		return
 	}
+	log.Printf("✅ Found %d live assets in DB. Starting batch processing...\n", totalLive)
 
 	processedCount := 0
 	offset := 0
 
+	// محاسبه تعداد کل بچ‌ها برای نمایش
+	totalBatches := int(totalLive)/batchSize + 1
+	currentBatch := 1
+
 	for {
+		// گزارش پیشرفت دقیق
+		statusMsg := fmt.Sprintf("PHASE 2: BATCH %d/%d", currentBatch, totalBatches)
+		updateTargetPhase(targetID, statusMsg) // 👈 آپدیت وضعیت
+
 		var batchAssets []models.Asset
 		err := database.DB.Where("target_id = ? AND is_live = true", targetID).Order("id").Limit(batchSize).Offset(offset).Find(&batchAssets).Error
 		if err != nil || len(batchAssets) == 0 {
@@ -187,6 +206,7 @@ func runProbingPhase(targetID uint, rootDomain string) {
 			processedCount += len(batchAssets)
 		}
 		offset += batchSize
+		currentBatch++
 	}
 
 	log.Printf("🏁 PHASE 2 finished. Total processed: %d in %s.\n", processedCount, time.Since(startTime))
@@ -197,7 +217,7 @@ func runProbingPhase(targetID uint, rootDomain string) {
 // Smart Storage & Notification Logic
 // ==========================================
 
-// saveDiscoveryResultsToDB (آپدیت شده برای دریافت خروجی dnsx)
+// saveDiscoveryResultsToDB (نسخه اصلاح‌شده: شرط سخت‌گیرانه برای IP و Live)
 func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveResults map[string][]string) {
 	log.Printf("💾 Saving/Updating assets (Scan Count: %d)...", target.ScanCount)
 
@@ -206,12 +226,15 @@ func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveRes
 	countUpdated := 0
 
 	for _, val := range masterList {
-		// چک می‌کنیم آیا این دامنه در نتایج زنده dnsx وجود دارد؟
-		ips, isLive := liveResults[val]
+		ips, found := liveResults[val]
 
-		// تبدیل آرایه IPها به JSON برای ذخیره
+		// 👇👇👇 فیکس باگ ۱: فقط اگر IP وجود داشت، زنده محسوب می‌شود
+		hasIPs := found && len(ips) > 0
+		isLive := hasIPs // وضعیت لایو وابسته به داشتن IP است
+
+		// آماده‌سازی JSON برای ذخیره
 		dnsxIPJSON := "[]"
-		if isLive && len(ips) > 0 {
+		if hasIPs {
 			bytes, _ := json.Marshal(ips)
 			dnsxIPJSON = string(bytes)
 		}
@@ -221,55 +244,53 @@ func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveRes
 
 		if result.Error == nil {
 			// --- دارایی قدیمی ---
-
-			// تغییرات را چک می‌کنیم (وضعیت زنده بودن یا تغییر IP)
-			// نکته: اینجا فقط روی is_live حساس هستیم برای نوتیفیکیشن (طبق خواسته قبلی)
-			// اما IP جدید رو هم آپدیت می‌کنیم
-
+			// چک تغییر وضعیت
 			if existingAsset.IsLive != isLive {
 				now := time.Now()
 				logChange(database.DB, existingAsset.ID, "is_live", strconv.FormatBool(existingAsset.IsLive), strconv.FormatBool(isLive))
+
+				// اگر زنده شد -> خبر بده
+				if isLive {
+					telegram.SendChangeAlert(target.RootDomain, val, "is_live", "false", "true")
+				}
 
 				database.DB.Model(&existingAsset).Updates(map[string]interface{}{
 					"is_live":        isLive,
 					"is_new":         true,
 					"last_change_at": &now,
-					// 👇 آپدیت IP هم انجام میشه
-					"dnsx_ip": dnsxIPJSON,
+					"dnsx_ip":        dnsxIPJSON, // آپدیت IP
 				})
 				countUpdated++
 			} else if isLive && existingAsset.DnsxIP != dnsxIPJSON {
-				// اگر زنده بود و IP عوض شده بود، IP رو آپدیت می‌کنیم (بدون نوتیفیکیشن طبق استراتژی فعلی)
-				// اگر بخوای برای تغییر IP هم نوتیف بیاد، اینجا جاشه.
+				// اگر زنده بود و فقط IP عوض شد -> آپدیت کن
 				database.DB.Model(&existingAsset).Update("dnsx_ip", dnsxIPJSON)
 			}
-
 		} else {
 			// --- دارایی جدید ---
+			// پیش‌فرض is_live را false می‌گیریم مگر اینکه شرط بالا true شده باشد
 			asset := models.Asset{
 				TargetID:     target.ID,
 				Value:        val,
 				Type:         "subdomain",
 				IsNew:        true,
-				IsLive:       isLive,
+				IsLive:       isLive, // 👈 مقدار صحیح محاسبه شده
 				Technologies: "[]",
 				HostIP:       "[]",
 				RawHttpx:     "{}",
-				// 👇 ذخیره IP مرحله اول
-				DnsxIP: dnsxIPJSON,
+				DnsxIP:       dnsxIPJSON, // 👈 ذخیره IP
 			}
 			database.DB.Create(&asset)
-			countNew++
 
+			// نوتیفیکیشن فقط برای زنده‌های جدید (غیر از بار اول)
 			if !isFirstRun && isLive {
 				telegram.SendNewAssetAlert(target.RootDomain, val)
 			}
+			countNew++
 		}
 	}
 	log.Printf("✅ DB Sync Complete. New: %d, Status Changed: %d.\n", countNew, countUpdated)
 }
 
-// updateAssetsWithDiff (فاز ۲)
 func updateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 	var targetName string
 	var target models.Target
@@ -357,37 +378,64 @@ func updateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 	}
 }
 
-// ==========================================
-// Helper Functions
-// ==========================================
-
-// runDnsx جایگزین puredns - اجرای dnsx و گرفتن خروجی JSON شامل IP
-func runDnsx(inputFile, outputFile string) (map[string][]string, error) {
-	// دستور dnsx با خروجی JSON
-	// -silent: فقط JSON بده
-	// -json: خروجی ساختار یافته
-	// -a: رکورد A (آی‌پی) رو هم بده
-	// -resp: فقط پاسخ‌دهنده‌ها (زنده‌ها) رو بده
-	cmd := exec.Command("dnsx",
-		"-l", inputFile,
-		"-json",
-		"-o", outputFile,
-		"-silent",
-		"-a",
-		"-resp",
-		"-threads", "50", // سرعت مناسب
-	)
-
-	log.Printf("Executing dnsx command...\n")
-	if err := cmd.Run(); err != nil {
-		log.Printf("⚠️ dnsx finished with issue: %v\n", err)
+func triggerNextModule(targetID uint, rootDomain, currentModule string) {
+	var target models.Target
+	if err := database.DB.First(&target, targetID).Error; err != nil {
+		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Update("status", "READY")
+		return
 	}
 
-	// خواندن و پارس کردن خروجی JSON
+	var modules []string
+	json.Unmarshal([]byte(target.ScanModules), &modules)
+
+	currentIndex := -1
+	for i, m := range modules {
+		if m == currentModule {
+			currentIndex = i
+			break
+		}
+	}
+
+	if currentIndex != -1 && currentIndex+1 < len(modules) {
+		nextModule := modules[currentIndex+1]
+		log.Printf("🔗 Chaining: Phase '%s' done. Starting '%s'\n", currentModule, nextModule)
+		payload := fmt.Sprintf("%s:%d:%s", nextModule, targetID, rootDomain)
+		redisq.Client.RPush(context.Background(), redisq.QueueName, payload)
+	} else {
+		log.Printf("🏁 Chain Complete for %s.\n", rootDomain)
+		now := time.Now()
+		// 👇 وضعیت را به READY برمی‌گردانیم و فاز فعلی را IDLE می‌کنیم
+		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{
+			"last_scan_at":  &now,
+			"status":        "READY",
+			"scan_count":    gorm.Expr("scan_count + 1"),
+			"current_phase": "IDLE",
+		})
+	}
+}
+
+// --- Helper Functions ---
+
+func logChange(tx *gorm.DB, assetID uint, field, oldVal, newVal string) error {
+	if oldVal == newVal {
+		return nil
+	}
+	history := models.AssetHistory{AssetID: assetID, FieldName: field, OldValue: oldVal, NewValue: newVal, CreatedAt: time.Now()}
+	if err := tx.Create(&history).Error; err != nil {
+		return err
+	}
+	return nil
+}
+
+func runDnsx(inputFile, outputFile string) (map[string][]string, error) {
+	cmd := exec.Command("dnsx", "-l", inputFile, "-json", "-o", outputFile, "-silent", "-a", "-resp", "-threads", "50")
+	if err := cmd.Run(); err != nil {
+		log.Printf("⚠️ dnsx issue: %v\n", err)
+	}
+
 	results := make(map[string][]string)
 	file, err := os.Open(outputFile)
 	if err != nil {
-		// اگر فایل ساخته نشد (هیچ چی پیدا نکرد)، مپ خالی برمی‌گردونیم
 		if os.IsNotExist(err) {
 			return results, nil
 		}
@@ -397,63 +445,12 @@ func runDnsx(inputFile, outputFile string) (map[string][]string, error) {
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		line := scanner.Text()
 		var res DnsxResult
-		if err := json.Unmarshal([]byte(line), &res); err == nil {
-			// فقط اگر هاست خالی نبود اضافه کن
-			if res.Host != "" {
-				results[res.Host] = res.A
-			}
+		if err := json.Unmarshal([]byte(scanner.Text()), &res); err == nil && res.Host != "" {
+			results[res.Host] = res.A
 		}
 	}
 	return results, scanner.Err()
-}
-
-// ... (بقیه توابع کمکی بدون تغییر: triggerNextModule, logChange, areJSONArraysEqual, marshalJSONOrDefault, parseResponseTime, shortenString, getBatchSize, readHttpxResults, runPassiveCollection, runAlterx, mergeUnique, writeSliceToFile)
-// برای جلوگیری از تکرار، این بخش را کپی نکردم. از فایل قبلی استفاده کن.
-
-func triggerNextModule(targetID uint, rootDomain, currentModule string) {
-	var target models.Target
-	if err := database.DB.First(&target, targetID).Error; err != nil {
-		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Update("status", "READY")
-		return
-	}
-	var modules []string
-	json.Unmarshal([]byte(target.ScanModules), &modules)
-	currentIndex := -1
-	for i, m := range modules {
-		if m == currentModule {
-			currentIndex = i
-			break
-		}
-	}
-	if currentIndex != -1 && currentIndex+1 < len(modules) {
-		nextModule := modules[currentIndex+1]
-		log.Printf("🔗 Chaining: Phase '%s' done. Starting '%s'\n", currentModule, nextModule)
-		payload := fmt.Sprintf("%s:%d:%s", nextModule, targetID, rootDomain)
-		redisq.Client.RPush(context.Background(), redisq.QueueName, payload)
-	} else {
-		log.Printf("🏁 Chain Complete for %s.\n", rootDomain)
-		now := time.Now()
-		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{
-			"last_scan_at": &now,
-			"status":       "READY",
-			"scan_count":   gorm.Expr("scan_count + 1"),
-		})
-	}
-}
-
-func logChange(tx *gorm.DB, assetID uint, field, oldVal, newVal string) error {
-	if oldVal == newVal {
-		return nil
-	}
-	history := models.AssetHistory{
-		AssetID: assetID, FieldName: field, OldValue: oldVal, NewValue: newVal, CreatedAt: time.Now(),
-	}
-	if err := tx.Create(&history).Error; err != nil {
-		return err
-	}
-	return nil
 }
 
 func areJSONArraysEqual(json1, json2 string) bool {
@@ -467,7 +464,6 @@ func areJSONArraysEqual(json1, json2 string) bool {
 	sort.Strings(arr2)
 	return reflect.DeepEqual(arr1, arr2)
 }
-
 func marshalJSONOrDefault(v interface{}, defaultVal string) string {
 	if reflect.ValueOf(v).Kind() == reflect.Slice && reflect.ValueOf(v).Len() == 0 {
 		return defaultVal
@@ -478,7 +474,6 @@ func marshalJSONOrDefault(v interface{}, defaultVal string) string {
 	}
 	return string(jsonBytes)
 }
-
 func parseResponseTime(timeStr string) int64 {
 	str := strings.TrimSuffix(timeStr, "ms")
 	if val, err := strconv.ParseFloat(str, 64); err == nil {
@@ -486,7 +481,6 @@ func parseResponseTime(timeStr string) int64 {
 	}
 	return 0
 }
-
 func shortenString(s string, maxLen int) string {
 	runes := []rune(s)
 	if len(runes) > maxLen {
@@ -494,7 +488,6 @@ func shortenString(s string, maxLen int) string {
 	}
 	return s
 }
-
 func getBatchSize() int {
 	envStr := os.Getenv("PROBE_BATCH_SIZE")
 	if envStr == "" {
@@ -506,7 +499,6 @@ func getBatchSize() int {
 	}
 	return size
 }
-
 func readHttpxResults(filename string) (map[string]HttpxResult, error) {
 	file, err := os.Open(filename)
 	if err != nil {
@@ -527,7 +519,6 @@ func readHttpxResults(filename string) (map[string]HttpxResult, error) {
 	}
 	return results, scanner.Err()
 }
-
 func runPassiveCollection(domain string) []string {
 	var wg sync.WaitGroup
 	results := make(chan string, 50000)
@@ -566,7 +557,6 @@ func runPassiveCollection(domain string) []string {
 	}
 	return finalSlice
 }
-
 func runAlterx(inputFile, rootDomain string) ([]string, error) {
 	cmd := exec.Command("alterx", "-silent")
 	stdin, err := cmd.StdinPipe()
@@ -595,7 +585,6 @@ func runAlterx(inputFile, rootDomain string) ([]string, error) {
 	}
 	return results, nil
 }
-
 func mergeUnique(slice1, slice2 []string) []string {
 	uniqueMap := make(map[string]bool)
 	for _, v := range slice1 {
@@ -610,7 +599,6 @@ func mergeUnique(slice1, slice2 []string) []string {
 	}
 	return final
 }
-
 func writeSliceToFile(filename string, data []string) error {
 	content := strings.Join(data, "\n")
 	return ioutil.WriteFile(filename, []byte(content), 0644)

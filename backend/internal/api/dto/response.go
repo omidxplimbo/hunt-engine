@@ -11,6 +11,11 @@ type TargetResponse struct {
 	InScope     bool      `json:"in_scope"`
 	CreatedAt   time.Time `json:"created_at"`
 	AssetCount  int64     `json:"asset_count"`
+	// 👇👇👇 فیلدهای فراموش شده که باید اضافه بشن
+	Frequency    int        `json:"frequency"`
+	LastScanAt   *time.Time `json:"last_scan_at"`
+	Status       string     `json:"status"`
+	CurrentPhase string     `json:"current_phase"`
 }
 
 // AssetResponse ساختار خروجی برای دارایی‌ها
