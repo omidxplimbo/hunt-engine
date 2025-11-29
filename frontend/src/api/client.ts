@@ -2,7 +2,7 @@ import axios from 'axios';
 
 // آدرس سرور بک‌اند (IP سرور خودت رو جایگزین localhost کن اگر روی سرور واقعی هستی)
 // نکته: چون این کد توی مرورگر کاربر اجرا میشه، باید IP عمومی سرور رو بدی
-const API_BASE_URL = 'http://YOUR_SERVER_IP:8080/api';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080/api';
 
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,

@@ -1,13 +1,17 @@
+import { useState } from 'react'; // 👈 جدید
 import { useQuery } from '@tanstack/react-query';
-// دقت کن که تابع getTargets رو ایمپورت کنی، نه چیز دیگه‌ای
-import { getTargets } from '../api/targets'; 
+import { getTargets } from '../api/targets';
 import { Plus, Search, Globe, Clock, Database } from 'lucide-react';
+import { CreateTargetModal } from '../components/CreateTargetModal'; // 👈 جدید
+import { Link } from 'react-router-dom'; // 👈 اضافه کردن Link
 
-const Targets = () => {
-  // استفاده از React Query برای گرفتن دیتا
+const TargetsPage = () => {
+  // 👇 استیت برای کنترل مودال
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
   const { data, isLoading, isError } = useQuery({
     queryKey: ['targets'],
-    queryFn: () => getTargets(1, 50), // فعلا صفحه ۱ رو میگیریم
+    queryFn: () => getTargets(1, 50),
   });
 
   if (isLoading) return <div className="p-8 text-gray-400">Loading targets...</div>;
@@ -21,19 +25,23 @@ const Targets = () => {
           <h1 className="text-2xl font-bold text-white">Targets</h1>
           <p className="text-gray-400 mt-1">Manage your scope and hunting objectives</p>
         </div>
-        <button className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors font-medium">
+        <button
+          // 👇 وصل کردن دکمه
+          onClick={() => setIsModalOpen(true)}
+          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors font-medium"
+        >
           <Plus size={18} />
           Add Target
         </button>
       </div>
 
-      {/* Search & Filter Bar (فعلا دکوری) */}
+      {/* Search & Filter Bar */}
       <div className="bg-gray-900 p-4 rounded-lg border border-gray-800 mb-6 flex gap-4">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
-          <input 
-            type="text" 
-            placeholder="Search targets..." 
+          <input
+            type="text"
+            placeholder="Search targets..."
             className="w-full bg-gray-950 border border-gray-800 text-gray-200 pl-10 pr-4 py-2 rounded-md focus:outline-none focus:border-blue-500"
           />
         </div>
@@ -74,22 +82,26 @@ const Targets = () => {
                 <td className="px-6 py-4">
                   <div className="flex items-center gap-2 text-gray-400 text-sm">
                     <Clock size={16} />
-                    {target.last_scan_at 
-                      ? new Date(target.last_scan_at).toLocaleDateString() 
+                    {target.last_scan_at
+                      ? new Date(target.last_scan_at).toLocaleDateString()
                       : 'Never'}
                   </div>
                 </td>
                 <td className="px-6 py-4">
-                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                    target.in_scope 
-                      ? 'bg-green-900/30 text-green-400 border border-green-900' 
+                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${target.in_scope
+                      ? 'bg-green-900/30 text-green-400 border border-green-900'
                       : 'bg-gray-800 text-gray-400 border border-gray-700'
-                  }`}>
+                    }`}>
                     {target.in_scope ? 'Active' : 'Paused'}
                   </span>
                 </td>
                 <td className="px-6 py-4 text-right">
-                  <button className="text-blue-400 hover:text-blue-300 text-sm font-medium">View Assets</button>
+                  <Link
+                    to={`/targets/${target.id}`}
+                    className="text-blue-400 hover:text-blue-300 text-sm font-medium"
+                  >
+                    View Assets
+                  </Link>
                 </td>
               </tr>
             ))}
@@ -104,8 +116,14 @@ const Targets = () => {
           </tbody>
         </table>
       </div>
+
+      {/* 👇 کامپوننت مودال */}
+      <CreateTargetModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+      />
     </div>
   );
 };
 
-export default Targets;
+export default TargetsPage;

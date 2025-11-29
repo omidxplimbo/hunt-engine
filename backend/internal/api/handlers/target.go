@@ -129,16 +129,20 @@ func GetTargetAssets(c *fiber.Ctx) error {
 		db = db.Where("is_new = ?", isNew == "true")
 	}
 
-	// 👇👇👇 2. گرفتن تعداد کل نتایج (قبل از صفحه‌بندی)
+	// 👇👇👇 فیلتر جدید: جستجو در دامنه‌ها
+	if search := c.Query("search"); search != "" {
+		// استفاده از LIKE برای جستجوی جزئی (مثلا "api" -> "api.site.com", "site-api.com")
+		db = db.Where("value LIKE ?", "%"+search+"%")
+	}
+
+	// 2. گرفتن تعداد کل نتایج (قبل از صفحه‌بندی)
 	var totalCount int64
-	// از db.Count استفاده می‌کنیم که کوئری رو اجرا نمی‌کنه، فقط می‌شماره
 	if err := db.Count(&totalCount).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
 	}
 
-	// 👇👇👇 3. گرفتن داده‌های صفحه فعلی (با اعمال limit و offset)
+	// 3. گرفتن داده‌های صفحه فعلی
 	var assets []models.Asset
-	// اینجا Scopes رو روی کوئری فیلتر شده اعمال می‌کنیم
 	result := db.Scopes(utils.Paginate(c)).Order("value asc").Find(&assets)
 
 	if result.Error != nil {
@@ -151,12 +155,11 @@ func GetTargetAssets(c *fiber.Ctx) error {
 		assetResponses[i] = toAssetResponse(a)
 	}
 
-	// بازگشت پاسخ به همراه اطلاعات صفحه‌بندی
 	return c.JSON(fiber.Map{
 		"status":      "success",
 		"data":        assetResponses,
-		"page_count":  len(assetResponses), // تعداد آیتم‌های توی این صفحه
-		"total_count": totalCount,          // تعداد کل آیتم‌های موجود با این فیلترها
+		"page_count":  len(assetResponses),
+		"total_count": totalCount,
 	})
 }
 

@@ -42,6 +42,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        - VITE_API_URL=http://109.248.160.151:8080/api
     ports:
       - "4000:80" # داشبورد روی پورت 3000 در دسترس خواهد بود
     depends_on:

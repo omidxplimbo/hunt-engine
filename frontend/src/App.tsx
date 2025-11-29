@@ -1,10 +1,14 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'; // 👈 Navigate حذف شد
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MainLayout } from './layouts/MainLayout';
-import Target from './pages/TargetsPages'; // 👈
+// 👇 ایمپورت صفحه واقعی تارگت‌ها
+import TargetsPage from './pages/TargetsPages';
+import TargetAssets from './pages/TargetAssets';
 
-const Dashboard = () => <div className="text-2xl font-bold">Dashboard Coming Soon...</div>;
-const Targets = () => <div className="text-2xl font-bold">Targets List (Next Step)</div>;
+// کامپوننت موقت داشبورد
+const Dashboard = () => <div className="text-2xl font-bold text-white">Dashboard Coming Soon...</div>;
+
+// ❌ خط مربوط به const Targets = ... حذف شد تا خطا ندهد
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -22,8 +26,11 @@ function App() {
         <Routes>
           <Route path="/" element={<MainLayout />}>
             <Route index element={<Dashboard />} />
-            {/* 👇 استفاده از کامپوننت واقعی Targets */}
-            <Route path="targets" element={<Targets />} />
+            {/* 👇 روت لیست تارگت‌ها (با کامپوننت درست) */}
+            <Route path="targets" element={<TargetsPage />} />
+            
+            {/* 👇 روت جدید برای دیدن دارایی‌ها (که فراموش شده بود) */}
+            <Route path="targets/:id" element={<TargetAssets />} />
           </Route>
         </Routes>
       </BrowserRouter>

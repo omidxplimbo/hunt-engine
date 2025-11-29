@@ -9,6 +9,11 @@ RUN npm install
 
 # کپی کردن بقیه فایل‌های سورس
 COPY . .
+
+ARG VITE_API_URL
+ENV VITE_API_URL=$VITE_API_URL
+
+
 # بیلد کردن پروژه برای پروداکشن
 RUN npm run build
 
