@@ -21,6 +21,7 @@ import (
 
 func main() {
 	database.Connect()
+	database.CleanupZombieScans()
 	redisq.Connect()
 	telegram.Init()
 	go scheduler.Start()
@@ -56,7 +57,8 @@ func main() {
 	api.Post("/targets/:id/probe", handlers.StartProbing)
 	api.Post("/targets/:id/discovery", handlers.StartDiscovery) // شروع فاز ۱
 	api.Patch("/targets/:id", handlers.UpdateTarget)            // ویرایش
-	api.Delete("/targets/:id", handlers.DeleteTarget)           //
+	api.Delete("/targets/:id", handlers.DeleteTarget)
+	api.Post("/targets/:id/stop", handlers.StopScan) //
 
 	port := os.Getenv("PORT")
 	if port == "" {

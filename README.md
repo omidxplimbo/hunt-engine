@@ -47,9 +47,9 @@ The platform integrates industry-standard Golang-based security tools within its
 We are following a multi-phase development roadmap.
 
 ### ✅ Phase 1: Deep Recon & Discovery Engine (COMPLETED)
-**Goal:** Build the core infrastructure and the initial discovery pipeline.
-* [x] Full Docker/Go/Postgres/Redis infrastructure.
-* [x] **Smart Recon Pipeline:** Passive -> Mutation -> Validation chain.
+**Goal:** Build the core infrastructure and the initial discovery pipeline to find hidden and fresh assets.
+* [x] Established full Docker/Go/Postgres/Redis infrastructure.
+* [x] **Smart Recon Pipeline:** Implemented a full chain (Passive -> Mutation -> Validation).
 * [x] **History Injection:** Re-scans previously dead assets to detect resurrections.
 * [x] **Smart Storage Logic:** "Upsert" logic to track live/dead status.
 
@@ -60,11 +60,18 @@ We are following a multi-phase development roadmap.
 * [x] **Batch Processing:** Dynamic batching to handle massive datasets without OOM errors.
 * [x] **Diff Engine:** Detects and logs changes in *any* field (Status, Title, Tech, IP).
 
+### ✅ Phase 2.5: Automation & Continuous Monitoring (COMPLETED)
+**Goal:** Turn the scanner into a 24/7 autonomous monitoring system.
+* [x] **Asset History:** Keeps a detailed audit log of what changed and when.
+* [x] **Notification System:** Zero-loss Telegram alerting with buffered queues.
+* [x] **Scheduler:** Automated periodic scanning based on per-target frequency.
+* [x] **Orchestrator:** Smart chaining that automatically triggers Phase 2 after Phase 1.
+
 ### ✅ Phase 3: Frontend Dashboard (COMPLETED)
 **Goal:** A professional GUI to manage targets and view results.
 * [x] **Target Management:** Create, Edit, Delete targets with config (Frequency, Modules).
 * [x] **Asset Explorer:** Advanced data grid with **Filtering** (Live/Dead) and **Search**.
-* [x] **Real-time UX:** Responsive UI with loading states and error handling.
+* [x] **Real-time UX:** Responsive UI with live status updates and horizontal scrolling for details.
 
 ---
 
@@ -73,7 +80,7 @@ We are following a multi-phase development roadmap.
 We are now transitioning to **Advanced Content Discovery** and **Vulnerability Scanning**.
 
 **Phase 4: Deep Crawling & Content Discovery (Backend)**
-* Integrate `gau` and `waybackurls` for passive URL discovery.
+* Integrate `gau`, `waybackurls` for passive URL discovery.
 * Integrate `katana` for active crawling and JS file discovery.
 * Store parsed URLs and JS Secrets in new database tables.
 

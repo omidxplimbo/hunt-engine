@@ -100,11 +100,17 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	// 1. Passive
 	updateTargetPhase(targetID, "PHASE 1: PASSIVE ENUM")
 	passiveResults := runPassiveCollection(rootDomain)
+	if checkStopRequest(targetID) {
+		return
+	} // 👈 چک کردن
 
 	// 2. Mutation
 	updateTargetPhase(targetID, "PHASE 1: MUTATION")
 	writeSliceToFile(allFoundFile, passiveResults)
 	mutatedResults, err := runAlterx(allFoundFile, rootDomain)
+	if checkStopRequest(targetID) {
+		return
+	} // 👈 چک کردن
 	if err != nil {
 		log.Printf("❌ Alterx failed: %v. Proceeding without mutations.\n", err)
 		mutatedResults = []string{}
@@ -165,6 +171,9 @@ func runProbingPhase(targetID uint, rootDomain string) {
 	currentBatch := 1
 
 	for {
+		if checkStopRequest(targetID) {
+			return // خروج اضطراری
+		}
 		statusMsg := fmt.Sprintf("PHASE 2: BATCH %d/%d", currentBatch, totalBatches)
 		updateTargetPhase(targetID, statusMsg)
 
@@ -696,4 +705,24 @@ func mergeUnique(slice1, slice2 []string) []string {
 func writeSliceToFile(filename string, data []string) error {
 	content := strings.Join(data, "\n")
 	return ioutil.WriteFile(filename, []byte(content), 0644)
+}
+
+// checkStopRequest بررسی می‌کند آیا کاربر درخواست توقف داده است؟
+// اگر بله، وضعیت را ریست می‌کند و true برمی‌گرداند
+func checkStopRequest(targetID uint) bool {
+	var t models.Target
+	database.DB.Select("stop_requested").First(&t, targetID)
+
+	if t.StopRequested {
+		log.Printf("bw🛑 Stop requested for target %d. Aborting job...\n", targetID)
+
+		// ریست کردن وضعیت تارگت
+		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{
+			"status":         "READY",
+			"current_phase":  "STOPPED BY USER",
+			"stop_requested": false, // ریست کردن پرچم برای دفعه بعد
+		})
+		return true
+	}
+	return false
 }

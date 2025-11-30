@@ -428,3 +428,19 @@ func DeleteTarget(c *fiber.Ctx) error {
 		"message": "Target and all associated data deleted successfully",
 	})
 }
+
+// StopScan درخواست توقف اسکن را ثبت می‌کند
+func StopScan(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	// فقط فیلد stop_requested را true می‌کنیم
+	// ورکر خودش در دور بعدی چک می‌کند و متوقف می‌شود
+	if err := database.DB.Model(&models.Target{}).Where("id = ?", id).Update("stop_requested", true).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to stop scan"})
+	}
+
+	return c.JSON(fiber.Map{
+		"status":  "success",
+		"message": "Stop signal sent. Scan will halt shortly.",
+	})
+}

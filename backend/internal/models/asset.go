@@ -26,10 +26,10 @@ type Target struct {
 	Status string `gorm:"size:50;default:'READY'" json:"status"`
 
 	// 👇 فیلد جدید برای نمایش مرحله دقیق اسکن
-	CurrentPhase string `gorm:"size:100;default:'IDLE'" json:"current_phase"`
-
-	ScanCount   int    `gorm:"default:0" json:"scan_count"`
-	ScanModules string `gorm:"type:jsonb;default:'[\"DISCOVERY\", \"PROBING\"]'" json:"scan_modules"`
+	CurrentPhase  string `gorm:"size:100;default:'IDLE'" json:"current_phase"`
+	StopRequested bool   `gorm:"default:false" json:"stop_requested"`
+	ScanCount     int    `gorm:"default:0" json:"scan_count"`
+	ScanModules   string `gorm:"type:jsonb;default:'[\"DISCOVERY\", \"PROBING\"]'" json:"scan_modules"`
 
 	Assets []Asset `json:"-"`
 }

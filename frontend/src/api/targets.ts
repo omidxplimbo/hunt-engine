@@ -78,3 +78,6 @@ export const getTargetDetails = async (targetId: number) => {
   const response = await apiClient.get<{ status: string; data: Target }>(`/targets/${targetId}`);
   return response.data.data;
 };
+export const stopTarget = async (id: number) => {
+  await apiClient.post(`/targets/${id}/stop`);
+};

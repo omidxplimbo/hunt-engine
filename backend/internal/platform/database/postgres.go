@@ -56,3 +56,25 @@ func Connect() {
 
 	log.Println("✅ Auto-migration completed successfully! Tables are ready.")
 }
+
+// CleanupZombieScans تارگت‌هایی که در حالت SCANNING گیر کرده‌اند را آزاد می‌کند
+func CleanupZombieScans() {
+	log.Println("🧹 Checking for interrupted scans (Zombies)...")
+
+	// آپدیت همه تارگت‌هایی که SCANNING هستند به READY
+	result := DB.Model(&models.Target{}).
+		Where("status = ?", "SCANNING").
+		Updates(map[string]interface{}{
+			"status":         "READY",
+			"current_phase":  "INTERRUPTED (CRASH)",
+			"stop_requested": false,
+		})
+
+	if result.Error != nil {
+		log.Printf("❌ Failed to cleanup zombies: %v\n", result.Error)
+	} else if result.RowsAffected > 0 {
+		log.Printf("✅ Cleaned up %d interrupted scans. They are now READY.\n", result.RowsAffected)
+	} else {
+		log.Println("✅ No zombie scans found. System is clean.")
+	}
+}
