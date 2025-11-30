@@ -78,6 +78,8 @@ func main() {
 	api.Patch("/users/:id", handlers.UpdateUser)
 	api.Delete("/users/:id", handlers.DeleteUser)
 
+	api.Get("/dashboard/stats", handlers.GetDashboardStats)
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"

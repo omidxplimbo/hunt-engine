@@ -7,8 +7,8 @@ import Login from './pages/Login'; // 👈
 import TargetsPage from './pages/TargetsPages';
 import TargetAssets from './pages/TargetAssets';
 import Settings from './pages/Settings';
+import Dashboard from './pages/Dashboard'; // 👈 ایمپورت از فایل جدید
 
-const Dashboard = () => <div className="text-2xl font-bold text-white">Dashboard Coming Soon...</div>;
 
 const queryClient = new QueryClient({
   defaultOptions: {

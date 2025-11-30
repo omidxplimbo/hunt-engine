@@ -22,13 +22,18 @@ The system is built on a modern, containerized microservice-like architecture:
 * **Persistence:** PostgreSQL with GORM for structured data storage and JSONB for flexible raw data.
 * **Job Queue:** Redis for managing long-running background reconnaissance tasks asynchronously.
 * **Notification System:** Buffered Go Channels with rate-limiting to prevent data loss and API blocking (Telegram).
+* **Security:** JWT Authentication & Role-Based Access Control (RBAC).
 * **Infrastructure:** Fully Dockerized environment with multi-stage builds.
 
 ### 💻 Frontend (The Dashboard)
 * **Framework:** React.js + Vite (Fast & Modern).
 * **Styling:** Tailwind CSS for a professional dark-mode UI.
-* **State Management:** TanStack Query (React Query) for efficient API caching and syncing.
-* **Features:** Target management, Asset exploration (Filtering, Searching, IP details).
+* **State Management:** TanStack Query (React Query) for efficient API caching and real-time syncing.
+* **Features:**
+    * **Dashboard:** Live analytics and charts (Recharts).
+    * **Target Management:** Create, Edit, Delete, Stop/Resume scans.
+    * **Asset Explorer:** Advanced data grid with Filtering (Live/Dead), Search, and detailed Tech/IP columns.
+    * **User Management:** Admin panel to manage team access.
 
 ## 🛠️ Arsenal (Toolchain)
 
@@ -39,6 +44,7 @@ The platform integrates industry-standard Golang-based security tools within its
 * **Validation/Resolution:** `puredns` (w/ fixed resolvers), `dnsx`
 * **Probing:** `httpx` (Rich JSON output, WAF/CDN detection)
 * **Deep Scan:** `amass` (Integrated via Docker)
+* **Future Integration:** `gau`, `katana`, `ffuf` (Ready in Dockerfile)
 
 ---
 
@@ -52,7 +58,6 @@ We are following a multi-phase development roadmap.
 * [x] **Smart Recon Pipeline:** Implemented a full chain (Passive -> Mutation -> Validation).
 * [x] **History Injection:** Re-scans previously dead assets to detect resurrections.
 * [x] **Smart Storage Logic:** "Upsert" logic to track live/dead status.
-* [x] **Data Retrieval APIs:** Implemented paginated/filtered APIs.
 
 ### ✅ Phase 2: Probing & Fingerprinting (COMPLETED)
 **Goal:** Extract detailed technical intelligence from live assets.
@@ -70,12 +75,13 @@ We are following a multi-phase development roadmap.
 * [x] **State Locking:** Prevents overlapping scans on the same target.
 * [x] **Pause/Resume:** Full control over running scans with immediate kill switch.
 
-### ✅ Phase 3: Frontend Dashboard (COMPLETED)
-**Goal:** A professional GUI to manage targets and view results.
-* [x] **Target Management:** Create, Edit, Delete targets with config (Frequency, Modules).
-* [x] **Asset Explorer:** Advanced data grid with **Filtering** (Live/Dead) and **Search**.
-* [x] **Real-time UX:** Responsive UI with live status updates and horizontal scrolling for details.
-* [x] **Authentication:** Secure login system with JWT and protected routes.
+### ✅ Phase 3: Frontend Dashboard & Security (COMPLETED)
+**Goal:** A professional GUI to manage targets and secure the platform.
+* [x] **Authentication:** Secure Login/Logout with JWT and Protected Routes.
+* [x] **User Management:** Admin interface to Add/Edit/Delete users.
+* [x] **Target Management:** Full CRUD + Stop/Resume controls.
+* [x] **Asset Explorer:** Advanced data grid with **Filtering** (Live/Dead), **Search**, and Horizontal Scroll.
+* [x] **Analytics:** Graphical dashboard with Stat Cards and Charts.
 
 ---
 
@@ -83,12 +89,12 @@ We are following a multi-phase development roadmap.
 
 We are now transitioning to **Advanced Content Discovery** and **Vulnerability Scanning**.
 
-**Phase 4: Dashboard Analytics & Deep Crawling (In Progress)**
-* Implement graphical charts for asset distribution and history.
-* Integrate `gau`, `waybackurls` for passive URL discovery.
-* Integrate `katana` for active crawling and JS file discovery.
+**Phase 4: Deep Crawling & Content Discovery (Backend)**
+* Enable `gau`, `waybackurls` for passive URL discovery.
+* Enable `katana` for active crawling and JS file discovery.
+* Store parsed URLs and JS Secrets in new database tables.
 
-**Phase 5: Vulnerability Scanning (Planned)**
+**Phase 5: Vulnerability Scanning (Backend)**
 * Integrate **Nuclei** for template-based scanning.
 * Implement **Smart Filtering** (e.g., run WordPress templates only on WordPress sites).
 * Immediate Telegram alerts for **Critical/High** vulnerabilities.
