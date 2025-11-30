@@ -3,13 +3,16 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/api/dto"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/cache"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
-	"github.com/omidxplimbo/hunt-engine/backend/internal/utils"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/utils" // 👈 ایمپورت جدید
 	"gorm.io/gorm"
 )
 
@@ -87,80 +90,131 @@ func CreateTarget(c *fiber.Ctx) error {
 // New Handlers for Data Retrieval
 // ==========================================
 
-// GetTargets لیست تمام تارگت‌ها رو به صورت صفحه‌بندی شده برمی‌گردونه
+// GetTargets لیست تمام تارگت‌ها رو به صورت صفحه‌بندی شده برمی‌گردونه (با کش ۵ ثانیه)
 func GetTargets(c *fiber.Ctx) error {
+	// پارامترهای صفحه‌بندی
+	page, _ := strconv.Atoi(c.Query("page", "1"))
+	limit := 50 // پیش‌فرض
+	offset := (page - 1) * limit
+
+	// 1. ساخت کلید کش برای لیست تارگت‌ها
+	// نکته: ما اینجا ورژن نمی‌ذاریم، بلکه به TTL کوتاه اکتفا می‌کنیم چون وضعیت مدام تغییر می‌کنه
+	cacheKey := fmt.Sprintf("targets:list:p:%d:l:%d", page, limit)
+
+	// 2. چک کردن کش
+	var cachedResponse fiber.Map
+	if cache.GetCache(cacheKey, &cachedResponse) {
+		c.Set("X-Cache", "HIT")
+		return c.JSON(cachedResponse)
+	}
+
+	// 3. اگر در کش نبود -> اجرای کوئری سنگین دیتابیس
 	var targets []models.Target
-
-	// 👇👇👇 استفاده از Scope صفحه‌بندی
-	// قبل از Find، متد Scopes رو صدا می‌زنیم
-	result := database.DB.Scopes(utils.Paginate(c)).Order("created_at desc").Find(&targets)
-
+	// دریافت لیست (بدون شمارش است‌ها)
+	result := database.DB.Order("created_at desc").Limit(limit).Offset(offset).Find(&targets)
 	if result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": result.Error.Error()})
 	}
 
-	// (بقیه کد تبدیل به DTO مثل قبله و تغییری نمی‌کنه)
+	// تبدیل به DTO و شمارش است‌ها (اینجاست که سنگینه!)
 	targetResponses := make([]dto.TargetResponse, len(targets))
 	for i, t := range targets {
 		var count int64
-		database.DB.Model(&models.Asset{}).Where("target_id = ?", t.ID).Count(&count)
+		database.DB.Model(&models.Asset{}).Where("target_id = ?", t.ID).Count(&count) // 👈 کوئری سنگین
 		targetResponses[i] = toTargetResponse(t, count)
 	}
 
-	return c.JSON(fiber.Map{
+	// محاسبه تعداد کل تارگت‌ها (برای صفحه‌بندی)
+	var totalTargets int64
+	database.DB.Model(&models.Target{}).Count(&totalTargets)
+
+	response := fiber.Map{
 		"status": "success",
 		"data":   targetResponses,
-		"count":  len(targetResponses), // تعداد آیتم‌های این صفحه
-		// نکته: برای تارگت‌ها فعلا تعداد کل رو نمی‌فرستیم چون معمولا کمه
-	})
+		"count":  len(targetResponses),
+		"total":  totalTargets,
+	}
+
+	// 4. ذخیره در کش برای ۵ ثانیه ⏳
+	// این یعنی حداکثر ۱۲ بار در دقیقه به دیتابیس فشار میاد، نه ۳۰ بار (اگر هر ۲ ثانیه رفرش بشه)
+	cache.SetCacheWithTTL(cacheKey, response, 5*time.Second)
+
+	c.Set("X-Cache", "MISS")
+	return c.JSON(response)
 }
 
-// GetTargetAssets لیست دارایی‌ها رو با فیلتر و صفحه‌بندی برمی‌گردونه
+// GetTargetAssets لیست دارایی‌ها رو با فیلتر، صفحه‌بندی و کشینگ برمی‌گردونه
 func GetTargetAssets(c *fiber.Ctx) error {
 	id := c.Params("id")
+	targetID := uint(0)
+	fmt.Sscanf(id, "%d", &targetID)
 
-	// 1. ساخت کوئری پایه با فیلترها
+	// پارامترهای صفحه‌بندی
+	page, _ := strconv.Atoi(c.Query("page", "1")) // دیفالت 1
+	limit := utils.DefaultLimit
+	if l, err := strconv.Atoi(c.Query("limit")); err == nil && l > 0 {
+		limit = l
+	}
+	offset := (page - 1) * limit
+
+	// پارامترهای فیلتر (برای ساخت کلید کش)
+	isLive := c.Query("is_live")
+	isNew := c.Query("is_new")
+	search := c.Query("search")
+	filtersKey := fmt.Sprintf("live:%s|new:%s|s:%s", isLive, isNew, search)
+
+	// 1. تلاش برای خواندن از کش (Cache Hit) 🚀
+	cacheKey := cache.GenerateAssetKey(targetID, page, limit, filtersKey)
+	var cachedResponse fiber.Map
+	if cache.GetCache(cacheKey, &cachedResponse) {
+		// اگر در کش بود، همون رو برمی‌گردونیم و بیخیال دیتابیس می‌شیم
+		c.Set("X-Cache", "HIT") // هدر برای دیباگ
+		return c.JSON(cachedResponse)
+	}
+
+	// 2. اگر در کش نبود (Cache Miss)، میره سراغ دیتابیس 🐢
 	db := database.DB.Model(&models.Asset{}).Where("target_id = ?", id)
 
-	if isLive := c.Query("is_live"); isLive != "" {
+	if isLive != "" {
 		db = db.Where("is_live = ?", isLive == "true")
 	}
-	if isNew := c.Query("is_new"); isNew != "" {
+	if isNew != "" {
 		db = db.Where("is_new = ?", isNew == "true")
 	}
-
-	// 👇👇👇 فیلتر جدید: جستجو در دامنه‌ها
-	if search := c.Query("search"); search != "" {
-		// استفاده از LIKE برای جستجوی جزئی (مثلا "api" -> "api.site.com", "site-api.com")
+	if search != "" {
 		db = db.Where("value LIKE ?", "%"+search+"%")
 	}
 
-	// 2. گرفتن تعداد کل نتایج (قبل از صفحه‌بندی)
 	var totalCount int64
 	if err := db.Count(&totalCount).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
 	}
 
-	// 3. گرفتن داده‌های صفحه فعلی
 	var assets []models.Asset
-	result := db.Scopes(utils.Paginate(c)).Order("value asc").Find(&assets)
+	// نکته: اینجا دیگه از Scope صفحه‌بندی استفاده نمی‌کنیم چون دستی محاسبه کردیم برای کش
+	result := db.Order("value asc").Limit(limit).Offset(offset).Find(&assets)
 
 	if result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": result.Error.Error()})
 	}
 
-	// تبدیل به DTO
 	assetResponses := make([]dto.AssetResponse, len(assets))
 	for i, a := range assets {
 		assetResponses[i] = toAssetResponse(a)
 	}
 
-	return c.JSON(fiber.Map{
+	response := fiber.Map{
 		"status":      "success",
 		"data":        assetResponses,
 		"page_count":  len(assetResponses),
 		"total_count": totalCount,
-	})
+	}
+
+	// 3. ذخیره در کش برای دفعه بعد 💾
+	cache.SetCache(cacheKey, response)
+
+	c.Set("X-Cache", "MISS")
+	return c.JSON(response)
 }
 
 // StartProbing هندلر شروع دستی فاز ۲ (پروبینگ) برای یک تارگت است
