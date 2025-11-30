@@ -41,7 +41,7 @@ The platform integrates industry-standard Golang-based security tools within its
 
 * **Discovery:** `subfinder`, `assetfinder`
 * **Permutation/Mutation:** `alterx`
-* **Validation/Resolution:** `puredns` (w/ fixed resolvers), `dnsx`
+* **Validation/Resolution:** `dnsx` (with fixed resolvers)
 * **Probing:** `httpx` (Rich JSON output, WAF/CDN detection)
 * **Deep Scan:** `amass` (Integrated via Docker)
 * **Future Integration:** `gau`, `katana`, `ffuf` (Ready in Dockerfile)
@@ -58,6 +58,7 @@ We are following a multi-phase development roadmap.
 * [x] **Smart Recon Pipeline:** Implemented a full chain (Passive -> Mutation -> Validation).
 * [x] **History Injection:** Re-scans previously dead assets to detect resurrections.
 * [x] **Smart Storage Logic:** "Upsert" logic to track live/dead status.
+* [x] **Data Retrieval APIs:** Implemented paginated/filtered APIs.
 
 ### ✅ Phase 2: Probing & Fingerprinting (COMPLETED)
 **Goal:** Extract detailed technical intelligence from live assets.

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { getTargetAssets, getTargetDetails } from '../api/targets';
-import { ArrowLeft, Globe, CheckCircle, XCircle, Search } from 'lucide-react';
+import { ArrowLeft, Globe, CheckCircle, XCircle, Search, Monitor } from 'lucide-react';
 import clsx from 'clsx';
 
 const TargetAssets = () => {
@@ -12,6 +12,9 @@ const TargetAssets = () => {
 
   const [page, setPage] = useState(1);
   const [filterLive, setFilterLive] = useState<boolean | undefined>(undefined);
+  // 👇 استیت جدید برای فیلتر HTTPX
+  const [filterHttpx, setFilterHttpx] = useState<boolean | undefined>(undefined);
+  
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
 
@@ -31,10 +34,12 @@ const TargetAssets = () => {
   });
 
   const assetsQuery = useQuery({
-    queryKey: ['assets', targetId, page, filterLive, debouncedSearch],
+    // 👇 اضافه شدن filterHttpx به کلید کش
+    queryKey: ['assets', targetId, page, filterLive, filterHttpx, debouncedSearch],
     queryFn: () => getTargetAssets(targetId, page, 50, { 
       is_live: filterLive, 
-      search: debouncedSearch 
+      search: debouncedSearch,
+      has_httpx: filterHttpx // 👈 ارسال به API
     }),
     enabled: !!targetId,
     placeholderData: (previousData) => previousData,
@@ -43,9 +48,9 @@ const TargetAssets = () => {
   if (!targetId) return <div>Invalid Target ID</div>;
 
   return (
-    <div>
+    <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center gap-4 mb-8">
+      <div className="flex items-center gap-4 mb-8 flex-shrink-0">
         <button 
           onClick={() => navigate('/targets')}
           className="p-2 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-white transition-colors"
@@ -66,7 +71,7 @@ const TargetAssets = () => {
       </div>
 
       {/* Filters & Search Toolbar */}
-      <div className="bg-gray-900 p-4 rounded-lg border border-gray-800 mb-6 flex flex-wrap items-center gap-4 justify-between">
+      <div className="bg-gray-900 p-4 rounded-lg border border-gray-800 mb-6 flex flex-wrap items-center gap-4 justify-between flex-shrink-0">
         <div className="relative flex-1 min-w-[200px] max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
           <input 
@@ -79,31 +84,50 @@ const TargetAssets = () => {
         </div>
 
         <div className="flex items-center gap-3">
-          <span className="text-sm font-medium text-gray-400">Status:</span>
-          <div className="flex bg-gray-950 rounded-lg p-1 border border-gray-800">
-            <button onClick={() => setFilterLive(undefined)} className={clsx("px-4 py-1.5 rounded-md text-sm font-medium transition-colors", filterLive === undefined ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-200")}>All</button>
-            <button onClick={() => setFilterLive(true)} className={clsx("px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-2", filterLive === true ? "bg-green-900/30 text-green-400 border border-green-800" : "text-gray-400 hover:text-gray-200")}><CheckCircle size={14} /> Live</button>
-            <button onClick={() => setFilterLive(false)} className={clsx("px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-2", filterLive === false ? "bg-red-900/30 text-red-400 border border-red-800" : "text-gray-400 hover:text-gray-200")}><XCircle size={14} /> Dead</button>
+          <span className="text-sm font-medium text-gray-400">Filters:</span>
+          <div className="flex bg-gray-950 rounded-lg p-1 border border-gray-800 gap-1">
+            
+            {/* فیلترهای وضعیت */}
+            <div className="flex bg-gray-900 rounded-md p-0.5 border border-gray-800">
+                <button onClick={() => setFilterLive(undefined)} className={clsx("px-3 py-1.5 rounded text-sm font-medium transition-colors", filterLive === undefined ? "bg-gray-800 text-white shadow-sm" : "text-gray-400 hover:text-gray-200")}>All</button>
+                <button onClick={() => setFilterLive(true)} className={clsx("px-3 py-1.5 rounded text-sm font-medium transition-colors flex items-center gap-1.5", filterLive === true ? "bg-green-900/30 text-green-400 border border-green-800" : "text-gray-400 hover:text-gray-200")}><CheckCircle size={14} /> Live</button>
+                <button onClick={() => setFilterLive(false)} className={clsx("px-3 py-1.5 rounded text-sm font-medium transition-colors flex items-center gap-1.5", filterLive === false ? "bg-red-900/30 text-red-400 border border-red-800" : "text-gray-400 hover:text-gray-200")}><XCircle size={14} /> Dead</button>
+            </div>
+
+            <div className="w-px bg-gray-800 mx-1 h-6 self-center"></div>
+
+            {/* 👇 فیلتر جدید: Has HTTPX */}
+            <button
+              onClick={() => setFilterHttpx(prev => !prev ? true : undefined)}
+              className={clsx(
+                "px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-2 border",
+                filterHttpx 
+                  ? "bg-blue-900/30 text-blue-400 border-blue-800" 
+                  : "bg-transparent border-transparent text-gray-400 hover:bg-gray-900 hover:text-gray-200"
+              )}
+            >
+              <Monitor size={14} /> Has Web
+            </button>
+
           </div>
         </div>
       </div>
 
       {/* Table Container */}
-      <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden flex flex-col">
+      <div className="bg-gray-900 rounded-lg border border-gray-800 flex flex-col overflow-hidden">
         {assetsQuery.isLoading ? (
           <div className="p-12 text-center text-gray-500">Loading assets...</div>
         ) : (
-          <div className="overflow-x-auto">
-            {/* min-w-[1400px] برای اسکرول خوردن در صفحات کوچک */}
+          <div className="overflow-x-auto w-full">
             <table className="w-full text-left min-w-[1400px]"> 
               <thead>
                 <tr className="bg-gray-800/50 text-gray-400 text-sm uppercase border-b border-gray-800">
                   <th className="px-6 py-4 font-semibold w-[300px]">Asset / Domain</th>
-                  <th className="px-6 py-4 font-semibold w-[250px]">DNSX IP (Phase 1)</th>
-                  <th className="px-6 py-4 font-semibold w-[250px]">HTTPX IP (Phase 2)</th>
-                  <th className="px-6 py-4 font-semibold w-[120px]">Status</th>
-                  <th className="px-6 py-4 font-semibold w-[200px]">Title</th>
-                  <th className="px-6 py-4 font-semibold">Tech Stack</th>
+                  <th className="px-6 py-4 font-semibold w-[200px]">DNSX IP (Phase 1)</th>
+                  <th className="px-6 py-4 font-semibold w-[200px]">HTTPX IP (Phase 2)</th>
+                  <th className="px-6 py-4 font-semibold w-[100px]">Status</th>
+                  <th className="px-6 py-4 font-semibold w-[250px]">Title</th>
+                  <th className="px-6 py-4 font-semibold min-w-[200px]">Tech Stack</th>
                   <th className="px-6 py-4 font-semibold text-right w-[100px]">Size</th>
                 </tr>
               </thead>
@@ -140,15 +164,15 @@ const TargetAssets = () => {
                   return (
                   <tr key={asset.id} className="hover:bg-gray-800/30 transition-colors">
                     {/* Col 1: Domain */}
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <Globe size={18} className={asset.is_live ? "text-blue-500" : "text-gray-600"} />
+                    <td className="px-6 py-4 align-top">
+                      <div className="flex items-start gap-3">
+                        <Globe size={18} className={asset.is_live ? "text-blue-500 mt-1" : "text-gray-600 mt-1"} />
                         <div>
                           <a 
                             href={`http://${asset.value}`} 
                             target="_blank" 
                             rel="noreferrer"
-                            className="font-medium text-gray-200 hover:text-blue-400 transition-colors"
+                            className="font-medium text-gray-200 hover:text-blue-400 transition-colors break-all"
                           >
                             {asset.value}
                           </a>
@@ -157,7 +181,7 @@ const TargetAssets = () => {
                     </td>
                     
                     {/* Col 2: DNSX IPs */}
-                    <td className="px-6 py-4">
+                    <td className="px-6 py-4 align-top">
                       <div className="flex flex-col gap-1.5">
                         {dnsxIps.length > 0 && dnsxIps[0] !== "" ? (
                           dnsxIps.map((ip, idx) => (
@@ -172,7 +196,7 @@ const TargetAssets = () => {
                     </td>
 
                     {/* Col 3: HTTPX IPs */}
-                    <td className="px-6 py-4">
+                    <td className="px-6 py-4 align-top">
                       <div className="flex flex-col gap-1.5">
                         {httpxIps.length > 0 && httpxIps[0] !== "" ? (
                           httpxIps.map((ip, idx) => (
@@ -187,7 +211,7 @@ const TargetAssets = () => {
                     </td>
 
                     {/* Col 4: Status */}
-                    <td className="px-6 py-4">
+                    <td className="px-6 py-4 align-top">
                       {asset.is_live ? (
                         statusCode > 0 ? (
                           <div className="flex items-center gap-2">
@@ -210,14 +234,14 @@ const TargetAssets = () => {
                     </td>
 
                     {/* Col 5: Title */}
-                    <td className="px-6 py-4">
-                      <span className="text-sm text-gray-300 truncate max-w-[200px] block" title={asset.title}>
+                    <td className="px-6 py-4 align-top">
+                      <span className="text-sm text-gray-300 block line-clamp-2" title={asset.title}>
                         {asset.title || '-'}
                       </span>
                     </td>
 
                     {/* Col 6: Tech Stack */}
-                    <td className="px-6 py-4">
+                    <td className="px-6 py-4 align-top">
                       <div className="flex flex-wrap gap-1 max-h-[100px] overflow-y-auto">
                         {asset.web_server && (
                           <span className="px-1.5 py-0.5 rounded bg-indigo-900/30 text-indigo-300 text-[10px] border border-indigo-800 whitespace-nowrap">
@@ -233,7 +257,7 @@ const TargetAssets = () => {
                     </td>
 
                     {/* Col 7: Size */}
-                    <td className="px-6 py-4 text-right text-sm text-gray-500 font-mono">
+                    <td className="px-6 py-4 align-top text-right text-sm text-gray-500 font-mono">
                       {asset.content_length ? `${(asset.content_length / 1024).toFixed(1)} KB` : '-'}
                     </td>
                   </tr>

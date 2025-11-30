@@ -34,4 +34,5 @@ export interface AssetFilters {
   is_live?: boolean;
   is_new?: boolean;
   search?: string; // 👈 فیلد جدید
+  has_httpx?: boolean; // 👈 فیلد جدید
 }

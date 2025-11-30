@@ -133,6 +133,7 @@ func GetTargetDetails(c *fiber.Ctx) error {
 }
 
 // GetTargetAssets لیست دارایی‌ها رو با فیلتر، صفحه‌بندی و کشینگ برمی‌گردونه
+// GetTargetAssets (آپدیت شده با فیلتر has_httpx)
 func GetTargetAssets(c *fiber.Ctx) error {
 	id := c.Params("id")
 	targetID := uint(0)
@@ -148,9 +149,13 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	isLive := c.Query("is_live")
 	isNew := c.Query("is_new")
 	search := c.Query("search")
-	filtersKey := fmt.Sprintf("live:%s|new:%s|s:%s", isLive, isNew, search)
+	// 👇 پارامتر جدید
+	hasHttpx := c.Query("has_httpx")
 
+	// کلید کش را هم آپدیت می‌کنیم
+	filtersKey := fmt.Sprintf("live:%s|new:%s|s:%s|httpx:%s", isLive, isNew, search, hasHttpx)
 	cacheKey := cache.GenerateAssetKey(targetID, page, limit, filtersKey)
+
 	var cachedResponse fiber.Map
 	if cache.GetCache(cacheKey, &cachedResponse) {
 		c.Set("X-Cache", "HIT")
@@ -168,6 +173,10 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	if search != "" {
 		db = db.Where("value LIKE ?", "%"+search+"%")
 	}
+	// 👇 شرط جدید: چک می‌کنیم که host_ip پر باشد (یعنی [] یا خالی نباشد)
+	if hasHttpx == "true" {
+		db = db.Where("host_ip != '[]' AND host_ip != ''")
+	}
 
 	var totalCount int64
 	if err := db.Count(&totalCount).Error; err != nil {
@@ -176,7 +185,6 @@ func GetTargetAssets(c *fiber.Ctx) error {
 
 	var assets []models.Asset
 	result := db.Order("value asc").Limit(limit).Offset(offset).Find(&assets)
-
 	if result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": result.Error.Error()})
 	}
