@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getTargets, deleteTarget, stopTarget } from '../api/targets'; // 👈 ایمپورت stopTarget
-import { Plus, Search, Globe, Clock, Database, Trash2, Edit2, Activity, Square } from 'lucide-react'; // 👈 ایمپورت Square
+// 👇 ایمپورت توابع جدید
+import { getTargets, deleteTarget, stopTarget, startDiscovery } from '../api/targets';
+// 👇 ایمپورت آیکون‌های جدید (Square, Play)
+import { Plus, Search, Globe, Clock, Database, Trash2, Edit2, Activity, Square, Play } from 'lucide-react';
 import { CreateTargetModal } from '../components/CreateTargetModal';
 import { EditTargetModal } from '../components/EditTargetModal';
 import { Link } from 'react-router-dom';
@@ -18,16 +20,26 @@ const TargetsPage = () => {
     refetchInterval: 2000, // رفرش سریع برای دیدن تغییر وضعیت
   });
 
+  // --- Mutations ---
+
   const deleteMutation = useMutation({
     mutationFn: deleteTarget,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['targets'] }),
   });
 
-  // 👇 Mutation برای توقف
+  // 👇 توقف اسکن
   const stopMutation = useMutation({
     mutationFn: stopTarget,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['targets'] }),
   });
+
+  // 👇 ادامه اسکن (شروع مجدد)
+  const resumeMutation = useMutation({
+    mutationFn: startDiscovery,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['targets'] }),
+  });
+
+  // --- Handlers ---
 
   const handleDelete = (id: number) => {
     if (confirm('Are you sure? This will delete ALL assets and history for this target.')) {
@@ -35,11 +47,13 @@ const TargetsPage = () => {
     }
   };
 
-  // 👇 هندلر دکمه توقف
   const handleStop = (id: number) => {
-    if (confirm('Are you sure you want to STOP this scan?')) {
-      stopMutation.mutate(id);
-    }
+    // نیازی به confirm نیست، چون توقف غیرمخرب است
+    stopMutation.mutate(id);
+  };
+
+  const handleResume = (id: number) => {
+    resumeMutation.mutate(id);
   };
 
   if (isLoading) return <div className="p-8 text-gray-400">Loading targets...</div>;
@@ -61,6 +75,7 @@ const TargetsPage = () => {
         </button>
       </div>
 
+      {/* Search Bar */}
       <div className="bg-gray-900 p-4 rounded-lg border border-gray-800 mb-6 flex gap-4">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
@@ -72,6 +87,7 @@ const TargetsPage = () => {
         </div>
       </div>
 
+      {/* Table */}
       <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden">
         <table className="w-full text-left">
           <thead>
@@ -86,6 +102,7 @@ const TargetsPage = () => {
           <tbody className="divide-y divide-gray-800">
             {data?.data.map((target) => (
               <tr key={target.id} className="hover:bg-gray-800/30 transition-colors">
+                {/* Name */}
                 <td className="px-6 py-4">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-lg bg-gray-800 flex items-center justify-center text-blue-500">
@@ -97,12 +114,16 @@ const TargetsPage = () => {
                     </div>
                   </div>
                 </td>
+
+                {/* Assets Count */}
                 <td className="px-6 py-4">
                   <div className="flex items-center gap-2 text-gray-300">
                     <Database size={16} className="text-gray-500" />
                     <span className="font-mono text-lg">{target.asset_count.toLocaleString()}</span>
                   </div>
                 </td>
+
+                {/* Last Scan */}
                 <td className="px-6 py-4">
                   <div className="flex items-center gap-2 text-gray-400 text-sm">
                     <Clock size={16} />
@@ -111,17 +132,21 @@ const TargetsPage = () => {
                       : 'Never'}
                   </div>
                 </td>
+
+                {/* Status / Phase */}
                 <td className="px-6 py-4">
                   <div className="flex flex-col gap-1">
                     <span className={`inline-flex items-center w-fit px-2.5 py-0.5 rounded-full text-xs font-medium ${
                       target.status === 'SCANNING' 
                         ? 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 animate-pulse' 
+                        : target.status === 'PAUSED' // 👈 استایل برای حالت PAUSED
+                        ? 'bg-orange-500/10 text-orange-400 border border-orange-500/20'
                         : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                     }`}>
-                      {target.status === 'SCANNING' ? 'SCANNING' : 'READY'}
+                      {target.status}
                     </span>
                     
-                    {/* نمایش فاز: چه در حال اسکن باشد و چه تمام شده باشد (برای تاریخچه) */}
+                    {/* نمایش فاز جاری */}
                     {target.current_phase && target.current_phase !== "IDLE" && (
                         <span className={`text-xs font-mono flex items-center gap-1.5 ${
                              target.status === 'SCANNING' ? 'text-blue-400' : 'text-gray-500'
@@ -132,9 +157,12 @@ const TargetsPage = () => {
                     )}
                   </div>
                 </td>
+
+                {/* Actions */}
                 <td className="px-6 py-4 text-right">
                   <div className="flex items-center justify-end gap-3">
-                    {/* 👇 دکمه توقف: فقط وقتی نمایش داده می‌شود که در حال اسکن باشد */}
+                    
+                    {/* 👇 دکمه توقف (فقط وقتی اسکنینگ است) */}
                     {target.status === 'SCANNING' && (
                       <button 
                         onClick={() => handleStop(target.id)} 
@@ -145,9 +173,21 @@ const TargetsPage = () => {
                       </button>
                     )}
 
+                    {/* 👇 دکمه ادامه/شروع (وقتی PAUSED یا READY است) */}
+                    {(target.status === 'PAUSED' || target.status === 'READY') && (
+                      <button 
+                        onClick={() => handleResume(target.id)} 
+                        className="text-green-400 hover:text-green-300 transition-colors"
+                        title={target.status === 'PAUSED' ? "Resume Scan" : "Start Scan"}
+                      >
+                          <Play size={18} fill="currentColor" />
+                      </button>
+                    )}
+
+                    <div className="w-px h-4 bg-gray-700 mx-1"></div> {/* جداکننده */}
+
                     <Link to={`/targets/${target.id}`} className="text-blue-400 hover:text-blue-300 text-sm font-medium">View</Link>
                     
-                    {/* دکمه‌های ویرایش و حذف همیشه هستند (مگر اینکه بخواهی در حین اسکن غیرفعالشان کنی) */}
                     <button onClick={() => setEditingTarget(target)} className="text-gray-400 hover:text-white">
                         <Edit2 size={18} />
                     </button>

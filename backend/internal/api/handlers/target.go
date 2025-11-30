@@ -48,6 +48,9 @@ func CreateTarget(c *fiber.Ctx) error {
 		InScope:     true,
 		Frequency:   req.Frequency, // 👈 ذخیره فرکانس
 		ScanModules: modulesJSON,   // 👈 ذخیره ماژول‌ها
+		// 👇👇👇 تغییر مهم: وضعیت اولیه باید SCANNING باشد
+		Status:       "SCANNING",
+		CurrentPhase: "QUEUED: STARTING...",
 	}
 
 	// 3. Save to DB
@@ -69,6 +72,7 @@ func CreateTarget(c *fiber.Ctx) error {
 	// با دستور RPUSH پیام رو به انتهای صف اضافه می‌کنیم
 	err := redisq.Client.RPush(redisq.Ctx, redisq.QueueName, taskPayload).Err()
 	if err != nil {
+		database.DB.Model(&target).Update("status", "READY")
 		// نکته مهم: اگر اینجا خطا بده، تارگت ذخیره شده ولی ریکان شروع نمیشه.
 		// در سیستم‌های واقعی اینجا باید لاگ دقیق بزنیم.
 		fmt.Printf("⚠️ Failed to enqueue discovery task for %s: %v\n", target.RootDomain, err)

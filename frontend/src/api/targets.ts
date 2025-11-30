@@ -81,3 +81,8 @@ export const getTargetDetails = async (targetId: number) => {
 export const stopTarget = async (id: number) => {
   await apiClient.post(`/targets/${id}/stop`);
 };
+
+// 👇 تابع شروع مجدد (Resume) - فاز ۱ را دوباره تریگر می‌کند
+export const startDiscovery = async (id: number) => {
+  await apiClient.post<{ status: string; message: string }>(`/targets/${id}/discovery`);
+};
