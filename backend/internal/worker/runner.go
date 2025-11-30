@@ -58,7 +58,41 @@ type DnsxResult struct {
 }
 
 // Start موتور اصلی کارگر را روشن می‌کند.
+// Start موتور اصلی کارگر را روشن می‌کند.
 func Start() {
+	// 👇👇👇 چاپ بنر اختصاصی تیم Mustache
+	RED := "\033[0;31m"
+	NC := "\033[0m" // No Color
+
+	fmt.Println()
+	fmt.Println(RED + "+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-" + NC)
+	fmt.Println(RED + "                                                                                  ")
+	fmt.Println(RED + "`7MMM.     ,MMF'                      mm                        MM                ")
+	fmt.Println(RED + "  MMMb    dPMM                        MM                        MM                ")
+	fmt.Println(RED + "  M YM   ,M MM `7MM  `7MM  ,pP\"Ybd mmMMmm  ,6\"Yb.    ,p6\"bo   MMpMMMb.    .gP\"Ya  ")
+	fmt.Println(RED + "  M  Mb  M' MM   MM    MM  8I   `\"   MM   8) MM 6M  'OO       MM    MM   ,M'   Yb ")
+	fmt.Println(RED + "  M  YM.P'  MM   MM    MM  `YMMMa.   MM    ,pm9MM    8M       MM    MM   8M\"\"\"\"\"\" ")
+	fmt.Println(RED + "  M  `YM'   MM   MM    MM  L.   I8   MM   8M   MM    YM.    , MM    MM   YM.    , ")
+	fmt.Println(RED + ".JML. `'  .JMML. `Mbod\"YML.M9mmmP'   `Mbmo`Moo9^Yo.  YMbmd' .JMML  JMML.  `Mbmmd' ")
+	fmt.Println(RED + "                                                                                  " + NC)
+	fmt.Println()
+	fmt.Println(RED + "             ...:~!!~:..........^~~^....^~~^..........:~!!~:...")
+	fmt.Println(RED + "             .!PBGP5PG5^.....:?PB##BGJJPB##BP?:.....^YGP5PGBP!.")
+	fmt.Println(RED + "             J#B!:...^PG...:?B################B?:...GP^...:!B#J")
+	fmt.Println(RED + "             ##7 .....!7..7G####################G7: 7!..... !##")
+	fmt.Println(RED + "             P&Y.......^?G###########YY###########G?^.......Y&P")
+	fmt.Println(RED + "             ^5#GJ7!7JPB##########BY~..~YB##########BPJ7!7JG#5^")
+	fmt.Println(RED + "             ..~YG##&&&&####BBG5?!:......:!?5GBB####&&&&##GY!..")
+	fmt.Println(RED + "             ....:^~!7777!!~^:................:^~!!7777!~^:....")
+	fmt.Println()
+	fmt.Println()
+
+	fmt.Printf("%s%s%s\n", RED, " 🔍 Automated Reconnaissance System", NC)
+	fmt.Printf("%s%s%s\n", RED, " 👨‍💻 Recon And Watch Tower Tool From Mustache Team 👨‍💻", NC)
+	fmt.Printf("%s%s%s\n", RED, " 📅 "+time.Now().Format("2006-01-02 15:04:05"), NC)
+	fmt.Println(RED + "+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-" + NC)
+	fmt.Println()
+
 	log.Println("👷 Worker started. Waiting for jobs...", redisq.QueueName)
 
 	for {

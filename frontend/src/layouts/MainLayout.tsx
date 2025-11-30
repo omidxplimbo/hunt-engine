@@ -1,69 +1,78 @@
-import { Link, Outlet, useLocation } from 'react-router-dom'; // 👈 React حذف شد
-import { LayoutDashboard, Target, Settings, Shield } from 'lucide-react';
+import { Outlet, NavLink, useNavigate } from 'react-router-dom';
+import { Target, Settings, LayoutDashboard, LogOut } from 'lucide-react';
 import clsx from 'clsx';
-
-const SidebarItem = ({ to, icon: Icon, label }: { to: string; icon: any; label: string }) => {
-  const location = useLocation();
-  const isActive = location.pathname.startsWith(to);
-
-  return (
-    <Link
-      to={to}
-      className={clsx(
-        'flex items-center gap-3 px-4 py-3 rounded-lg transition-colors mb-1',
-        isActive
-          ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20'
-          : 'text-gray-400 hover:bg-gray-800 hover:text-gray-100'
-      )}
-    >
-      <Icon size={20} />
-      <span className="font-medium">{label}</span>
-    </Link>
-  );
-};
+// 👇 ایمپورت‌های جدید
+import { useAuth } from '../context/AuthContext';
+import MustacheLogo from '../components/MustacheLogo';
 
 export const MainLayout = () => {
+  // 👇 گرفتن تابع لاگ‌اوت و نویگیت
+  const { logout } = useAuth();
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    logout(); // پاک کردن توکن‌ها از کانتکست و لوکال استوریج
+    navigate('/login'); // هدایت به صفحه لاگین
+  };
+
   return (
-    <div className="flex h-screen bg-gray-950 text-gray-100 font-sans overflow-hidden">
+    <div className="flex h-screen bg-gray-950">
       {/* Sidebar */}
-      <aside className="w-64 bg-gray-900 border-r border-gray-800 flex flex-col">
-        <div className="p-6 border-b border-gray-800 flex items-center gap-3">
-          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
-            <Shield size={20} className="text-white" />
+      <aside className="w-72 bg-gray-900 border-r border-gray-800 flex flex-col">
+        {/* 👇 بخشدر هدر سایدبار: لوگو و اسم تیم */}
+        <div className="p-6 border-b border-gray-800 flex flex-col items-center text-center">
+          <div className="mb-3 p-2 bg-gray-950 rounded-lg border border-green-900/30 shadow-[0_0_15px_rgba(34,197,94,0.2)]">
+             <MustacheLogo />
           </div>
-          <h1 className="text-xl font-bold tracking-tight text-white">Hunter<span className="text-blue-500">Pro</span></h1>
+          <h1 className="text-lg font-bold text-white leading-tight">
+            Mustache Security
+            <span className="block text-sm text-green-500 font-mono mt-1">Researcher Team</span>
+          </h1>
         </div>
 
-        <nav className="flex-1 p-4 overflow-y-auto">
-          <div className="mb-6">
-            <p className="px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Main</p>
-            <SidebarItem to="/" icon={LayoutDashboard} label="Dashboard" />
-            <SidebarItem to="/targets" icon={Target} label="Targets" />
-          </div>
-          
-          <div>
-            <p className="px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">System</p>
-            <SidebarItem to="/settings" icon={Settings} label="Settings" />
-          </div>
+        {/* Navigation Links */}
+        <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
+          <NavItem to="/" icon={LayoutDashboard}>Dashboard</NavItem>
+          <NavItem to="/targets" icon={Target}>Targets</NavItem>
+          <NavItem to="/settings" icon={Settings}>Settings</NavItem>
         </nav>
 
+        {/* 👇 بخش فوتر سایدبار: دکمه لاگ‌اوت */}
         <div className="p-4 border-t border-gray-800">
-          <div className="flex items-center gap-3 px-4 py-2">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-500 to-purple-500"></div>
-            <div>
-              <p className="text-sm font-medium text-white">Omid</p>
-              <p className="text-xs text-gray-500">Security Researcher</p>
-            </div>
-          </div>
+          <button
+            onClick={handleLogout}
+            className="w-full flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-red-400 hover:bg-red-950/30 rounded-lg transition-colors group font-medium"
+          >
+            <LogOut size={20} className="group-hover:text-red-500 transition-colors" />
+            Logout
+          </button>
         </div>
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-auto bg-gray-950">
-        <div className="p-8 max-w-7xl mx-auto">
+      <main className="flex-1 overflow-auto">
+        <div className="p-8 max-w-[1600px] mx-auto">
           <Outlet />
         </div>
       </main>
     </div>
+  );
+};
+
+// Helper component for nav links (بدون تغییر)
+const NavItem = ({ to, icon: Icon, children }: any) => {
+  return (
+    <NavLink
+      to={to}
+      className={({ isActive }) => clsx(
+        "flex items-center gap-3 px-4 py-3 rounded-lg transition-colors font-medium",
+        isActive 
+          ? "bg-blue-600 text-white shadow-lg shadow-blue-900/20" 
+          : "text-gray-400 hover:text-white hover:bg-gray-800"
+      )}
+    >
+      <Icon size={20} />
+      {children}
+    </NavLink>
   );
 };
