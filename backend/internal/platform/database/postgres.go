@@ -48,7 +48,7 @@ func Connect() {
 	// 3. Auto Migration (جادوی GORM)
 	// این دستور مدل‌ها رو می‌گیره و جدول‌هاشون رو توی دیتابیس می‌سازه یا آپدیت می‌کنه
 	log.Println("Running auto-migrations...")
-	err = DB.AutoMigrate(&models.Target{}, &models.Asset{}, &models.AssetHistory{})
+	err = DB.AutoMigrate(&models.Target{}, &models.Asset{}, &models.AssetHistory{}, &models.User{})
 
 	if err != nil {
 		log.Fatal("❌ Auto-migration failed! \n", err)

@@ -10,30 +10,36 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 
-	// 👇👇👇 ایمپورت جدید
 	"github.com/omidxplimbo/hunt-engine/backend/internal/api/handlers"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/api/middleware" // 👈 ایمپورت جدید
+	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/scheduler"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/telegram"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/utils"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker"
 )
 
 func main() {
 	database.Connect()
 	database.CleanupZombieScans()
+
+	// 👇👇👇 سید کردن کاربر ادمین اولیه
+	seedAdminUser()
+
 	redisq.Connect()
 	telegram.Init()
 	go scheduler.Start()
 	go worker.Start()
 
 	app := fiber.New(fiber.Config{
-		AppName: "Hunt Engine API v0.3",
+		AppName: "Hunt Engine API v0.4 (Secured)",
 	})
 
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: "*", // فعلاً برای راحتی همه جا را مجاز می‌کنیم (در پروداکشن محدودش کن)
-		AllowHeaders: "Origin, Content-Type, Accept",
+		AllowOrigins: "*",
+		AllowHeaders: "Origin, Content-Type, Accept, Authorization", // Authorization اضافه شد
 		AllowMethods: "GET, POST, HEAD, PUT, DELETE, PATCH",
 	}))
 	app.Use(logger.New())
@@ -41,24 +47,30 @@ func main() {
 
 	api := app.Group("/api")
 
-	// روت تست سلامتی قبلی
+	// --- Public Routes (عمومی) ---
 	api.Get("/", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "OK", "message": "Engine is running"})
 	})
+	api.Post("/auth/login", handlers.Login) // 👈 روت لاگین
 
-	// 👇👇👇 روت جدید برای ساخت تارگت
-	// متد POST روی آدرس /api/targets
+	// --- Protected Routes (محافظت شده) ---
+	// همه روت‌های زیر نیاز به توکن دارند
+	api.Use(middleware.Protected())
+
+	// Target Routes
 	api.Post("/targets", handlers.CreateTarget)
 	api.Get("/targets", handlers.GetTargets)
-
-	// --- Asset Routes ---
-	// 👇👇👇 روت جدید: گرفتن دارایی‌های یک تارگت خاص (با قابلیت فیلتر)
-	api.Get("/targets/:id/assets", handlers.GetTargetAssets)
-	api.Post("/targets/:id/probe", handlers.StartProbing)
-	api.Post("/targets/:id/discovery", handlers.StartDiscovery) // شروع فاز ۱
-	api.Patch("/targets/:id", handlers.UpdateTarget)            // ویرایش
+	api.Get("/targets/:id", handlers.GetTargetDetails)
+	api.Patch("/targets/:id", handlers.UpdateTarget)
 	api.Delete("/targets/:id", handlers.DeleteTarget)
-	api.Post("/targets/:id/stop", handlers.StopScan) //
+
+	// Operations
+	api.Post("/targets/:id/probe", handlers.StartProbing)
+	api.Post("/targets/:id/discovery", handlers.StartDiscovery)
+	api.Post("/targets/:id/stop", handlers.StopScan)
+
+	// Asset Routes
+	api.Get("/targets/:id/assets", handlers.GetTargetAssets)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -67,4 +79,26 @@ func main() {
 
 	fmt.Printf("🔥 Server is starting on port %s...\n", port)
 	log.Fatal(app.Listen(":" + port))
+}
+
+// seedAdminUser یک کاربر ادمین پیش‌فرض می‌سازد اگر وجود نداشته باشد
+func seedAdminUser() {
+	var count int64
+	database.DB.Model(&models.User{}).Count(&count)
+	if count == 0 {
+		log.Println("🌱 Seeding default admin user...")
+		// رمز عبور پیش‌فرض: admin123
+		// در پروداکشن حتماً این را تغییر دهید!
+		hash, _ := utils.HashPassword("admin123")
+		admin := models.User{
+			Username: "admin",
+			Password: hash,
+			Role:     "admin",
+		}
+		if err := database.DB.Create(&admin).Error; err != nil {
+			log.Printf("❌ Failed to seed admin user: %v\n", err)
+		} else {
+			log.Println("✅ Default admin created: username='admin', password='admin123'")
+		}
+	}
 }
