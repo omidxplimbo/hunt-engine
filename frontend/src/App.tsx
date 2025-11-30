@@ -6,6 +6,7 @@ import { ProtectedRoute } from './components/ProtectedRoute'; // 👈
 import Login from './pages/Login'; // 👈
 import TargetsPage from './pages/TargetsPages';
 import TargetAssets from './pages/TargetAssets';
+import Settings from './pages/Settings';
 
 const Dashboard = () => <div className="text-2xl font-bold text-white">Dashboard Coming Soon...</div>;
 
@@ -34,6 +35,7 @@ function App() {
                 <Route index element={<Dashboard />} />
                 <Route path="targets" element={<TargetsPage />} />
                 <Route path="targets/:id" element={<TargetAssets />} />
+                <Route path="settings" element={<Settings />} />
               </Route>
             </Route>
           </Routes>

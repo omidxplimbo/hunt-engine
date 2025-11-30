@@ -52,6 +52,7 @@ We are following a multi-phase development roadmap.
 * [x] **Smart Recon Pipeline:** Implemented a full chain (Passive -> Mutation -> Validation).
 * [x] **History Injection:** Re-scans previously dead assets to detect resurrections.
 * [x] **Smart Storage Logic:** "Upsert" logic to track live/dead status.
+* [x] **Data Retrieval APIs:** Implemented paginated/filtered APIs.
 
 ### ✅ Phase 2: Probing & Fingerprinting (COMPLETED)
 **Goal:** Extract detailed technical intelligence from live assets.
@@ -66,12 +67,15 @@ We are following a multi-phase development roadmap.
 * [x] **Notification System:** Zero-loss Telegram alerting with buffered queues.
 * [x] **Scheduler:** Automated periodic scanning based on per-target frequency.
 * [x] **Orchestrator:** Smart chaining that automatically triggers Phase 2 after Phase 1.
+* [x] **State Locking:** Prevents overlapping scans on the same target.
+* [x] **Pause/Resume:** Full control over running scans with immediate kill switch.
 
 ### ✅ Phase 3: Frontend Dashboard (COMPLETED)
 **Goal:** A professional GUI to manage targets and view results.
 * [x] **Target Management:** Create, Edit, Delete targets with config (Frequency, Modules).
 * [x] **Asset Explorer:** Advanced data grid with **Filtering** (Live/Dead) and **Search**.
 * [x] **Real-time UX:** Responsive UI with live status updates and horizontal scrolling for details.
+* [x] **Authentication:** Secure login system with JWT and protected routes.
 
 ---
 
@@ -79,12 +83,12 @@ We are following a multi-phase development roadmap.
 
 We are now transitioning to **Advanced Content Discovery** and **Vulnerability Scanning**.
 
-**Phase 4: Deep Crawling & Content Discovery (Backend)**
+**Phase 4: Dashboard Analytics & Deep Crawling (In Progress)**
+* Implement graphical charts for asset distribution and history.
 * Integrate `gau`, `waybackurls` for passive URL discovery.
 * Integrate `katana` for active crawling and JS file discovery.
-* Store parsed URLs and JS Secrets in new database tables.
 
-**Phase 5: Vulnerability Scanning (Backend)**
+**Phase 5: Vulnerability Scanning (Planned)**
 * Integrate **Nuclei** for template-based scanning.
 * Implement **Smart Filtering** (e.g., run WordPress templates only on WordPress sites).
 * Immediate Telegram alerts for **Critical/High** vulnerabilities.

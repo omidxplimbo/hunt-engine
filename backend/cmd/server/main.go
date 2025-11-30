@@ -72,6 +72,12 @@ func main() {
 	// Asset Routes
 	api.Get("/targets/:id/assets", handlers.GetTargetAssets)
 
+	// 👇👇👇 روت‌های مدیریت کاربران (User Management)
+	api.Get("/users", handlers.GetUsers)
+	api.Post("/users", handlers.AddUser)
+	api.Patch("/users/:id", handlers.UpdateUser)
+	api.Delete("/users/:id", handlers.DeleteUser)
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
