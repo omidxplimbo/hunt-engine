@@ -29,7 +29,7 @@ type Target struct {
 	CurrentPhase  string `gorm:"size:100;default:'IDLE'" json:"current_phase"`
 	StopRequested bool   `gorm:"default:false" json:"stop_requested"`
 	ScanCount     int    `gorm:"default:0" json:"scan_count"`
-	UseAlterx     bool   `gorm:"default:true" json:"use_alterx"`
+	UseAlterx     bool   `gorm:"default:false" json:"use_alterx"`
 	ScanModules   string `gorm:"type:jsonb;default:'[\"DISCOVERY\", \"PROBING\"]'" json:"scan_modules"`
 
 	Assets []Asset `json:"-"`

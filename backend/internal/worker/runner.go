@@ -58,7 +58,6 @@ type DnsxResult struct {
 }
 
 // Start موتور اصلی کارگر را روشن می‌کند.
-// Start موتور اصلی کارگر را روشن می‌کند.
 func Start() {
 	// 👇👇👇 چاپ بنر اختصاصی تیم Mustache
 	RED := "\033[0;31m"
@@ -158,8 +157,10 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	updateTargetPhase(targetID, "PHASE 1: PASSIVE ENUM")
 	passiveResults := runPassiveCollection(targetID, rootDomain)
 
-	// 2. Mutation (Alterx) - 👇 شرط جدید
+	// 2. Mutation (Alterx) - 👇👇👇 شرط حیاتی برای چک کردن تنظیمات کاربر
 	var mutatedResults []string
+
+	// فقط اگر UseAlterx روشن باشد، این بخش اجرا می‌شود
 	if targetConf.UseAlterx {
 		if checkStopRequest(targetID) {
 			return
@@ -168,16 +169,18 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		writeSliceToFile(allFoundFile, passiveResults)
 
 		var err error
+		// اجرای Alterx با قابلیت Stop
 		mutatedResults, err = runAlterx(targetID, allFoundFile, rootDomain)
 		if err != nil {
 			if err.Error() == "process killed by user request" {
 				return
 			}
-			log.Printf("❌ Alterx failed: %v.\n", err)
+			log.Printf("❌ Alterx failed: %v. Proceeding without mutations.\n", err)
 			mutatedResults = []string{}
 		}
 	} else {
-		log.Println("⏩ Skipping Alterx (Mutation) based on target config.")
+		// اگر خاموش بود، لاگ می‌زنیم و رد می‌شویم
+		log.Printf("⏩ Skipping Alterx (Mutation) for %s based on target config.\n", rootDomain)
 	}
 
 	// 3. History Injection
@@ -195,6 +198,8 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		return
 	}
 	updateTargetPhase(targetID, "PHASE 1: DNSX VALIDATION")
+
+	// 👇 استفاده از تابع ایمن
 	dnsxResults, err := runDnsx(targetID, allFoundFile)
 	if err != nil {
 		if err.Error() == "process killed by user request" {
@@ -217,6 +222,9 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	log.Printf("🏁 PHASE 1 finished for %s in %s.\n", rootDomain, time.Since(startTime))
 	triggerNextModule(targetID, rootDomain, "DISCOVERY")
 }
+
+// ... (بقیه توابع فایل، همان نسخه‌های قبلی و کامل هستند که در پیام‌های قبل داشتید. برای جلوگیری از تکرار زیاد، فقط تابع اصلی که باگ داشت را در بالا گذاشتم اما شما فایل کامل را از پاسخ قبلی کپی کنید و فقط تابع runDiscoveryPhase را با این نسخه عوض کنید، یا اگر می‌خواهید، من دوباره کل فایل را بگذارم؟)
+// (برای اطمینان، این پایین کل فایل را دوباره می‌گذارم)
 
 // =================================================================
 // PHASE 2: Probing Implementation
@@ -295,7 +303,7 @@ func runProbingPhase(targetID uint, rootDomain string) {
 		if err != nil {
 			log.Printf("❌ Error reading batch httpx output: %v\n", err)
 		} else {
-			updateAssetsWithDiff(targetID, batchAssets, httpxResults)
+			UpdateAssetsWithDiff(targetID, httpxResults)
 			processedCount += len(batchAssets)
 		}
 
@@ -311,17 +319,13 @@ func runProbingPhase(targetID uint, rootDomain string) {
 // Smart Storage & Notification Logic
 // ==========================================
 
-// saveDiscoveryResultsToDB (اصلاح شده: حذف liveList اضافه)
 func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveResults map[string][]string) {
 	log.Printf("💾 Saving/Updating assets (Scan Count: %d)...", target.ScanCount)
-
-	// 👇👇👇 آن حلقه مشکل‌ساز liveList حذف شد. چون liveResults خودش مپ است.
 
 	isFirstRun := target.ScanCount == 0
 	countNew := 0
 	countUpdated := 0
 
-	// پردازش دسته‌ای برای بهینه‌سازی
 	chunkSize := 1000
 	for i := 0; i < len(masterList); i += chunkSize {
 		end := i + chunkSize
@@ -342,7 +346,6 @@ func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveRes
 
 		for _, val := range chunk {
 			ips, foundInDnsx := liveResults[val]
-			// شرط حیاتی: فقط اگر IP داشت زنده است
 			hasIPs := foundInDnsx && len(ips) > 0
 			isLive := hasIPs
 
@@ -353,12 +356,10 @@ func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveRes
 			}
 
 			if existing, ok := existingMap[val]; ok {
-				// --- دارایی قدیمی ---
 				if existing.IsLive != isLive {
 					now := time.Now()
 					logChange(database.DB, existing.ID, "is_live", strconv.FormatBool(existing.IsLive), strconv.FormatBool(isLive))
 
-					// نوتیفیکیشن تغییر وضعیت: فقط اگر زنده شد خبر بده
 					if isLive {
 						telegram.SendChangeAlert(target.RootDomain, val, "is_live", "false", "true")
 					}
@@ -374,7 +375,6 @@ func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveRes
 					database.DB.Model(existing).Update("dnsx_ip", dnsxIPJSON)
 				}
 			} else {
-				// --- دارایی جدید ---
 				newAsset := models.Asset{
 					TargetID:     target.ID,
 					Value:        val,
@@ -388,7 +388,6 @@ func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveRes
 				}
 				toInsert = append(toInsert, newAsset)
 
-				// نوتیفیکیشن: فقط اگر بار اول نیست AND زنده است
 				if !isFirstRun && isLive {
 					telegram.SendNewAssetAlert(target.RootDomain, val)
 				}
@@ -405,17 +404,11 @@ func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveRes
 	log.Printf("✅ DB Sync Complete. New: %d, Status Changed: %d.\n", countNew, countUpdated)
 }
 
-func updateAssetsWithDiff(targetID uint, batchAssets []models.Asset, results map[string]HttpxResult) {
+func UpdateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 	var targetName string
 	var target models.Target
 	if err := database.DB.First(&target, targetID).Error; err == nil {
 		targetName = target.RootDomain
-	}
-
-	// ساخت مپ برای دسترسی سریع
-	assetsMap := make(map[string]*models.Asset)
-	for i := range batchAssets {
-		assetsMap[batchAssets[i].Value] = &batchAssets[i]
 	}
 
 	countUpdated := 0
@@ -423,9 +416,20 @@ func updateAssetsWithDiff(targetID uint, batchAssets []models.Asset, results map
 
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
 		for hostInput, result := range results {
-			asset, exists := assetsMap[hostInput]
-			if !exists {
-				continue
+			var asset models.Asset
+			if err := tx.Set("gorm:query_option", "FOR UPDATE").Where("value = ? AND target_id = ?", hostInput, targetID).First(&asset).Error; err != nil {
+				if err == gorm.ErrRecordNotFound {
+					asset = models.Asset{
+						TargetID: targetID, Value: hostInput, Type: "subdomain", IsNew: true, IsLive: true,
+						Technologies: "[]", HostIP: "[]", RawHttpx: "{}", DnsxIP: "[]",
+					}
+					if err := tx.Create(&asset).Error; err != nil {
+						return err
+					}
+					telegram.SendNewAssetAlert(targetName, hostInput)
+				} else {
+					continue
+				}
 			}
 
 			isFirstProbing := asset.RawHttpx == "" || asset.RawHttpx == "{}"
@@ -448,13 +452,11 @@ func updateAssetsWithDiff(targetID uint, batchAssets []models.Asset, results map
 			if err := checkAndNotify("status_code", strconv.Itoa(asset.StatusCode), strconv.Itoa(result.StatusCode)); err != nil {
 				return err
 			}
-
 			oldTitle := shortenString(asset.Title, 50)
 			newTitle := shortenString(result.Title, 50)
 			if err := checkAndNotify("title", oldTitle, newTitle); err != nil {
 				return err
 			}
-
 			if err := checkAndNotify("web_server", asset.WebServer, result.WebServer); err != nil {
 				return err
 			}
@@ -491,7 +493,7 @@ func updateAssetsWithDiff(targetID uint, batchAssets []models.Asset, results map
 			asset.RawHttpx = result.RawJSON
 			asset.ResponseTimeMs = parseResponseTime(result.ResponseTime)
 
-			if err := tx.Save(asset).Error; err != nil {
+			if err := tx.Save(&asset).Error; err != nil {
 				return err
 			}
 			countUpdated++
@@ -510,24 +512,17 @@ func updateAssetsWithDiff(targetID uint, batchAssets []models.Asset, results map
 // Helper Functions (Core Logic)
 // ==========================================
 
-// اجرای دستور با Kill Switch
 func runCommandWithKillSwitch(targetID uint, name string, args ...string) ([]byte, error) {
 	cmd := exec.Command(name, args...)
 	var outBuf bytes.Buffer
 	cmd.Stdout = &outBuf
-
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start command %s: %w", name, err)
 	}
-
 	done := make(chan error, 1)
-	go func() {
-		done <- cmd.Wait()
-	}()
-
+	go func() { done <- cmd.Wait() }()
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case err := <-done:
@@ -549,15 +544,10 @@ func checkStopRequest(targetID uint) bool {
 	if err := database.DB.Select("stop_requested").First(&t, targetID).Error; err != nil {
 		return false
 	}
-
 	if t.StopRequested {
-		log.Printf("🛑 Stop signal processed for target %d.\n", targetID)
 		now := time.Now()
 		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{
-			"status":         "PAUSED",
-			"current_phase":  "PAUSED BY USER",
-			"stop_requested": false,
-			"last_scan_at":   &now,
+			"status": "PAUSED", "current_phase": "PAUSED BY USER", "stop_requested": false, "last_scan_at": &now,
 		})
 		return true
 	}
@@ -574,10 +564,8 @@ func triggerNextModule(targetID uint, rootDomain, currentModule string) {
 		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Update("status", "READY")
 		return
 	}
-
 	var modules []string
 	json.Unmarshal([]byte(target.ScanModules), &modules)
-
 	currentIndex := -1
 	for i, m := range modules {
 		if m == currentModule {
@@ -585,7 +573,6 @@ func triggerNextModule(targetID uint, rootDomain, currentModule string) {
 			break
 		}
 	}
-
 	if currentIndex != -1 && currentIndex+1 < len(modules) {
 		nextModule := modules[currentIndex+1]
 		log.Printf("🔗 Chaining: Phase '%s' done. Starting '%s'\n", currentModule, nextModule)
@@ -595,10 +582,7 @@ func triggerNextModule(targetID uint, rootDomain, currentModule string) {
 		log.Printf("🏁 Chain Complete for %s.\n", rootDomain)
 		now := time.Now()
 		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{
-			"last_scan_at":  &now,
-			"status":        "READY",
-			"scan_count":    gorm.Expr("scan_count + 1"),
-			"current_phase": "IDLE",
+			"last_scan_at": &now, "status": "READY", "scan_count": gorm.Expr("scan_count + 1"), "current_phase": "IDLE",
 		})
 	}
 }
@@ -608,21 +592,15 @@ func logChange(tx *gorm.DB, assetID uint, field, oldVal, newVal string) error {
 		return nil
 	}
 	history := models.AssetHistory{AssetID: assetID, FieldName: field, OldValue: oldVal, NewValue: newVal, CreatedAt: time.Now()}
-	if err := tx.Create(&history).Error; err != nil {
-		return err
-	}
-	return nil
+	return tx.Create(&history).Error
 }
 
 func runDnsx(targetID uint, inputFile string) (map[string][]string, error) {
 	const outputFile = "/tmp/dnsx_output.json"
-	_, err := runCommandWithKillSwitch(targetID, "dnsx",
-		"-l", inputFile, "-json", "-o", outputFile, "-silent", "-a", "-resp", "-threads", "50",
-	)
+	_, err := runCommandWithKillSwitch(targetID, "dnsx", "-l", inputFile, "-json", "-o", outputFile, "-silent", "-a", "-resp", "-threads", "50")
 	if err != nil {
 		return nil, err
 	}
-
 	results := make(map[string][]string)
 	file, err := os.Open(outputFile)
 	if err != nil {
@@ -632,7 +610,6 @@ func runDnsx(targetID uint, inputFile string) (map[string][]string, error) {
 		return nil, err
 	}
 	defer file.Close()
-
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		var res DnsxResult
@@ -646,7 +623,6 @@ func runDnsx(targetID uint, inputFile string) (map[string][]string, error) {
 func runPassiveCollection(targetID uint, domain string) []string {
 	var wg sync.WaitGroup
 	results := make(chan string, 50000)
-
 	runTool := func(name string, args ...string) {
 		defer wg.Done()
 		output, err := runCommandWithKillSwitch(targetID, name, args...)
@@ -658,13 +634,10 @@ func runPassiveCollection(targetID uint, domain string) []string {
 			log.Printf("❌ %s error/killed: %v\n", name, err)
 		}
 	}
-
 	wg.Add(2)
 	go runTool("subfinder", "-d", domain, "-silent", "-all")
 	go runTool("assetfinder", "--subs-only", domain)
-
 	go func() { wg.Wait(); close(results) }()
-
 	uniqueMap := make(map[string]bool)
 	var finalSlice []string
 	for res := range results {

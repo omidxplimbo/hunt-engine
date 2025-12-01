@@ -35,11 +35,6 @@ func CreateTarget(c *fiber.Ctx) error {
 		modulesJSON = "[\"DISCOVERY\", \"PROBING\"]"
 	}
 
-	useAlterx := true
-	if req.UseAlterx != nil {
-		useAlterx = *req.UseAlterx
-	}
-
 	target := models.Target{
 		Name:         req.Name,
 		RootDomain:   req.RootDomain,
@@ -47,9 +42,14 @@ func CreateTarget(c *fiber.Ctx) error {
 		InScope:      true,
 		Frequency:    req.Frequency,
 		ScanModules:  modulesJSON,
-		UseAlterx:    useAlterx,
 		Status:       "SCANNING",
 		CurrentPhase: "QUEUED: STARTING...",
+	}
+
+	if req.UseAlterx != nil {
+		target.UseAlterx = *req.UseAlterx
+	} else {
+		target.UseAlterx = false
 	}
 
 	if err := database.DB.Create(&target).Error; err != nil {
@@ -120,7 +120,6 @@ func GetTargets(c *fiber.Ctx) error {
 	return c.JSON(response)
 }
 
-// 👇👇👇 این تابع گم شده بود که باعث خطا می‌شد
 // GetTargetDetails جزئیات یک تارگت خاص را برمی‌گرداند
 func GetTargetDetails(c *fiber.Ctx) error {
 	id := c.Params("id")
@@ -139,8 +138,6 @@ func GetTargetDetails(c *fiber.Ctx) error {
 }
 
 // GetTargetAssets لیست دارایی‌ها رو با فیلتر، صفحه‌بندی و کشینگ برمی‌گردونه
-// GetTargetAssets (آپدیت شده با فیلتر has_httpx)
-// GetTargetAssets (نسخه اصلاح شده برای رفع خطای JSON)
 func GetTargetAssets(c *fiber.Ctx) error {
 	id := c.Params("id")
 	targetID := uint(0)
@@ -177,10 +174,7 @@ func GetTargetAssets(c *fiber.Ctx) error {
 		db = db.Where("value LIKE ?", "%"+search+"%")
 	}
 
-	// 👇👇👇 اصلاح شرط فیلتر has_httpx
 	if hasHttpx == "true" {
-		// شرط درست برای JSONB: طول آرایه بزرگتر از 0 باشد
-		// jsonb_array_length فقط روی آرایه‌های معتبر JSON کار می‌کند
 		db = db.Where("jsonb_array_length(host_ip) > 0")
 	}
 
@@ -301,7 +295,7 @@ func UpdateTarget(c *fiber.Ctx) error {
 		target.ScanModules = string(bytes)
 	}
 
-	// 👇 اعمال تغییرات ویرایش
+	// 👇👇👇 فیکس نهایی: اعمال تغییر UseAlterx در ویرایش
 	if req.UseAlterx != nil {
 		target.UseAlterx = *req.UseAlterx
 	}
@@ -327,14 +321,12 @@ func DeleteTarget(c *fiber.Ctx) error {
 			return err
 		}
 
-		// حذف وابستگی‌ها
 		if err := tx.Exec("DELETE FROM asset_histories WHERE asset_id IN (SELECT id FROM assets WHERE target_id = ?)", id).Error; err != nil {
 			return err
 		}
 		if err := tx.Exec("DELETE FROM assets WHERE target_id = ?", id).Error; err != nil {
 			return err
 		}
-		// حذف تارگت
 		if err := tx.Unscoped().Delete(&target).Error; err != nil {
 			return err
 		}

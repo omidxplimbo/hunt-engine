@@ -31,8 +31,9 @@ The system is built on a modern, containerized microservice-like architecture:
 * **State Management:** TanStack Query (React Query) for efficient API caching and real-time syncing.
 * **Features:**
     * **Dashboard:** Live analytics and charts (Recharts).
-    * **Target Management:** Create, Edit, Delete, Stop/Resume scans.
-    * **Asset Explorer:** Advanced data grid with Filtering (Live/Dead), Search, and detailed Tech/IP columns.
+    * **Target Management:** Create, Edit, Delete, **Stop/Resume** scans.
+    * **Configurable Scans:** Toggle modules like `Alterx` per target.
+    * **Asset Explorer:** Advanced data grid with Filtering, Search, **Import/Export (JSON)**, and detailed IP columns.
     * **User Management:** Admin panel to manage team access.
 
 ## 🛠️ Arsenal (Toolchain)
@@ -40,8 +41,8 @@ The system is built on a modern, containerized microservice-like architecture:
 The platform integrates industry-standard Golang-based security tools within its isolated environment:
 
 * **Discovery:** `subfinder`, `assetfinder`
-* **Permutation/Mutation:** `alterx`
-* **Validation/Resolution:** `dnsx` (with fixed resolvers)
+* **Permutation/Mutation:** `alterx` (Optional per target)
+* **Validation/Resolution:** `dnsx` (w/ fixed resolvers)
 * **Probing:** `httpx` (Rich JSON output, WAF/CDN detection)
 * **Deep Scan:** `amass` (Integrated via Docker)
 * **Future Integration:** `gau`, `katana`, `ffuf` (Ready in Dockerfile)
@@ -53,35 +54,30 @@ The platform integrates industry-standard Golang-based security tools within its
 We are following a multi-phase development roadmap.
 
 ### ✅ Phase 1: Deep Recon & Discovery Engine (COMPLETED)
-**Goal:** Build the core infrastructure and the initial discovery pipeline to find hidden and fresh assets.
-* [x] Established full Docker/Go/Postgres/Redis infrastructure.
+**Goal:** Build the core infrastructure and the initial discovery pipeline.
 * [x] **Smart Recon Pipeline:** Implemented a full chain (Passive -> Mutation -> Validation).
 * [x] **History Injection:** Re-scans previously dead assets to detect resurrections.
 * [x] **Smart Storage Logic:** "Upsert" logic to track live/dead status.
-* [x] **Data Retrieval APIs:** Implemented paginated/filtered APIs.
 
 ### ✅ Phase 2: Probing & Fingerprinting (COMPLETED)
 **Goal:** Extract detailed technical intelligence from live assets.
 * [x] Integrated `httpx` with rich JSON output parsing.
 * [x] **Rich Data Model:** Storing Web Servers, Technologies, IPs, CNAMEs.
-* [x] **Batch Processing:** Dynamic batching to handle massive datasets without OOM errors.
-* [x] **Diff Engine:** Detects and logs changes in *any* field (Status, Title, Tech, IP).
+* [x] **Batch Processing:** Dynamic batching to handle massive datasets.
+* [x] **Diff Engine:** Detects and logs changes in *any* field.
 
 ### ✅ Phase 2.5: Automation & Continuous Monitoring (COMPLETED)
 **Goal:** Turn the scanner into a 24/7 autonomous monitoring system.
-* [x] **Asset History:** Keeps a detailed audit log of what changed and when.
-* [x] **Notification System:** Zero-loss Telegram alerting with buffered queues.
-* [x] **Scheduler:** Automated periodic scanning based on per-target frequency.
-* [x] **Orchestrator:** Smart chaining that automatically triggers Phase 2 after Phase 1.
-* [x] **State Locking:** Prevents overlapping scans on the same target.
-* [x] **Pause/Resume:** Full control over running scans with immediate kill switch.
+* [x] **Notification System:** Zero-loss Telegram alerting.
+* [x] **Scheduler:** Automated periodic scanning.
+* [x] **Control:** Full Stop/Resume/Pause capabilities with Kill Switch.
 
 ### ✅ Phase 3: Frontend Dashboard & Security (COMPLETED)
 **Goal:** A professional GUI to manage targets and secure the platform.
-* [x] **Authentication:** Secure Login/Logout with JWT and Protected Routes.
-* [x] **User Management:** Admin interface to Add/Edit/Delete users.
-* [x] **Target Management:** Full CRUD + Stop/Resume controls.
-* [x] **Asset Explorer:** Advanced data grid with **Filtering** (Live/Dead), **Search**, and Horizontal Scroll.
+* [x] **Authentication:** Secure Login/Logout with JWT.
+* [x] **User Management:** Admin interface.
+* [x] **Target Management:** Full CRUD + Configurable Modules (Alterx Toggle).
+* [x] **Data Management:** Import/Export JSON data.
 * [x] **Analytics:** Graphical dashboard with Stat Cards and Charts.
 
 ---

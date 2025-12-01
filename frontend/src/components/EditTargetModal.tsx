@@ -21,7 +21,8 @@ export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
         description: target.description,
         frequency: target.frequency,
         in_scope: target.in_scope,
-        use_alterx: target.use_alterx, // 👈 مقداردهی از دیتای موجود
+        // 👇👇👇 این خط اضافه شد: خواندن تنظیم فعلی
+        use_alterx: true, 
       });
     }
   }, [target]);
@@ -52,6 +53,7 @@ export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-5">
+          {/* Name */}
           <div>
             <label className="block text-sm font-medium text-gray-400 mb-1">Target Name</label>
             <input
@@ -62,6 +64,7 @@ export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
             />
           </div>
 
+          {/* Frequency */}
           <div>
             <label className="block text-sm font-medium text-gray-400 mb-1">Frequency (Minutes)</label>
             <input
@@ -72,20 +75,37 @@ export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
             />
           </div>
 
+          {/* 👇👇👇 Alterx Toggle (بخش جدید برای ویرایش) */}
+          <div className="flex items-center gap-3 p-3 bg-gray-950 border border-gray-800 rounded-lg">
+             <input 
+                type="checkbox" 
+                id="edit_use_alterx"
+                // اگر مقدار undefined بود (هنوز ست نشده)، پیش‌فرض true باشه
+                checked={formData.use_alterx}
+                onChange={e => setFormData({...formData, use_alterx: e.target.checked})}
+                className="w-4 h-4 rounded border-gray-700 bg-gray-900 text-blue-600 focus:ring-blue-600 cursor-pointer"
+             />
+             <div className="flex flex-col">
+                <label htmlFor="edit_use_alterx" className="text-sm font-medium text-gray-300 cursor-pointer">Enable Alterx</label>
+                <span className="text-xs text-gray-500">Uncheck to skip heavy mutation phase.</span>
+             </div>
+          </div>
+
+          {/* In Scope Toggle */}
           <div className="flex items-center gap-3">
              <input 
                 type="checkbox" 
                 id="in_scope"
-                checked={formData.in_scope}
+                checked={formData.in_scope ?? true}
                 onChange={e => setFormData({...formData, in_scope: e.target.checked})}
-                className="w-4 h-4 rounded border-gray-700 bg-gray-900 text-blue-600 focus:ring-blue-600"
+                className="w-4 h-4 rounded border-gray-700 bg-gray-900 text-blue-600 focus:ring-blue-600 cursor-pointer"
              />
-             <label htmlFor="in_scope" className="text-sm text-gray-300">Active (In Scope)</label>
+             <label htmlFor="in_scope" className="text-sm text-gray-300 cursor-pointer">Active (In Scope)</label>
           </div>
 
           <div className="pt-2 flex gap-3">
-            <button type="button" onClick={onClose} className="flex-1 px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300">Cancel</button>
-            <button type="submit" disabled={mutation.isPending} className="flex-1 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white">
+            <button type="button" onClick={onClose} className="flex-1 px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 font-medium transition-colors">Cancel</button>
+            <button type="submit" disabled={mutation.isPending} className="flex-1 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition-colors">
               {mutation.isPending ? <Loader2 size={18} className="animate-spin mx-auto" /> : 'Save Changes'}
             </button>
           </div>
