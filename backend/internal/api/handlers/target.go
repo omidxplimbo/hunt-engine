@@ -77,15 +77,26 @@ func CreateTarget(c *fiber.Ctx) error {
 }
 
 // GetTargets لیست تمام تارگت‌ها را به صورت صفحه‌بندی شده برمی‌گردونه (با کش ۵ ثانیه)
+// GetTargets لیست تمام تارگت‌ها را به صورت صفحه‌بندی شده برمی‌گردونه (با کش ۵ ثانیه)
 func GetTargets(c *fiber.Ctx) error {
-	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit := 50
 	if l, err := strconv.Atoi(c.Query("limit")); err == nil && l > 0 {
 		limit = l
 	}
-	offset := (page - 1) * limit
 
-	cacheKey := fmt.Sprintf("targets:list:p:%d:l:%d", page, limit)
+	// 👇 اصلاح: خواندن offset از کوئری (اولویت با offset است)
+	offset := 0
+	if o, err := strconv.Atoi(c.Query("offset")); err == nil && o >= 0 {
+		offset = o
+	} else {
+		// اگر offset نبود، از page حساب کن (Fallback)
+		page, _ := strconv.Atoi(c.Query("page", "1"))
+		offset = (page - 1) * limit
+	}
+
+	// 👇 استفاده از offset در کلید کش
+	cacheKey := fmt.Sprintf("targets:list:o:%d:l:%d", offset, limit)
+
 	var cachedResponse fiber.Map
 	if cache.GetCache(cacheKey, &cachedResponse) {
 		c.Set("X-Cache", "HIT")
@@ -93,6 +104,7 @@ func GetTargets(c *fiber.Ctx) error {
 	}
 
 	var targets []models.Target
+	// استفاده مستقیم از Limit و Offset محاسبه شده
 	result := database.DB.Order("created_at desc").Limit(limit).Offset(offset).Find(&targets)
 	if result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": result.Error.Error()})
@@ -138,24 +150,34 @@ func GetTargetDetails(c *fiber.Ctx) error {
 }
 
 // GetTargetAssets لیست دارایی‌ها رو با فیلتر، صفحه‌بندی و کشینگ برمی‌گردونه
+// GetTargetAssets لیست دارایی‌ها رو با فیلتر، صفحه‌بندی و کشینگ برمی‌گردونه
 func GetTargetAssets(c *fiber.Ctx) error {
 	id := c.Params("id")
 	targetID := uint(0)
 	fmt.Sscanf(id, "%d", &targetID)
 
-	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit := utils.DefaultLimit
 	if l, err := strconv.Atoi(c.Query("limit")); err == nil && l > 0 {
 		limit = l
 	}
-	offset := (page - 1) * limit
+
+	// 👇 اصلاح: خواندن offset از کوئری
+	offset := 0
+	if o, err := strconv.Atoi(c.Query("offset")); err == nil && o >= 0 {
+		offset = o
+	} else {
+		page, _ := strconv.Atoi(c.Query("page", "1"))
+		offset = (page - 1) * limit
+	}
 
 	isLive := c.Query("is_live")
 	isNew := c.Query("is_new")
 	search := c.Query("search")
 	hasHttpx := c.Query("has_httpx")
 
-	cacheKey := cache.GenerateAssetKey(targetID, page, limit, fmt.Sprintf("l:%s|n:%s|s:%s|h:%s", isLive, isNew, search, hasHttpx))
+	// 👇 استفاده از offset در تولید کلید کش
+	cacheKey := cache.GenerateAssetKey(targetID, offset, limit, fmt.Sprintf("l:%s|n:%s|s:%s|h:%s", isLive, isNew, search, hasHttpx))
+
 	var cachedResponse fiber.Map
 	if cache.GetCache(cacheKey, &cachedResponse) {
 		c.Set("X-Cache", "HIT")
@@ -173,7 +195,6 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	if search != "" {
 		db = db.Where("value LIKE ?", "%"+search+"%")
 	}
-
 	if hasHttpx == "true" {
 		db = db.Where("jsonb_array_length(host_ip) > 0")
 	}
@@ -184,6 +205,7 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	}
 
 	var assets []models.Asset
+	// استفاده مستقیم از offset محاسبه شده
 	result := db.Order("value asc").Limit(limit).Offset(offset).Find(&assets)
 
 	if result.Error != nil {

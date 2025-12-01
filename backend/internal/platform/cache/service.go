@@ -60,7 +60,10 @@ func SetCacheWithTTL(key string, data interface{}, ttl time.Duration) {
 }
 
 // ... (GenerateAssetKey هم بماند) ...
-func GenerateAssetKey(targetID uint, page, limit int, filters string) string {
+// GenerateAssetKey کلید منحصر به فرد برای کش لیست دارایی‌ها می‌سازه
+// اصلاح شده: استفاده از offset به جای page برای دقت بالاتر
+func GenerateAssetKey(targetID uint, offset, limit int, filters string) string {
 	version := GetTargetVersion(targetID)
-	return fmt.Sprintf("assets:tid:%d:v:%d:p:%d:l:%d:f:%s", targetID, version, page, limit, filters)
+	// تغییر p (page) به o (offset)
+	return fmt.Sprintf("assets:tid:%d:v:%d:o:%d:l:%d:f:%s", targetID, version, offset, limit, filters)
 }
