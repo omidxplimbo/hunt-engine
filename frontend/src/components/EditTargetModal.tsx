@@ -21,6 +21,7 @@ export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
         description: target.description,
         frequency: target.frequency,
         in_scope: target.in_scope,
+        use_alterx: target.use_alterx, // 👈 مقداردهی از دیتای موجود
       });
     }
   }, [target]);

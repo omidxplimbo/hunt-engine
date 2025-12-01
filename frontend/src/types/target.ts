@@ -10,6 +10,7 @@ export interface Target {
   last_scan_at?: string;
   status: string; // READY, SCANNING
   current_phase?: string; // 👇 فیلد جدید (PHASE 1: ..., PHASE 2: ...)
+  use_alterx: boolean;
 }
 
 export interface TargetResponse {

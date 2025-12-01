@@ -11,7 +11,8 @@ type CreateTargetRequest struct {
 
 	// 👇👇👇 فیلدهای جدید
 	Frequency int      `json:"frequency"` // 0 یعنی دستی، >0 یعنی اتوماتیک (دقیقه)
-	Modules   []string `json:"modules"`   // ["DISCOVERY", "PROBING"]
+	UseAlterx *bool    `json:"use_alterx"`
+	Modules   []string `json:"modules"` // ["DISCOVERY", "PROBING"]
 }
 
 // UpdateTargetRequest برای ویرایش تنظیمات تارگت
@@ -21,4 +22,5 @@ type UpdateTargetRequest struct {
 	Frequency   *int     `json:"frequency"` // پوینتر: اگر نال بود یعنی تغییر نده
 	InScope     *bool    `json:"in_scope"`  // پوینتر: برای تشخیص false واقعی
 	Modules     []string `json:"modules"`
+	UseAlterx   *bool    `json:"use_alterx"`
 }

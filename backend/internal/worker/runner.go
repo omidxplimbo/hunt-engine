@@ -138,6 +138,13 @@ func processJobDispatcher(payload string) {
 func runDiscoveryPhase(targetID uint, rootDomain string) {
 	log.Printf("🚀 Starting PHASE 1 (DISCOVERY) for: %s (ID: %d)\n", rootDomain, targetID)
 
+	// 👇 ابتدا اطلاعات تارگت را می‌گیریم تا کانفیگ را چک کنیم
+	var targetConf models.Target
+	if err := database.DB.First(&targetConf, targetID).Error; err != nil {
+		log.Printf("❌ Failed to fetch target config: %v\n", err)
+		return
+	}
+
 	if checkStopRequest(targetID) {
 		return
 	}
@@ -151,19 +158,26 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	updateTargetPhase(targetID, "PHASE 1: PASSIVE ENUM")
 	passiveResults := runPassiveCollection(targetID, rootDomain)
 
-	// 2. Mutation
-	if checkStopRequest(targetID) {
-		return
-	}
-	updateTargetPhase(targetID, "PHASE 1: MUTATION")
-	writeSliceToFile(allFoundFile, passiveResults)
-	mutatedResults, err := runAlterx(targetID, allFoundFile, rootDomain)
-	if err != nil {
-		if err.Error() == "process killed by user request" {
+	// 2. Mutation (Alterx) - 👇 شرط جدید
+	var mutatedResults []string
+	if targetConf.UseAlterx {
+		if checkStopRequest(targetID) {
 			return
 		}
-		log.Printf("❌ Alterx failed: %v. Proceeding without mutations.\n", err)
-		mutatedResults = []string{}
+		updateTargetPhase(targetID, "PHASE 1: MUTATION (ALTERX)")
+		writeSliceToFile(allFoundFile, passiveResults)
+
+		var err error
+		mutatedResults, err = runAlterx(targetID, allFoundFile, rootDomain)
+		if err != nil {
+			if err.Error() == "process killed by user request" {
+				return
+			}
+			log.Printf("❌ Alterx failed: %v.\n", err)
+			mutatedResults = []string{}
+		}
+	} else {
+		log.Println("⏩ Skipping Alterx (Mutation) based on target config.")
 	}
 
 	// 3. History Injection

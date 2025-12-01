@@ -35,6 +35,11 @@ func CreateTarget(c *fiber.Ctx) error {
 		modulesJSON = "[\"DISCOVERY\", \"PROBING\"]"
 	}
 
+	useAlterx := true
+	if req.UseAlterx != nil {
+		useAlterx = *req.UseAlterx
+	}
+
 	target := models.Target{
 		Name:         req.Name,
 		RootDomain:   req.RootDomain,
@@ -42,6 +47,7 @@ func CreateTarget(c *fiber.Ctx) error {
 		InScope:      true,
 		Frequency:    req.Frequency,
 		ScanModules:  modulesJSON,
+		UseAlterx:    useAlterx,
 		Status:       "SCANNING",
 		CurrentPhase: "QUEUED: STARTING...",
 	}
@@ -134,6 +140,7 @@ func GetTargetDetails(c *fiber.Ctx) error {
 
 // GetTargetAssets لیست دارایی‌ها رو با فیلتر، صفحه‌بندی و کشینگ برمی‌گردونه
 // GetTargetAssets (آپدیت شده با فیلتر has_httpx)
+// GetTargetAssets (نسخه اصلاح شده برای رفع خطای JSON)
 func GetTargetAssets(c *fiber.Ctx) error {
 	id := c.Params("id")
 	targetID := uint(0)
@@ -149,13 +156,9 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	isLive := c.Query("is_live")
 	isNew := c.Query("is_new")
 	search := c.Query("search")
-	// 👇 پارامتر جدید
 	hasHttpx := c.Query("has_httpx")
 
-	// کلید کش را هم آپدیت می‌کنیم
-	filtersKey := fmt.Sprintf("live:%s|new:%s|s:%s|httpx:%s", isLive, isNew, search, hasHttpx)
-	cacheKey := cache.GenerateAssetKey(targetID, page, limit, filtersKey)
-
+	cacheKey := cache.GenerateAssetKey(targetID, page, limit, fmt.Sprintf("l:%s|n:%s|s:%s|h:%s", isLive, isNew, search, hasHttpx))
 	var cachedResponse fiber.Map
 	if cache.GetCache(cacheKey, &cachedResponse) {
 		c.Set("X-Cache", "HIT")
@@ -173,9 +176,12 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	if search != "" {
 		db = db.Where("value LIKE ?", "%"+search+"%")
 	}
-	// 👇 شرط جدید: چک می‌کنیم که host_ip پر باشد (یعنی [] یا خالی نباشد)
+
+	// 👇👇👇 اصلاح شرط فیلتر has_httpx
 	if hasHttpx == "true" {
-		db = db.Where("host_ip != '[]' AND host_ip != ''")
+		// شرط درست برای JSONB: طول آرایه بزرگتر از 0 باشد
+		// jsonb_array_length فقط روی آرایه‌های معتبر JSON کار می‌کند
+		db = db.Where("jsonb_array_length(host_ip) > 0")
 	}
 
 	var totalCount int64
@@ -185,6 +191,7 @@ func GetTargetAssets(c *fiber.Ctx) error {
 
 	var assets []models.Asset
 	result := db.Order("value asc").Limit(limit).Offset(offset).Find(&assets)
+
 	if result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": result.Error.Error()})
 	}
@@ -292,6 +299,11 @@ func UpdateTarget(c *fiber.Ctx) error {
 	if len(req.Modules) > 0 {
 		bytes, _ := json.Marshal(req.Modules)
 		target.ScanModules = string(bytes)
+	}
+
+	// 👇 اعمال تغییرات ویرایش
+	if req.UseAlterx != nil {
+		target.UseAlterx = *req.UseAlterx
 	}
 
 	if err := database.DB.Save(&target).Error; err != nil {

@@ -21,6 +21,7 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
     description: '',
     frequency: 720, // پیش‌فرض ۱۲ ساعت
     modules: ['DISCOVERY', 'PROBING'],
+    use_alterx: true, // 👈 پیش‌فرض روشن
   });
 
   // استفاده از React Query Mutation برای ارسال درخواست
@@ -37,6 +38,8 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
         description: '',
         frequency: 720,
         modules: ['DISCOVERY', 'PROBING'],
+        use_alterx: true, // 👈 پیش‌فرض روشن
+
       });
     },
   });
@@ -112,6 +115,20 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
             <p className="text-xs text-gray-500 mt-1">Set 0 to disable auto-scanning.</p>
           </div>
 
+          {/* Alterx Toggle */}
+          <div className="flex items-center gap-3 p-3 bg-gray-950 border border-gray-800 rounded-lg">
+             <input 
+                type="checkbox" 
+                id="use_alterx"
+                checked={formData.use_alterx}
+                onChange={e => setFormData({...formData, use_alterx: e.target.checked})}
+                className="w-4 h-4 rounded border-gray-700 bg-gray-900 text-blue-600 focus:ring-blue-600 cursor-pointer"
+             />
+             <div className="flex flex-col">
+                <label htmlFor="use_alterx" className="text-sm font-medium text-gray-300 cursor-pointer">Enable Alterx (Mutation)</label>
+                <span className="text-xs text-gray-500">Generates permutations to find hidden subdomains (Slower).</span>
+             </div>
+          </div>
           {/* Modules */}
           <div>
             <label className="block text-sm font-medium text-gray-400 mb-2">Active Modules</label>
