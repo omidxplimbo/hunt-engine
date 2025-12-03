@@ -155,8 +155,6 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	targetID := uint(0)
 	fmt.Sscanf(id, "%d", &targetID)
 
-	// Pagination
-	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit := utils.DefaultLimit
 	if l, err := strconv.Atoi(c.Query("limit")); err == nil && l > 0 {
 		limit = l
@@ -167,6 +165,7 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	if o, err := strconv.Atoi(c.Query("offset")); err == nil && o >= 0 {
 		offset = o
 	} else {
+		page, _ := strconv.Atoi(c.Query("page", "1"))
 		offset = (page - 1) * limit
 	}
 
@@ -175,12 +174,13 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	isNew := c.Query("is_new")
 	search := c.Query("search")
 	hasHttpx := c.Query("has_httpx")
+	// 👇 پارامتر جدید
+	dnsOnly := c.Query("dns_only")
 
-	// 👇👇👇 Sorting Params
-	sortBy := c.Query("sort_by", "value") // پیش‌فرض: مرتب‌سازی بر اساس نام دامنه
-	order := c.Query("order", "asc")      // پیش‌فرض: صعودی
+	// Sorting Params
+	sortBy := c.Query("sort_by", "value")
+	order := c.Query("order", "asc")
 
-	// اعتبارسنجی فیلد مرتب‌سازی (برای جلوگیری از SQL Injection)
 	validSortFields := map[string]bool{
 		"value": true, "status_code": true, "content_length": true, "title": true, "created_at": true,
 	}
@@ -192,8 +192,9 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	}
 	orderClause := fmt.Sprintf("%s %s", sortBy, order)
 
-	// Cache Key Update
-	cacheKey := cache.GenerateAssetKey(targetID, offset, limit, fmt.Sprintf("l:%s|n:%s|s:%s|h:%s|sb:%s|o:%s", isLive, isNew, search, hasHttpx, sortBy, order))
+	// 👇 آپدیت کلید کش با پارامتر dnsOnly
+	filtersKey := fmt.Sprintf("l:%s|n:%s|s:%s|h:%s|d:%s|sb:%s|o:%s", isLive, isNew, search, hasHttpx, dnsOnly, sortBy, order)
+	cacheKey := cache.GenerateAssetKey(targetID, offset, limit, filtersKey)
 
 	var cachedResponse fiber.Map
 	if cache.GetCache(cacheKey, &cachedResponse) {
@@ -201,7 +202,6 @@ func GetTargetAssets(c *fiber.Ctx) error {
 		return c.JSON(cachedResponse)
 	}
 
-	// DB Query
 	db := database.DB.Model(&models.Asset{}).Where("target_id = ?", id)
 
 	if isLive != "" {
@@ -213,8 +213,16 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	if search != "" {
 		db = db.Where("value LIKE ?", "%"+search+"%")
 	}
+
 	if hasHttpx == "true" {
+		// شرط: host_ip (نتیجه httpx) خالی نباشد
 		db = db.Where("jsonb_array_length(host_ip) > 0")
+	}
+
+	// 👇👇👇 شرط جدید: DNS Only
+	// یعنی: dnsx_ip داشته باشد ولی host_ip نداشته باشد
+	if dnsOnly == "true" {
+		db = db.Where("jsonb_array_length(dnsx_ip) > 0 AND jsonb_array_length(host_ip) = 0")
 	}
 
 	var totalCount int64
@@ -223,7 +231,6 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	}
 
 	var assets []models.Asset
-	// 👇 اعمال مرتب‌سازی پویا
 	result := db.Order(orderClause).Limit(limit).Offset(offset).Find(&assets)
 
 	if result.Error != nil {

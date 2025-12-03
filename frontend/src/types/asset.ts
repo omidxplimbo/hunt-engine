@@ -33,6 +33,7 @@ export interface AssetResponse {
 export interface AssetFilters {
   is_live?: boolean;
   is_new?: boolean;
-  search?: string; // 👈 فیلد جدید
-  has_httpx?: boolean; // 👈 فیلد جدید
+  search?: string;
+  has_httpx?: boolean;
+  dns_only?: boolean; // 👈 فیلد جدید
 }

@@ -58,18 +58,20 @@ export const getTargetAssets = async (
   page = 1, 
   limit = 50,
   filters?: AssetFilters,
-  // 👇 پارامترهای جدید
   sortBy: string = 'value',
   order: 'asc' | 'desc' = 'asc'
 ) => {
   const offset = (page - 1) * limit;
   
-  const params: any = { limit, offset, sort_by: sortBy, order }; // 👈 ارسال به سرور
+  const params: any = { limit, offset, sort_by: sortBy, order };
   
   if (filters?.is_live !== undefined) params.is_live = filters.is_live;
   if (filters?.is_new !== undefined) params.is_new = filters.is_new;
   if (filters?.search) params.search = filters.search;
   if (filters?.has_httpx !== undefined) params.has_httpx = filters.has_httpx;
+  
+  // 👇 ارسال پارامتر جدید به بک‌اند
+  if (filters?.dns_only !== undefined) params.dns_only = filters.dns_only;
 
   const response = await apiClient.get<AssetResponse>(`/targets/${targetId}/assets`, {
     params,
