@@ -16,42 +16,70 @@ const Settings = () => {
   });
 
   return (
-    <div>
-      <div className="flex justify-between items-center mb-8">
-        <h1 className="text-2xl font-bold text-white">Settings</h1>
-        <button onClick={() => { setEditingUser(null); setIsModalOpen(true); }} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2">
-          <Plus size={18} /> Add User
+    <div className="space-y-6">
+      <div className="flex justify-between items-center mb-8 border-b border-hack-border/50 pb-4">
+        <div>
+          <h1 className="hack-title text-2xl">SYSTEM CONFIGURATION</h1>
+          <p className="text-hack-dim text-xs font-mono mt-1 tracking-wider">Access Control & Parameters</p>
+        </div>
+        <button onClick={() => { setEditingUser(null); setIsModalOpen(true); }} className="hack-btn">
+          <Plus size={16} /> New Admin
         </button>
       </div>
 
-      <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden">
-        <div className="p-4 border-b border-gray-800 font-semibold text-gray-300 flex items-center gap-2">
-            <Shield size={18} className="text-blue-500"/> User Management
+      <div className="hack-box overflow-hidden relative">
+        {/* Header Decor */}
+        <div className="p-3 border-b border-hack-border bg-black/40 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-hack-primary font-mono text-sm tracking-wider">
+                <Shield size={16} />
+                <span className="uppercase">User_Privileges_DB</span>
+            </div>
+            <div className="flex gap-1">
+                <div className="w-2 h-2 bg-hack-danger rounded-full animate-pulse"></div>
+                <div className="w-2 h-2 bg-hack-warning rounded-full"></div>
+                <div className="w-2 h-2 bg-hack-primary rounded-full"></div>
+            </div>
         </div>
+
         <table className="w-full text-left">
           <thead>
-            <tr className="bg-gray-800/50 text-gray-400 text-sm uppercase">
-              <th className="px-6 py-4">Username</th>
-              <th className="px-6 py-4">Role</th>
-              <th className="px-6 py-4">Created At</th>
-              <th className="px-6 py-4 text-right">Actions</th>
+            <tr className="bg-hack-bg/50 text-hack-dim text-[10px] uppercase tracking-[0.2em] border-b border-hack-border">
+              <th className="px-6 py-4 font-normal">Identity</th>
+              <th className="px-6 py-4 font-normal">Clearance Level</th>
+              <th className="px-6 py-4 font-normal">Registration Date</th>
+              <th className="px-6 py-4 font-normal text-right">Override</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-800">
-            {isLoading ? <tr><td className="p-4 text-center" colSpan={4}>Loading...</td></tr> : 
+          <tbody className="divide-y divide-hack-border/30">
+            {isLoading ? 
+             <tr><td className="p-8 text-center font-mono text-hack-dim animate-pulse" colSpan={4}> DECRYPTING USER DATA...</td></tr> : 
              data?.data.map((user) => (
-              <tr key={user.id} className="hover:bg-gray-800/30">
-                <td className="px-6 py-4 text-white font-medium flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-full bg-gray-800 flex items-center justify-center text-gray-400"><User size={16}/></div>
-                    {user.username}
+              <tr key={user.id} className="hover:bg-hack-primary/5 transition-colors group font-mono text-sm">
+                <td className="px-6 py-4 text-white">
+                    <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 bg-black border border-hack-border flex items-center justify-center text-hack-dim group-hover:text-hack-primary group-hover:border-hack-primary/50 transition-all">
+                            <User size={14}/>
+                        </div>
+                        <span className="tracking-wide">{user.username}</span>
+                    </div>
                 </td>
-                <td className="px-6 py-4 text-gray-300">
-                    <span className="bg-blue-900/30 text-blue-300 px-2 py-0.5 rounded text-xs border border-blue-800">{user.role}</span>
+                <td className="px-6 py-4">
+                    <span className={`hack-badge ${user.role === 'admin' ? 'border-hack-primary text-hack-primary bg-hack-primary/10' : 'border-hack-dim text-hack-dim'}`}>
+                        {user.role}
+                    </span>
                 </td>
-                <td className="px-6 py-4 text-gray-400 text-sm">{new Date(user.created_at).toLocaleDateString()}</td>
-                <td className="px-6 py-4 text-right flex justify-end gap-3">
-                  <button onClick={() => { setEditingUser(user); setIsModalOpen(true); }} className="text-gray-400 hover:text-white"><Edit2 size={18} /></button>
-                  <button onClick={() => { if(confirm('Delete user?')) deleteMutation.mutate(user.id) }} className="text-red-400 hover:text-red-300"><Trash2 size={18} /></button>
+                <td className="px-6 py-4 text-hack-dim text-xs tracking-wider">
+                    {new Date(user.created_at).toLocaleDateString()}
+                </td>
+                <td className="px-6 py-4 text-right">
+                  <div className="flex justify-end gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
+                    <button onClick={() => { setEditingUser(user); setIsModalOpen(true); }} className="p-2 hover:text-hack-primary transition-colors" title="MODIFY">
+                        <Edit2 size={16} />
+                    </button>
+                    <button onClick={() => { if(confirm('>> EXECUTE DELETION PROTOCOL?')) deleteMutation.mutate(user.id) }} className="p-2 hover:text-hack-danger transition-colors" title="TERMINATE">
+                        <Trash2 size={16} />
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}

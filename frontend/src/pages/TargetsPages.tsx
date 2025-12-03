@@ -1,9 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-// 👇 ایمپورت توابع جدید
 import { getTargets, deleteTarget, stopTarget, startDiscovery } from '../api/targets';
-// 👇 ایمپورت آیکون‌های جدید (Square, Play)
-import { Plus, Search, Globe, Clock, Database, Trash2, Edit2, Activity, Square, Play } from 'lucide-react';
+import { Plus, Globe, Clock, Database, Trash2, Edit2, Activity, Square, Play, Terminal } from 'lucide-react';
 import { CreateTargetModal } from '../components/CreateTargetModal';
 import { EditTargetModal } from '../components/EditTargetModal';
 import { Link } from 'react-router-dom';
@@ -17,206 +15,154 @@ const TargetsPage = () => {
   const { data, isLoading, isError } = useQuery({
     queryKey: ['targets'],
     queryFn: () => getTargets(1, 50),
-    refetchInterval: 2000, // رفرش سریع برای دیدن تغییر وضعیت
+    refetchInterval: 2000,
   });
-
-  // --- Mutations ---
 
   const deleteMutation = useMutation({
     mutationFn: deleteTarget,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['targets'] }),
   });
 
-  // 👇 توقف اسکن
   const stopMutation = useMutation({
     mutationFn: stopTarget,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['targets'] }),
   });
 
-  // 👇 ادامه اسکن (شروع مجدد)
   const resumeMutation = useMutation({
     mutationFn: startDiscovery,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['targets'] }),
   });
 
-  // --- Handlers ---
-
   const handleDelete = (id: number) => {
-    if (confirm('Are you sure? This will delete ALL assets and history for this target.')) {
+    if (confirm('>> WARNING: DELETE OPERATION IS IRREVERSIBLE. CONFIRM?')) {
       deleteMutation.mutate(id);
     }
   };
 
-  const handleStop = (id: number) => {
-    // نیازی به confirm نیست، چون توقف غیرمخرب است
-    stopMutation.mutate(id);
-  };
+  const handleStop = (id: number) => stopMutation.mutate(id);
+  const handleResume = (id: number) => resumeMutation.mutate(id);
 
-  const handleResume = (id: number) => {
-    resumeMutation.mutate(id);
-  };
-
-  if (isLoading) return <div className="p-8 text-gray-400">Loading targets...</div>;
-  if (isError) return <div className="p-8 text-red-500">Error loading targets!</div>;
+  if (isLoading) return <div className="p-8 text-hack-dim font-mono animate-pulse"> Initializing target list...</div>;
+  if (isError) return <div className="p-8 text-hack-danger font-mono"> ERROR: Connection lost.</div>;
 
   return (
     <div>
-      <div className="flex justify-between items-center mb-8">
+      <div className="flex justify-between items-center mb-8 border-b border-hack-border/50 pb-4">
         <div>
-          <h1 className="text-2xl font-bold text-white">Targets</h1>
-          <p className="text-gray-400 mt-1">Manage your scope and hunting objectives</p>
+          <h1 className="hack-title text-2xl">ACTIVE TARGETS</h1>
+          <p className="text-hack-dim text-xs font-mono mt-1 tracking-wider">Scope Management & Operations</p>
         </div>
-        <button 
-          onClick={() => setIsCreateOpen(true)}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors font-medium"
-        >
-          <Plus size={18} />
-          Add Target
+        <button onClick={() => setIsCreateOpen(true)} className="hack-btn">
+          <Plus size={16} /> New Target
         </button>
       </div>
 
-      {/* Search Bar */}
-      <div className="bg-gray-900 p-4 rounded-lg border border-gray-800 mb-6 flex gap-4">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
-          <input 
-            type="text" 
-            placeholder="Search targets..." 
-            className="w-full bg-gray-950 border border-gray-800 text-gray-200 pl-10 pr-4 py-2 rounded-md focus:outline-none focus:border-blue-500"
-          />
-        </div>
+      <div className="hack-box p-1 mb-6 flex items-center">
+        <div className="px-3 text-hack-primary"><Terminal size={18} /></div>
+        <input 
+          type="text" 
+          placeholder="QUERY TARGET_DB..." 
+          className="bg-transparent border-none text-hack-text w-full focus:ring-0 placeholder-hack-dim/50 font-mono text-sm py-2"
+        />
+        <div className="px-4 text-hack-dim text-xs animate-pulse">_</div>
       </div>
 
-      {/* Table */}
-      <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden">
+      <div className="hack-box overflow-hidden">
         <table className="w-full text-left">
           <thead>
-            <tr className="bg-gray-800/50 text-gray-400 text-sm uppercase">
-              <th className="px-6 py-4 font-semibold">Target Name</th>
-              <th className="px-6 py-4 font-semibold">Assets</th>
-              <th className="px-6 py-4 font-semibold">Last Scan</th>
-              <th className="px-6 py-4 font-semibold">Status / Phase</th>
-              <th className="px-6 py-4 font-semibold text-right">Actions</th>
+            <tr className="bg-black/40 text-hack-dim text-xs uppercase tracking-widest border-b border-hack-border">
+              <th className="px-6 py-4 font-normal">Target Identity</th>
+              <th className="px-6 py-4 font-normal">Intelligence</th>
+              <th className="px-6 py-4 font-normal">Last Sweep</th>
+              <th className="px-6 py-4 font-normal">Operational Status</th>
+              <th className="px-6 py-4 font-normal text-right">Command</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-800">
+          <tbody className="divide-y divide-hack-border/30">
             {data?.data.map((target) => (
-              <tr key={target.id} className="hover:bg-gray-800/30 transition-colors">
-                {/* Name */}
+              <tr key={target.id} className="hover:bg-hack-primary/5 transition-colors group">
                 <td className="px-6 py-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-gray-800 flex items-center justify-center text-blue-500">
+                  <div className="flex items-center gap-4">
+                    <div className="w-10 h-10 border border-hack-primary/30 bg-black flex items-center justify-center text-hack-primary group-hover:shadow-neon transition-all">
                       <Globe size={20} />
                     </div>
                     <div>
-                      <div className="font-medium text-white">{target.name}</div>
-                      <div className="text-sm text-gray-500">{target.root_domain}</div>
+                      <div className="font-bold text-white font-mono tracking-wide">{target.name}</div>
+                      <div className="text-xs text-hack-dim font-mono">{target.root_domain}</div>
                     </div>
                   </div>
                 </td>
 
-                {/* Assets Count */}
                 <td className="px-6 py-4">
-                  <div className="flex items-center gap-2 text-gray-300">
-                    <Database size={16} className="text-gray-500" />
-                    <span className="font-mono text-lg">{target.asset_count.toLocaleString()}</span>
+                  <div className="flex items-center gap-2 font-mono text-hack-text">
+                    <Database size={14} className="text-hack-dim" />
+                    <span className="text-lg">{target.asset_count.toLocaleString()}</span>
                   </div>
                 </td>
 
-                {/* Last Scan */}
                 <td className="px-6 py-4">
-                  <div className="flex items-center gap-2 text-gray-400 text-sm">
-                    <Clock size={16} />
-                    {target.last_scan_at 
-                      ? new Date(target.last_scan_at).toLocaleString() 
-                      : 'Never'}
+                  <div className="flex items-center gap-2 text-hack-dim text-xs font-mono">
+                    <Clock size={14} />
+                    {target.last_scan_at ? new Date(target.last_scan_at).toLocaleString() : 'PENDING'}
                   </div>
                 </td>
 
-                {/* Status / Phase */}
                 <td className="px-6 py-4">
-                  <div className="flex flex-col gap-1">
-                    <span className={`inline-flex items-center w-fit px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                  <div className="flex flex-col gap-1.5">
+                    <span className={`inline-flex items-center w-fit px-2 py-0.5 border text-[10px] font-bold uppercase tracking-wider ${
                       target.status === 'SCANNING' 
-                        ? 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 animate-pulse' 
-                        : target.status === 'PAUSED' // 👈 استایل برای حالت PAUSED
-                        ? 'bg-orange-500/10 text-orange-400 border border-orange-500/20'
-                        : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                        ? 'bg-hack-warning/10 text-hack-warning border-hack-warning/50 animate-pulse' 
+                        : target.status === 'PAUSED'
+                        ? 'bg-hack-danger/10 text-hack-danger border-hack-danger/50'
+                        : 'bg-hack-primary/10 text-hack-primary border-hack-primary/50'
                     }`}>
                       {target.status}
                     </span>
                     
-                    {/* نمایش فاز جاری */}
                     {target.current_phase && target.current_phase !== "IDLE" && (
-                        <span className={`text-xs font-mono flex items-center gap-1.5 ${
-                             target.status === 'SCANNING' ? 'text-blue-400' : 'text-gray-500'
-                        }`}>
-                            {target.status === 'SCANNING' && <Activity size={12} className="animate-spin" />}
+                        <span className="text-[10px] font-mono text-hack-dim flex items-center gap-1.5 truncate max-w-[200px]">
+                            {target.status === 'SCANNING' && <Activity size={10} className="animate-spin text-hack-primary" />}
                             {target.current_phase}
                         </span>
                     )}
                   </div>
                 </td>
 
-                {/* Actions */}
                 <td className="px-6 py-4 text-right">
-                  <div className="flex items-center justify-end gap-3">
+                  <div className="flex items-center justify-end gap-2">
                     
-                    {/* 👇 دکمه توقف (فقط وقتی اسکنینگ است) */}
                     {target.status === 'SCANNING' && (
-                      <button 
-                        onClick={() => handleStop(target.id)} 
-                        className="text-orange-400 hover:text-orange-300 transition-colors"
-                        title="Stop Scan"
-                      >
-                          <Square size={18} fill="currentColor" />
+                      <button onClick={() => handleStop(target.id)} className="p-2 hover:text-hack-warning transition-colors" title="HALT">
+                          <Square size={16} fill="currentColor" />
                       </button>
                     )}
 
-                    {/* 👇 دکمه ادامه/شروع (وقتی PAUSED یا READY است) */}
                     {(target.status === 'PAUSED' || target.status === 'READY') && (
-                      <button 
-                        onClick={() => handleResume(target.id)} 
-                        className="text-green-400 hover:text-green-300 transition-colors"
-                        title={target.status === 'PAUSED' ? "Resume Scan" : "Start Scan"}
-                      >
-                          <Play size={18} fill="currentColor" />
+                      <button onClick={() => handleResume(target.id)} className="p-2 hover:text-hack-primary transition-colors" title="EXECUTE">
+                          <Play size={16} fill="currentColor" />
                       </button>
                     )}
 
-                    <div className="w-px h-4 bg-gray-700 mx-1"></div> {/* جداکننده */}
+                    <div className="w-px h-4 bg-hack-border mx-2"></div>
 
-                    <Link to={`/targets/${target.id}`} className="text-blue-400 hover:text-blue-300 text-sm font-medium">View</Link>
+                    <Link to={`/targets/${target.id}`} className="text-xs font-mono text-hack-primary hover:underline underline-offset-4 mr-2">DATA</Link>
                     
-                    <button onClick={() => setEditingTarget(target)} className="text-gray-400 hover:text-white">
-                        <Edit2 size={18} />
+                    <button onClick={() => setEditingTarget(target)} className="text-hack-dim hover:text-white transition-colors">
+                        <Edit2 size={16} />
                     </button>
-                    <button onClick={() => handleDelete(target.id)} className="text-red-400 hover:text-red-300">
-                        <Trash2 size={18} />
+                    <button onClick={() => handleDelete(target.id)} className="text-hack-danger/70 hover:text-hack-danger transition-colors ml-1">
+                        <Trash2 size={16} />
                     </button>
                   </div>
                 </td>
               </tr>
             ))}
-            
-            {data?.data.length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-6 py-12 text-center text-gray-500">
-                  No targets found. Create your first target to start hunting!
-                </td>
-              </tr>
-            )}
           </tbody>
         </table>
       </div>
 
       <CreateTargetModal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} />
-      
-      <EditTargetModal 
-        isOpen={!!editingTarget} 
-        target={editingTarget} 
-        onClose={() => setEditingTarget(null)} 
-      />
+      <EditTargetModal isOpen={!!editingTarget} target={editingTarget} onClose={() => setEditingTarget(null)} />
     </div>
   );
 };

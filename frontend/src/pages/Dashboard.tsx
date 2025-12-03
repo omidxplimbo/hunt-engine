@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { getDashboardStats } from '../api/stats';
-import { Target, Activity, Zap, Database } from 'lucide-react';
+import { Target, Activity, Zap, Database, Cpu } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
 const Dashboard = () => {
@@ -10,40 +10,45 @@ const Dashboard = () => {
     refetchInterval: 10000,
   });
 
-  if (isLoading) return <div className="p-8 text-gray-400">Loading dashboard...</div>;
+  if (isLoading) return <div className="p-8 text-hack-dim font-mono animate-pulse"> Loading system metrics...</div>;
   
-  // 👇 مدیریت خطای بهتر
   if (isError || !data) {
       return (
-          <div className="p-8 text-red-500 border border-red-900 bg-red-900/10 rounded-lg m-4">
-              Error loading stats. Please check if the backend is running.
+          <div className="p-8 border border-hack-danger text-hack-danger bg-hack-danger/5 font-mono">
+               SYSTEM ERROR: Failed to fetch telemetry data.
           </div>
       );
   }
 
-  // 👇 استفاده ایمن از دیتا
   const stats = data;
-  const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8'];
+  // رنگ‌های نئونی برای نمودارها
+  const COLORS = ['#00ff41', '#008F11', '#fcee0a', '#ff003c', '#e0e0e0'];
 
-  // چک کردن اینکه آیا آرایه‌ها وجود دارند (جلوگیری از کرش map)
   const pieData = stats.assets_by_status || [];
   const barData = stats.top_technologies || [];
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-white mb-6">Command Center</h1>
+    <div className="space-y-8">
+      <div className="flex items-center gap-2 border-b border-hack-border/50 pb-4">
+        <Cpu className="text-hack-primary" />
+        <h1 className="hack-title text-2xl">COMMAND CENTER</h1>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="Total Targets" value={stats.total_targets || 0} icon={Target} color="text-blue-500" />
-        <StatCard title="Total Assets" value={stats.total_assets || 0} icon={Database} color="text-purple-500" />
-        <StatCard title="Live Assets" value={stats.live_assets || 0} icon={Activity} color="text-green-500" />
-        <StatCard title="Fresh (24h)" value={stats.fresh_assets || 0} icon={Zap} color="text-yellow-500" />
+        <StatCard title="TOTAL TARGETS" value={stats.total_targets || 0} icon={Target} color="text-hack-primary" />
+        <StatCard title="TOTAL ASSETS" value={stats.total_assets || 0} icon={Database} color="text-hack-warning" />
+        <StatCard title="LIVE NODES" value={stats.live_assets || 0} icon={Activity} color="text-hack-text" />
+        <StatCard title="FRESH INTEL (24H)" value={stats.fresh_assets || 0} icon={Zap} color="text-hack-danger" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-8">
         {/* Pie Chart */}
-        <div className="bg-gray-900 p-6 rounded-xl border border-gray-800">
-          <h3 className="text-lg font-semibold text-white mb-4">Asset Status Distribution</h3>
+        <div className="hack-box p-6 relative">
+          <div className="absolute top-0 right-0 p-2 text-[10px] text-hack-dim">SYS.MON.01</div>
+          <h3 className="text-sm font-bold text-hack-primary tracking-widest uppercase mb-6 flex items-center gap-2">
+            <span className="w-1 h-4 bg-hack-primary"></span>
+            Asset Status Distribution
+          </h3>
           <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -55,46 +60,51 @@ const Dashboard = () => {
                   outerRadius={80}
                   paddingAngle={5}
                   dataKey="count"
+                  stroke="none"
                 >
                   {pieData.map((_, index) => (
                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                   ))}
                 </Pie>
                 <Tooltip 
-                    contentStyle={{ backgroundColor: '#1f2937', borderColor: '#374151', color: '#fff' }}
-                    itemStyle={{ color: '#fff' }}
+                    contentStyle={{ backgroundColor: '#050505', borderColor: '#00ff41', color: '#e0e0e0', fontFamily: 'monospace' }}
+                    itemStyle={{ color: '#00ff41' }}
                 />
               </PieChart>
             </ResponsiveContainer>
           </div>
            <div className="flex flex-wrap gap-3 justify-center mt-2">
               {pieData.map((entry, index) => (
-                  <div key={entry.name} className="flex items-center gap-1 text-xs text-gray-400">
-                      <div className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }}></div>
-                      <span>{entry.name}: {entry.count}</span>
+                  <div key={entry.name} className="flex items-center gap-2 text-xs font-mono text-hack-dim border border-hack-border px-2 py-1 bg-black/40">
+                      <div className="w-2 h-2 rounded-none" style={{ backgroundColor: COLORS[index % COLORS.length] }}></div>
+                      <span>{entry.name}: <span className="text-white">{entry.count}</span></span>
                   </div>
               ))}
            </div>
         </div>
 
         {/* Bar Chart */}
-        <div className="bg-gray-900 p-6 rounded-xl border border-gray-800">
-          <h3 className="text-lg font-semibold text-white mb-4">Top 10 Technologies</h3>
+        <div className="hack-box p-6 relative">
+          <div className="absolute top-0 right-0 p-2 text-[10px] text-hack-dim">SYS.MON.02</div>
+          <h3 className="text-sm font-bold text-hack-primary tracking-widest uppercase mb-6 flex items-center gap-2">
+            <span className="w-1 h-4 bg-hack-primary"></span>
+            Top Technologies
+          </h3>
           <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart 
                 data={barData as any[]} 
                 layout="vertical" 
-                margin={{ left: 20 }}
+                margin={{ left: 0 }}
               >
-                <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                <XAxis type="number" stroke="#9CA3AF" />
-                <YAxis dataKey="name" type="category" stroke="#9CA3AF" width={100} />
+                <CartesianGrid strokeDasharray="3 3" stroke="#1f1f1f" horizontal={false} />
+                <XAxis type="number" stroke="#666" tick={{fill: '#666', fontSize: 10, fontFamily: 'monospace'}} />
+                <YAxis dataKey="name" type="category" stroke="#666" width={100} tick={{fill: '#e0e0e0', fontSize: 10, fontFamily: 'monospace'}} />
                 <Tooltip 
-                    cursor={{fill: '#374151', opacity: 0.4}}
-                    contentStyle={{ backgroundColor: '#1f2937', borderColor: '#374151', color: '#fff' }}
+                    cursor={{fill: 'rgba(0, 255, 65, 0.05)'}}
+                    contentStyle={{ backgroundColor: '#050505', borderColor: '#00ff41', color: '#e0e0e0', fontFamily: 'monospace' }}
                 />
-                <Bar dataKey="count" fill="#3B82F6" radius={[0, 4, 4, 0]} />
+                <Bar dataKey="count" fill="#00ff41" radius={[0, 2, 2, 0]} barSize={15} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -104,14 +114,13 @@ const Dashboard = () => {
   );
 };
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const StatCard = ({ title, value, icon: Icon, color }: any) => (
-  <div className="bg-gray-900 p-6 rounded-xl border border-gray-800 flex items-center justify-between">
+  <div className="hack-box p-5 flex items-center justify-between group hover:border-hack-primary/50 transition-colors">
     <div>
-      <p className="text-gray-400 text-sm font-medium">{title}</p>
-      <h2 className="text-3xl font-bold text-white mt-1">{value.toLocaleString()}</h2>
+      <p className="text-hack-dim text-[10px] uppercase tracking-[0.2em] mb-1 group-hover:text-hack-primary transition-colors">{title}</p>
+      <h2 className="text-4xl font-display text-white mt-1 drop-shadow-neon">{value.toLocaleString()}</h2>
     </div>
-    <div className={`p-3 rounded-lg bg-gray-800 ${color}`}>
+    <div className={`p-3 border border-hack-border bg-black/50 ${color} group-hover:shadow-neon transition-all`}>
       <Icon size={24} />
     </div>
   </div>

@@ -1,3 +1,54 @@
+@import url('https://fonts.googleapis.com/css2?family=VT323&family=Fira+Code:wght@300;400;600&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-hack-bg text-hack-text font-mono overflow-x-hidden selection:bg-hack-primary selection:text-black;
+    background-image: 
+      linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%),
+      linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+    background-size: 100% 2px, 3px 100%;
+  }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { @apply bg-hack-bg; }
+  ::-webkit-scrollbar-thumb { @apply bg-hack-border rounded hover:bg-hack-primary/40 transition-colors; }
+}
+
+@layer components {
+  .hack-box {
+    @apply bg-hack-panel/60 border border-hack-primary/30 backdrop-blur-md shadow-neon;
+  }
+  
+  .hack-title {
+    @apply font-display text-4xl text-hack-primary tracking-wider uppercase drop-shadow-[0_0_5px_rgba(0,255,65,0.5)];
+  }
+
+  .hack-btn {
+    @apply px-4 py-2 bg-hack-primary/5 border border-hack-primary/50 text-hack-primary 
+           hover:bg-hack-primary hover:text-black hover:shadow-neon transition-all duration-200 
+           font-bold tracking-widest uppercase text-xs active:scale-95 flex items-center justify-center gap-2;
+  }
+
+  .hack-btn-danger {
+    @apply px-4 py-2 bg-hack-danger/5 border border-hack-danger/50 text-hack-danger 
+           hover:bg-hack-danger hover:text-white hover:shadow-neon-red transition-all duration-200 
+           font-bold tracking-widest uppercase text-xs active:scale-95 flex items-center justify-center gap-2;
+  }
+
+  .hack-btn-ghost {
+    @apply px-3 py-1 text-hack-dim hover:text-hack-primary transition-colors text-xs font-bold uppercase tracking-widest;
+  }
+
+  .hack-input {
+    @apply bg-black/40 border border-hack-border text-hack-primary placeholder-hack-dim/50 
+           focus:border-hack-primary focus:ring-1 focus:ring-hack-primary/50 focus:shadow-neon outline-none transition-all p-2.5 rounded-none text-sm;
+  }
+
+  .hack-badge {
+    @apply px-2 py-0.5 text-[10px] uppercase font-bold border tracking-wider;
+  }
+}
