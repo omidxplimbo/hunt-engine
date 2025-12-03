@@ -149,34 +149,51 @@ func GetTargetDetails(c *fiber.Ctx) error {
 	})
 }
 
-// GetTargetAssets لیست دارایی‌ها رو با فیلتر، صفحه‌بندی و کشینگ برمی‌گردونه
-// GetTargetAssets لیست دارایی‌ها رو با فیلتر، صفحه‌بندی و کشینگ برمی‌گردونه
+// GetTargetAssets لیست دارایی‌ها رو با فیلتر، صفحه‌بندی، کشینگ و مرتب‌سازی برمی‌گردونه
 func GetTargetAssets(c *fiber.Ctx) error {
 	id := c.Params("id")
 	targetID := uint(0)
 	fmt.Sscanf(id, "%d", &targetID)
 
+	// Pagination
+	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit := utils.DefaultLimit
 	if l, err := strconv.Atoi(c.Query("limit")); err == nil && l > 0 {
 		limit = l
 	}
 
-	// 👇 اصلاح: خواندن offset از کوئری
+	// Offset logic
 	offset := 0
 	if o, err := strconv.Atoi(c.Query("offset")); err == nil && o >= 0 {
 		offset = o
 	} else {
-		page, _ := strconv.Atoi(c.Query("page", "1"))
 		offset = (page - 1) * limit
 	}
 
+	// Filters
 	isLive := c.Query("is_live")
 	isNew := c.Query("is_new")
 	search := c.Query("search")
 	hasHttpx := c.Query("has_httpx")
 
-	// 👇 استفاده از offset در تولید کلید کش
-	cacheKey := cache.GenerateAssetKey(targetID, offset, limit, fmt.Sprintf("l:%s|n:%s|s:%s|h:%s", isLive, isNew, search, hasHttpx))
+	// 👇👇👇 Sorting Params
+	sortBy := c.Query("sort_by", "value") // پیش‌فرض: مرتب‌سازی بر اساس نام دامنه
+	order := c.Query("order", "asc")      // پیش‌فرض: صعودی
+
+	// اعتبارسنجی فیلد مرتب‌سازی (برای جلوگیری از SQL Injection)
+	validSortFields := map[string]bool{
+		"value": true, "status_code": true, "content_length": true, "title": true, "created_at": true,
+	}
+	if !validSortFields[sortBy] {
+		sortBy = "value"
+	}
+	if order != "asc" && order != "desc" {
+		order = "asc"
+	}
+	orderClause := fmt.Sprintf("%s %s", sortBy, order)
+
+	// Cache Key Update
+	cacheKey := cache.GenerateAssetKey(targetID, offset, limit, fmt.Sprintf("l:%s|n:%s|s:%s|h:%s|sb:%s|o:%s", isLive, isNew, search, hasHttpx, sortBy, order))
 
 	var cachedResponse fiber.Map
 	if cache.GetCache(cacheKey, &cachedResponse) {
@@ -184,6 +201,7 @@ func GetTargetAssets(c *fiber.Ctx) error {
 		return c.JSON(cachedResponse)
 	}
 
+	// DB Query
 	db := database.DB.Model(&models.Asset{}).Where("target_id = ?", id)
 
 	if isLive != "" {
@@ -205,8 +223,8 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	}
 
 	var assets []models.Asset
-	// استفاده مستقیم از offset محاسبه شده
-	result := db.Order("value asc").Limit(limit).Offset(offset).Find(&assets)
+	// 👇 اعمال مرتب‌سازی پویا
+	result := db.Order(orderClause).Limit(limit).Offset(offset).Find(&assets)
 
 	if result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": result.Error.Error()})

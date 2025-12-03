@@ -53,20 +53,22 @@ export const deleteTarget = async (id: number) => {
 
 // --- بخش مدیریت دارایی‌ها (Assets) ---
 
-// دریافت لیست دارایی‌های یک تارگت (با فیلتر و سرچ)
 export const getTargetAssets = async (
   targetId: number, 
   page = 1, 
   limit = 50,
-  filters?: AssetFilters
+  filters?: AssetFilters,
+  // 👇 پارامترهای جدید
+  sortBy: string = 'value',
+  order: 'asc' | 'desc' = 'asc'
 ) => {
   const offset = (page - 1) * limit;
   
-  const params: any = { limit, offset };
+  const params: any = { limit, offset, sort_by: sortBy, order }; // 👈 ارسال به سرور
+  
   if (filters?.is_live !== undefined) params.is_live = filters.is_live;
   if (filters?.is_new !== undefined) params.is_new = filters.is_new;
   if (filters?.search) params.search = filters.search;
-  // 👇 ارسال پارامتر جدید
   if (filters?.has_httpx !== undefined) params.has_httpx = filters.has_httpx;
 
   const response = await apiClient.get<AssetResponse>(`/targets/${targetId}/assets`, {
