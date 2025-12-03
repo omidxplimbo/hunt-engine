@@ -487,11 +487,18 @@ func GetTargetURLs(c *fiber.Ctx) error {
 	}
 
 	search := c.Query("search")
+	onlyJS := c.Query("only_js") // 👈 پارامتر جدید
 
 	db := database.DB.Model(&models.FoundURL{}).Where("target_id = ?", targetID)
 
+	// فیلتر جستجو
 	if search != "" {
 		db = db.Where("value LIKE ?", "%"+search+"%")
+	}
+
+	// 👇 فیلتر اختصاصی برای فایل‌های JS
+	if onlyJS == "true" {
+		db = db.Where("value LIKE ?", "%.js")
 	}
 
 	var totalCount int64

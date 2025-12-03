@@ -1,28 +1,27 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-// 👇 دریافت توابع API (مطمئن شوید getTargetURLs در api/targets.ts وجود دارد)
 import { getTargetAssets, getTargetDetails, getTargetURLs } from '../api/targets';
 import { 
   ArrowLeft, Globe, CheckCircle, XCircle, Search, Monitor, 
-  Loader2, Network, ArrowUp, ArrowDown, Link2, FileText, Database 
-} from 'lucide-react';
+  Loader2, Network, ArrowUp, ArrowDown, Link2, FileText, Database, FileCode 
+} from 'lucide-react'; // 👈 آیکون FileCode اضافه شد
 import clsx from 'clsx';
 
 const TargetAssets = () => {
-  // 1. دریافت ID تارگت از آدرس صفحه (مثلاً /targets/1)
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const targetId = Number(id);
 
-  // 2. استیت برای مدیریت تب فعال (پیش‌فرض روی assets)
+  // Tab State
   const [activeTab, setActiveTab] = useState<'assets' | 'urls'>('assets');
 
-  // استیت‌های فیلتر و صفحه‌بندی
+  // Filters State
   const [page, setPage] = useState(1);
   const [filterLive, setFilterLive] = useState<boolean | undefined>(undefined);
   const [filterHttpx, setFilterHttpx] = useState<boolean | undefined>(undefined);
   const [filterDnsOnly, setFilterDnsOnly] = useState<boolean | undefined>(undefined);
+  const [filterJsOnly, setFilterJsOnly] = useState<boolean>(false); // 👈 استیت جدید برای JS
   
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -30,7 +29,7 @@ const TargetAssets = () => {
   const [sortBy, setSortBy] = useState<string>('value');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
-  // Debounce Logic برای جستجو
+  // Debounce Logic
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(searchTerm);
@@ -39,13 +38,13 @@ const TargetAssets = () => {
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
-  // ریست کردن صفحه وقتی فیلترها یا تب عوض می‌شود
+  // Reset page on filter change
   useEffect(() => {
     setPage(1);
-    setSearchTerm(""); // پاک کردن جستجو هنگام تغییر تب
-  }, [filterLive, filterHttpx, filterDnsOnly, activeTab]);
+    setSearchTerm("");
+  }, [filterLive, filterHttpx, filterDnsOnly, filterJsOnly, activeTab]);
 
-  // هندلرهای دکمه‌های فیلتر
+  // Filter Handlers
   const toggleHttpx = () => {
       if (!filterHttpx) {
           setFilterDnsOnly(undefined);
@@ -73,7 +72,6 @@ const TargetAssets = () => {
     }
   };
 
-  // کامپوننت هدر جدول با قابلیت سورت
   const SortableHeader = ({ field, label, className }: { field: string, label: string, className?: string }) => (
     <th 
       className={clsx("px-6 py-4 font-semibold cursor-pointer hover:text-white transition-colors select-none group", className)}
@@ -87,14 +85,13 @@ const TargetAssets = () => {
     </th>
   );
 
-  // کوئری دریافت اطلاعات کلی تارگت
+  // Queries
   const targetQuery = useQuery({
     queryKey: ['target', targetId],
     queryFn: () => getTargetDetails(targetId),
     enabled: !!targetId,
   });
 
-  // 3. کوئری دریافت Assets (مربوط به همین تارگت)
   const assetsQuery = useQuery({
     queryKey: ['assets', targetId, page, filterLive, filterHttpx, filterDnsOnly, debouncedSearch, sortBy, sortOrder],
     queryFn: () => getTargetAssets(
@@ -102,19 +99,16 @@ const TargetAssets = () => {
       { is_live: filterLive, search: debouncedSearch, has_httpx: filterHttpx, dns_only: filterDnsOnly },
       sortBy, sortOrder
     ),
-    // فقط وقتی اجرا شود که تب assets فعال است
     enabled: !!targetId && activeTab === 'assets', 
   });
 
-  // 4. کوئری دریافت URLs (مربوط به همین تارگت)
   const urlsQuery = useQuery({
-    queryKey: ['urls', targetId, page, debouncedSearch],
-    queryFn: () => getTargetURLs(targetId, page, 50, debouncedSearch),
-    // فقط وقتی اجرا شود که تب urls فعال است
+    // 👇 کلید کش شامل فیلتر JS می‌شود
+    queryKey: ['urls', targetId, page, debouncedSearch, filterJsOnly],
+    queryFn: () => getTargetURLs(targetId, page, 50, debouncedSearch, filterJsOnly),
     enabled: !!targetId && activeTab === 'urls', 
   });
 
-  // انتخاب دیتای درست برای نمایش در فوتر (Pagination)
   const currentData = activeTab === 'assets' ? assetsQuery.data : urlsQuery.data;
   const isFetching = activeTab === 'assets' ? assetsQuery.isFetching : urlsQuery.isFetching;
 
@@ -122,7 +116,7 @@ const TargetAssets = () => {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header Section */}
+      {/* Header */}
       <div className="flex items-center gap-4 mb-6 flex-shrink-0">
         <button 
           onClick={() => navigate('/targets')}
@@ -144,7 +138,7 @@ const TargetAssets = () => {
         </div>
       </div>
 
-      {/* 👇 5. نوار تب‌ها (Tabs Bar) */}
+      {/* Tabs */}
       <div className="flex gap-1 bg-gray-900/50 p-1 rounded-lg w-fit mb-6 border border-gray-800">
           <button
             onClick={() => setActiveTab('assets')}
@@ -172,7 +166,6 @@ const TargetAssets = () => {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
           <input 
             type="text" 
-            // تغییر متن پلیس‌هولدر بر اساس تب
             placeholder={activeTab === 'assets' ? "Search subdomains..." : "Search URLs (e.g. login, admin)..."}
             className="w-full bg-gray-950 border border-gray-800 text-gray-200 pl-10 pr-4 py-2 rounded-md focus:outline-none focus:border-blue-500 transition-colors"
             value={searchTerm}
@@ -180,7 +173,7 @@ const TargetAssets = () => {
           />
         </div>
 
-        {/* فیلترهای اضافی فقط برای تب Assets نمایش داده می‌شوند */}
+        {/* Filters for ASSETS Tab */}
         {activeTab === 'assets' && (
             <div className="flex items-center gap-3">
             <span className="text-sm font-medium text-gray-400">Filters:</span>
@@ -196,6 +189,27 @@ const TargetAssets = () => {
             </div>
             </div>
         )}
+
+        {/* Filters for URLs Tab */}
+        {activeTab === 'urls' && (
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-medium text-gray-400">Filters:</span>
+              <div className="flex bg-gray-950 rounded-lg p-1 border border-gray-800 gap-1">
+                  {/* 👇 دکمه جدید برای فایل‌های JS */}
+                  <button 
+                    onClick={() => setFilterJsOnly(!filterJsOnly)} 
+                    className={clsx(
+                      "px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-2 border", 
+                      filterJsOnly 
+                        ? "bg-yellow-900/30 text-yellow-400 border-yellow-800" 
+                        : "bg-transparent border-transparent text-gray-400 hover:bg-gray-900 hover:text-gray-200"
+                    )}
+                  >
+                    <FileCode size={14} /> JS Files Only
+                  </button>
+              </div>
+            </div>
+        )}
       </div>
 
       {/* Main Content Area */}
@@ -203,9 +217,8 @@ const TargetAssets = () => {
           "bg-gray-900 rounded-lg border border-gray-800 flex flex-col overflow-hidden transition-opacity duration-200 flex-1",
           isFetching ? "opacity-60 pointer-events-none" : "opacity-100"
       )}>
-        {/* 👇 6. رندر کردن جدول بر اساس تب انتخاب شده */}
         {activeTab === 'assets' ? (
-            // ==================== TABLE: ASSETS ====================
+            // ASSETS TABLE
             <div className="overflow-auto w-full flex-1">
                 <table className="w-full text-left min-w-[1400px]"> 
                 <thead className="sticky top-0 z-10">
@@ -250,7 +263,7 @@ const TargetAssets = () => {
                 </table>
             </div>
         ) : (
-            // ==================== TABLE: CRAWLED URLS ====================
+            // URLS TABLE
             <div className="overflow-auto w-full flex-1">
                 <table className="w-full text-left"> 
                 <thead className="sticky top-0 z-10">
@@ -265,12 +278,20 @@ const TargetAssets = () => {
                     <tr key={url.id} className="hover:bg-gray-800/30 transition-colors group">
                         <td className="px-6 py-3 align-top">
                             <div className="flex items-start gap-3">
-                                <FileText size={16} className="text-gray-600 mt-1 group-hover:text-blue-500 transition-colors flex-shrink-0" />
+                                {/* آیکون متغیر بر اساس نوع فایل */}
+                                {url.value.endsWith('.js') ? (
+                                    <FileCode size={16} className="text-yellow-500 mt-1 flex-shrink-0" />
+                                ) : (
+                                    <FileText size={16} className="text-gray-600 mt-1 group-hover:text-blue-500 transition-colors flex-shrink-0" />
+                                )}
                                 <a 
                                   href={url.value} 
                                   target="_blank" 
                                   rel="noreferrer" 
-                                  className="text-gray-300 hover:text-blue-400 transition-colors break-all font-mono text-sm block leading-relaxed"
+                                  className={clsx(
+                                      "transition-colors break-all font-mono text-sm block leading-relaxed",
+                                      url.value.endsWith('.js') ? "text-yellow-100 hover:text-yellow-300" : "text-gray-300 hover:text-blue-400"
+                                  )}
                                 >
                                     {url.value}
                                 </a>
@@ -289,7 +310,7 @@ const TargetAssets = () => {
                     {urlsQuery.data?.data.length === 0 && (
                       <tr>
                         <td colSpan={3} className="px-6 py-12 text-center text-gray-500">
-                          {searchTerm ? 'No URLs found for this search.' : 'No URLs found yet. Try running the Crawling phase.'}
+                          {searchTerm ? 'No URLs found for this search.' : filterJsOnly ? 'No JS files found.' : 'No URLs found yet. Try running the Crawling phase.'}
                         </td>
                       </tr>
                     )}
@@ -298,7 +319,7 @@ const TargetAssets = () => {
             </div>
         )}
         
-        {/* Pagination Footer */}
+        {/* Footer */}
         <div className="border-t border-gray-800 p-4 flex justify-between items-center bg-gray-900 mt-auto flex-shrink-0">
            <span className="text-sm text-gray-400">
              Page {page} • Total: {currentData?.total_count?.toLocaleString() || 0}
@@ -311,7 +332,6 @@ const TargetAssets = () => {
              >
                 Previous
              </button>
-             {/* دکمه Next: اگر تعداد دیتا کمتر از لیمیت بود، یعنی صفحه آخر است */}
              <button 
                 disabled={!currentData?.data || currentData.data.length < 50 || isFetching} 
                 onClick={() => setPage(p => p + 1)} 

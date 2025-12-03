@@ -109,15 +109,22 @@ export interface FoundURLResponse {
   total_count: number;
 }
 
+// 👇 تابع آپدیت شده با پارامتر onlyJs
 export const getTargetURLs = async (
   targetId: number,
   page = 1,
   limit = 50,
-  search = ""
+  search = "",
+  onlyJs = false // 👈 پارامتر جدید
 ) => {
   const offset = (page - 1) * limit;
   const response = await apiClient.get<FoundURLResponse>(`/targets/${targetId}/urls`, {
-    params: { limit, offset, search },
+    params: { 
+      limit, 
+      offset, 
+      search,
+      only_js: onlyJs // ارسال به بک‌اند
+    },
   });
   return response.data;
 };
