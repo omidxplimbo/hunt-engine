@@ -1,0 +1,18 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <filter id="neon-glow" x="-50%" y="-50%" width="200%" height="200%">
+    <feGaussianBlur stdDeviation="2.5" result="coloredBlur"/>
+    <feMerge>
+      <feMergeNode in="coloredBlur"/>
+      <feMergeNode in="SourceGraphic"/>
+    </feMerge>
+  </filter>
+  
+  <path d="M32 24C26 24 22 28 18 28C14 28 12 26 10 28C8 30 10 34 14 32C18 30 22 32 26 28L32 28L38 28C42 32 46 30 50 32C54 34 56 30 54 28C52 26 50 28 46 28C42 28 38 24 32 24Z" 
+        fill="#00ff41" 
+        stroke="#00ff41" 
+        stroke-width="1.5" 
+        stroke-linecap="round" 
+        stroke-linejoin="round"
+        filter="url(#neon-glow)"
+  />
+</svg>

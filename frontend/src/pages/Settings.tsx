@@ -17,17 +17,17 @@ const Settings = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center mb-8 border-b border-hack-border/50 pb-4">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 border-b border-hack-border/50 pb-4 gap-4">
         <div>
-          <h1 className="hack-title text-2xl">SYSTEM CONFIGURATION</h1>
+          <h1 className="hack-title text-xl md:text-2xl">SYSTEM CONFIGURATION</h1>
           <p className="text-hack-dim text-xs font-mono mt-1 tracking-wider">Access Control & Parameters</p>
         </div>
-        <button onClick={() => { setEditingUser(null); setIsModalOpen(true); }} className="hack-btn">
+        <button onClick={() => { setEditingUser(null); setIsModalOpen(true); }} className="hack-btn w-full md:w-auto">
           <Plus size={16} /> New Admin
         </button>
       </div>
 
-      <div className="hack-box overflow-hidden relative">
+      <div className="hack-box overflow-hidden relative flex flex-col">
         {/* Header Decor */}
         <div className="p-3 border-b border-hack-border bg-black/40 flex items-center justify-between">
             <div className="flex items-center gap-2 text-hack-primary font-mono text-sm tracking-wider">
@@ -41,50 +41,52 @@ const Settings = () => {
             </div>
         </div>
 
-        <table className="w-full text-left">
-          <thead>
-            <tr className="bg-hack-bg/50 text-hack-dim text-[10px] uppercase tracking-[0.2em] border-b border-hack-border">
-              <th className="px-6 py-4 font-normal">Identity</th>
-              <th className="px-6 py-4 font-normal">Clearance Level</th>
-              <th className="px-6 py-4 font-normal">Registration Date</th>
-              <th className="px-6 py-4 font-normal text-right">Override</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-hack-border/30">
-            {isLoading ? 
-             <tr><td className="p-8 text-center font-mono text-hack-dim animate-pulse" colSpan={4}> DECRYPTING USER DATA...</td></tr> : 
-             data?.data.map((user) => (
-              <tr key={user.id} className="hover:bg-hack-primary/5 transition-colors group font-mono text-sm">
-                <td className="px-6 py-4 text-white">
-                    <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-black border border-hack-border flex items-center justify-center text-hack-dim group-hover:text-hack-primary group-hover:border-hack-primary/50 transition-all">
-                            <User size={14}/>
+        <div className="overflow-x-auto">
+            <table className="w-full text-left min-w-[600px]">
+            <thead>
+                <tr className="bg-hack-bg/50 text-hack-dim text-[10px] uppercase tracking-[0.2em] border-b border-hack-border">
+                <th className="px-6 py-4 font-normal">Identity</th>
+                <th className="px-6 py-4 font-normal">Clearance Level</th>
+                <th className="px-6 py-4 font-normal">Registration Date</th>
+                <th className="px-6 py-4 font-normal text-right">Override</th>
+                </tr>
+            </thead>
+            <tbody className="divide-y divide-hack-border/30">
+                {isLoading ? 
+                <tr><td className="p-8 text-center font-mono text-hack-dim animate-pulse" colSpan={4}> DECRYPTING USER DATA...</td></tr> : 
+                data?.data.map((user) => (
+                <tr key={user.id} className="hover:bg-hack-primary/5 transition-colors group font-mono text-sm">
+                    <td className="px-6 py-4 text-white">
+                        <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 bg-black border border-hack-border flex items-center justify-center text-hack-dim group-hover:text-hack-primary group-hover:border-hack-primary/50 transition-all flex-shrink-0">
+                                <User size={14}/>
+                            </div>
+                            <span className="tracking-wide">{user.username}</span>
                         </div>
-                        <span className="tracking-wide">{user.username}</span>
+                    </td>
+                    <td className="px-6 py-4">
+                        <span className={`hack-badge ${user.role === 'admin' ? 'border-hack-primary text-hack-primary bg-hack-primary/10' : 'border-hack-dim text-hack-dim'}`}>
+                            {user.role}
+                        </span>
+                    </td>
+                    <td className="px-6 py-4 text-hack-dim text-xs tracking-wider">
+                        {new Date(user.created_at).toLocaleDateString()}
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                    <div className="flex justify-end gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => { setEditingUser(user); setIsModalOpen(true); }} className="p-2 hover:text-hack-primary transition-colors" title="MODIFY">
+                            <Edit2 size={16} />
+                        </button>
+                        <button onClick={() => { if(confirm('>> EXECUTE DELETION PROTOCOL?')) deleteMutation.mutate(user.id) }} className="p-2 hover:text-hack-danger transition-colors" title="TERMINATE">
+                            <Trash2 size={16} />
+                        </button>
                     </div>
-                </td>
-                <td className="px-6 py-4">
-                    <span className={`hack-badge ${user.role === 'admin' ? 'border-hack-primary text-hack-primary bg-hack-primary/10' : 'border-hack-dim text-hack-dim'}`}>
-                        {user.role}
-                    </span>
-                </td>
-                <td className="px-6 py-4 text-hack-dim text-xs tracking-wider">
-                    {new Date(user.created_at).toLocaleDateString()}
-                </td>
-                <td className="px-6 py-4 text-right">
-                  <div className="flex justify-end gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
-                    <button onClick={() => { setEditingUser(user); setIsModalOpen(true); }} className="p-2 hover:text-hack-primary transition-colors" title="MODIFY">
-                        <Edit2 size={16} />
-                    </button>
-                    <button onClick={() => { if(confirm('>> EXECUTE DELETION PROTOCOL?')) deleteMutation.mutate(user.id) }} className="p-2 hover:text-hack-danger transition-colors" title="TERMINATE">
-                        <Trash2 size={16} />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                    </td>
+                </tr>
+                ))}
+            </tbody>
+            </table>
+        </div>
       </div>
 
       <UserModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} user={editingUser} />
