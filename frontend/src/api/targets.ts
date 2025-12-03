@@ -93,3 +93,31 @@ export const stopTarget = async (id: number) => {
 export const startDiscovery = async (id: number) => {
   await apiClient.post<{ status: string; message: string }>(`/targets/${id}/discovery`);
 };
+
+// --- بخش مدیریت URLهای کراول شده (فاز ۳) ---
+
+export interface FoundURL {
+  id: number;
+  value: string;
+  source: string;
+  created_at: string;
+}
+
+export interface FoundURLResponse {
+  status: string;
+  data: FoundURL[];
+  total_count: number;
+}
+
+export const getTargetURLs = async (
+  targetId: number,
+  page = 1,
+  limit = 50,
+  search = ""
+) => {
+  const offset = (page - 1) * limit;
+  const response = await apiClient.get<FoundURLResponse>(`/targets/${targetId}/urls`, {
+    params: { limit, offset, search },
+  });
+  return response.data;
+};

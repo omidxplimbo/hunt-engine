@@ -29,7 +29,6 @@ const (
 	allFoundFile      = "/tmp/all_found.txt"
 	probingInputFile  = "/tmp/probing_input.txt"
 	probingOutputFile = "/tmp/probing_output.json"
-	dnsxOutputFile    = "/tmp/dnsx_output.json"
 )
 
 const DefaultBatchSize = 500
@@ -59,7 +58,6 @@ type DnsxResult struct {
 
 // Start موتور اصلی کارگر را روشن می‌کند.
 func Start() {
-	// 👇👇👇 چاپ بنر اختصاصی تیم Mustache
 	RED := "\033[0;31m"
 	NC := "\033[0m" // No Color
 
@@ -126,6 +124,8 @@ func processJobDispatcher(payload string) {
 		runDiscoveryPhase(targetID, rootDomain)
 	case "PROBING":
 		runProbingPhase(targetID, rootDomain)
+	case "CRAWLING":
+		runCrawlingPhase(targetID, rootDomain)
 	default:
 		log.Printf("⚠️ Unknown job type: %s\n", jobType)
 	}
@@ -137,7 +137,6 @@ func processJobDispatcher(payload string) {
 func runDiscoveryPhase(targetID uint, rootDomain string) {
 	log.Printf("🚀 Starting PHASE 1 (DISCOVERY) for: %s (ID: %d)\n", rootDomain, targetID)
 
-	// 👇 ابتدا اطلاعات تارگت را می‌گیریم تا کانفیگ را چک کنیم
 	var targetConf models.Target
 	if err := database.DB.First(&targetConf, targetID).Error; err != nil {
 		log.Printf("❌ Failed to fetch target config: %v\n", err)
@@ -157,10 +156,8 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	updateTargetPhase(targetID, "PHASE 1: PASSIVE ENUM")
 	passiveResults := runPassiveCollection(targetID, rootDomain)
 
-	// 2. Mutation (Alterx) - 👇👇👇 شرط حیاتی برای چک کردن تنظیمات کاربر
+	// 2. Mutation (Alterx)
 	var mutatedResults []string
-
-	// فقط اگر UseAlterx روشن باشد، این بخش اجرا می‌شود
 	if targetConf.UseAlterx {
 		if checkStopRequest(targetID) {
 			return
@@ -169,7 +166,6 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		writeSliceToFile(allFoundFile, passiveResults)
 
 		var err error
-		// اجرای Alterx با قابلیت Stop
 		mutatedResults, err = runAlterx(targetID, allFoundFile, rootDomain)
 		if err != nil {
 			if err.Error() == "process killed by user request" {
@@ -179,27 +175,24 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 			mutatedResults = []string{}
 		}
 	} else {
-		// اگر خاموش بود، لاگ می‌زنیم و رد می‌شویم
 		log.Printf("⏩ Skipping Alterx (Mutation) for %s based on target config.\n", rootDomain)
 	}
 
-	// 3. History Injection
+	// 3. Merge & History
 	var existingAssets []string
 	database.DB.Model(&models.Asset{}).Where("target_id = ?", targetID).Pluck("value", &existingAssets)
 
-	// 4. Merge
 	masterList := mergeUnique(passiveResults, mutatedResults)
 	masterList = mergeUnique(masterList, existingAssets)
 	writeSliceToFile(allFoundFile, masterList)
 	log.Printf("📊 Master list created with %d potential subdomains. Starting validation (DNSX)...\n", len(masterList))
 
-	// 5. Validation (DNSX)
+	// 4. Validation (DNSX)
 	if checkStopRequest(targetID) {
 		return
 	}
 	updateTargetPhase(targetID, "PHASE 1: DNSX VALIDATION")
 
-	// 👇 استفاده از تابع ایمن
 	dnsxResults, err := runDnsx(targetID, allFoundFile)
 	if err != nil {
 		if err.Error() == "process killed by user request" {
@@ -210,7 +203,7 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	}
 	log.Printf("✅ [Stage 3] Confirmed %d LIVE subdomains with IPs.\n", len(dnsxResults))
 
-	// 6. Saving
+	// 5. Saving
 	if checkStopRequest(targetID) {
 		return
 	}
@@ -222,9 +215,6 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	log.Printf("🏁 PHASE 1 finished for %s in %s.\n", rootDomain, time.Since(startTime))
 	triggerNextModule(targetID, rootDomain, "DISCOVERY")
 }
-
-// ... (بقیه توابع فایل، همان نسخه‌های قبلی و کامل هستند که در پیام‌های قبل داشتید. برای جلوگیری از تکرار زیاد، فقط تابع اصلی که باگ داشت را در بالا گذاشتم اما شما فایل کامل را از پاسخ قبلی کپی کنید و فقط تابع runDiscoveryPhase را با این نسخه عوض کنید، یا اگر می‌خواهید، من دوباره کل فایل را بگذارم؟)
-// (برای اطمینان، این پایین کل فایل را دوباره می‌گذارم)
 
 // =================================================================
 // PHASE 2: Probing Implementation
@@ -313,6 +303,177 @@ func runProbingPhase(targetID uint, rootDomain string) {
 
 	log.Printf("🏁 PHASE 2 finished. Total processed: %d in %s.\n", processedCount, time.Since(startTime))
 	triggerNextModule(targetID, rootDomain, "PROBING")
+}
+
+// =================================================================
+// PHASE 3: Crawling Implementation
+// =================================================================
+func runCrawlingPhase(targetID uint, rootDomain string) {
+	if checkStopRequest(targetID) {
+		return
+	}
+
+	log.Printf("🚀 Starting PHASE 3 (CRAWLING) for target ID: %d\n", targetID)
+	updateTargetPhase(targetID, "PHASE 3: FETCHING ASSETS")
+
+	var liveAssets []string
+	database.DB.Model(&models.Asset{}).
+		Where("target_id = ? AND is_live = true", targetID).
+		Pluck("value", &liveAssets)
+
+	if len(liveAssets) == 0 {
+		log.Println("⚠️ No live assets found for crawling. Skipping.")
+		triggerNextModule(targetID, rootDomain, "CRAWLING")
+		return
+	}
+
+	const crawlingInputFile = "/tmp/crawling_input.txt"
+	if err := writeSliceToFile(crawlingInputFile, liveAssets); err != nil {
+		log.Printf("❌ Failed to write crawling input: %v\n", err)
+		return
+	}
+
+	urlsMap := make(map[string]string)
+
+	// Wayback
+	if checkStopRequest(targetID) {
+		return
+	}
+	updateTargetPhase(targetID, "PHASE 3: RUNNING WAYBACK")
+	runToolAndCollect(targetID, crawlingInputFile, urlsMap, "wayback", "waybackurls")
+
+	// GAU
+	if checkStopRequest(targetID) {
+		return
+	}
+	updateTargetPhase(targetID, "PHASE 3: RUNNING GAU")
+	runToolAndCollect(targetID, crawlingInputFile, urlsMap, "gau", "gau", "--threads", "10")
+
+	// Katana
+	if checkStopRequest(targetID) {
+		return
+	}
+	updateTargetPhase(targetID, "PHASE 3: RUNNING KATANA")
+	runToolAndCollect(targetID, crawlingInputFile, urlsMap, "katana", "katana", "-list", crawlingInputFile, "-jc", "-kf", "-silent", "-c", "10")
+
+	// Filtering & Saving
+	if checkStopRequest(targetID) {
+		return
+	}
+	updateTargetPhase(targetID, "PHASE 3: FILTERING & SAVING")
+
+	saveCrawledURLs(targetID, rootDomain, urlsMap)
+
+	log.Printf("🏁 PHASE 3 finished for %s.\n", rootDomain)
+	triggerNextModule(targetID, rootDomain, "CRAWLING")
+}
+
+// 👇👇👇 تابع جاافتاده که باعث ارور شده بود
+func runToolAndCollect(targetID uint, inputFile string, results map[string]string, sourceLabel string, cmdName string, cmdArgs ...string) {
+	var output []byte
+	var err error
+
+	// اگر ابزارها نیاز به پایپ کردن فایل داشته باشند (مثل gau و waybackurls وقتی لیست فایل مستقیم نمی‌گیرند)
+	if cmdName == "waybackurls" || cmdName == "gau" {
+		catCmd := exec.Command("cat", inputFile)
+		toolCmd := exec.Command(cmdName, cmdArgs...)
+
+		toolCmd.Stdin, _ = catCmd.StdoutPipe()
+		var outBuf bytes.Buffer
+		toolCmd.Stdout = &outBuf
+
+		_ = toolCmd.Start()
+		_ = catCmd.Run()
+		err = toolCmd.Wait()
+		output = outBuf.Bytes()
+	} else {
+		// اجرای معمولی با ورودی فایل
+		output, err = runCommandWithKillSwitch(targetID, cmdName, cmdArgs...)
+	}
+
+	if err != nil {
+		log.Printf("⚠️ Tool %s failed or killed: %v\n", cmdName, err)
+		return
+	}
+
+	scanner := bufio.NewScanner(bytes.NewReader(output))
+	for scanner.Scan() {
+		u := strings.TrimSpace(scanner.Text())
+		if u == "" {
+			continue
+		}
+		if _, exists := results[u]; !exists {
+			results[u] = sourceLabel
+		}
+	}
+}
+
+// 👇 تابع ذخیره‌سازی که حالا با نوتیفیکیشن تلگرام ترکیب شده است
+func saveCrawledURLs(targetID uint, rootDomain string, urls map[string]string) {
+	log.Printf("💾 Processing %d collected URLs...", len(urls))
+
+	ignoredExts := []string{
+		".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp", ".ico", ".webp",
+		".woff", ".woff2", ".ttf", ".eot", ".otf",
+		".css",
+	}
+
+	var newUrls []models.FoundURL
+	countSkippedCache := 0
+	countSkippedExt := 0
+
+	redisKey := fmt.Sprintf("target:%d:crawled_urls", targetID)
+
+	for u, source := range urls {
+		cleanURL := strings.Split(u, "?")[0]
+		isIgnored := false
+		for _, ext := range ignoredExts {
+			if strings.HasSuffix(strings.ToLower(cleanURL), ext) {
+				isIgnored = true
+				break
+			}
+		}
+		if isIgnored {
+			countSkippedExt++
+			continue
+		}
+
+		exists, err := redisq.Client.SIsMember(context.Background(), redisKey, u).Result()
+		if err == nil && exists {
+			countSkippedCache++
+			continue
+		}
+
+		newUrls = append(newUrls, models.FoundURL{
+			TargetID: targetID,
+			Value:    u,
+			Source:   source,
+		})
+
+		redisq.Client.SAdd(context.Background(), redisKey, u)
+
+		// 👇 ارسال نوتیفیکیشن
+		telegram.SendNewURLAlert(rootDomain, u, source)
+	}
+
+	if len(newUrls) > 0 {
+		batchSize := 500
+		for i := 0; i < len(newUrls); i += batchSize {
+			end := i + batchSize
+			if end > len(newUrls) {
+				end = len(newUrls)
+			}
+			if err := database.DB.CreateInBatches(newUrls[i:end], batchSize).Error; err != nil {
+				log.Printf("⚠️ DB Insert Warning: %v\n", err)
+			}
+		}
+		log.Printf("✅ Saved %d NEW URLs to DB.", len(newUrls))
+	} else {
+		log.Println("✅ No new URLs to save.")
+	}
+
+	log.Printf("📊 Stats: Total Found: %d | Ignored (Ext): %d | Cached (Skip): %d | New: %d",
+		len(urls), countSkippedExt, countSkippedCache, len(newUrls))
 }
 
 // ==========================================

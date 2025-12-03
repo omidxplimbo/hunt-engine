@@ -4,29 +4,32 @@ import "time"
 
 // TargetResponse ساختار خروجی برای اطلاعات تارگت
 type TargetResponse struct {
-	ID          uint      `json:"id"`
-	Name        string    `json:"name"`
-	RootDomain  string    `json:"root_domain"`
-	Description string    `json:"description"`
-	InScope     bool      `json:"in_scope"`
-	CreatedAt   time.Time `json:"created_at"`
-	AssetCount  int64     `json:"asset_count"`
-	// 👇👇👇 فیلدهای فراموش شده که باید اضافه بشن
+	ID           uint       `json:"id"`
+	Name         string     `json:"name"`
+	RootDomain   string     `json:"root_domain"`
+	Description  string     `json:"description"`
+	InScope      bool       `json:"in_scope"`
+	CreatedAt    time.Time  `json:"created_at"`
+	AssetCount   int64      `json:"asset_count"`
 	Frequency    int        `json:"frequency"`
 	LastScanAt   *time.Time `json:"last_scan_at"`
 	Status       string     `json:"status"`
 	CurrentPhase string     `json:"current_phase"`
+
+	// 👇 این فیلد جا افتاده بود و باعث خطا می‌شد
+	UseAlterx bool `json:"use_alterx"`
+
+	ScanModules string `json:"scan_modules"`
 }
 
 // AssetResponse ساختار خروجی برای دارایی‌ها
 type AssetResponse struct {
-	ID        uint      `json:"id"`
-	Value     string    `json:"value"`
-	Type      string    `json:"type"`
-	IsNew     bool      `json:"is_new"`
-	IsLive    bool      `json:"is_live"`
-	CreatedAt time.Time `json:"created_at"`
-
+	ID            uint        `json:"id"`
+	Value         string      `json:"value"`
+	Type          string      `json:"type"`
+	IsNew         bool        `json:"is_new"`
+	IsLive        bool        `json:"is_live"`
+	CreatedAt     time.Time   `json:"created_at"`
 	FinalURL      string      `json:"final_url"`
 	StatusCode    int         `json:"status_code"`
 	Title         string      `json:"title"`
@@ -37,9 +40,13 @@ type AssetResponse struct {
 	CDNName       string      `json:"cdn_name"`
 	Technologies  interface{} `json:"technologies"`
 	ResponseTime  int64       `json:"response_time_ms"`
+	RawHttpx      interface{} `json:"raw_httpx,omitempty"`
+}
 
-	// 👇👇👇 فیلد جدید برای نمایش کل خروجی خام httpx
-	// از نوع interface{} استفاده می‌کنیم تا JSON تو در تو رو درست نشون بده
-	// omitempty باعث میشه اگه داده‌ای نبود، این فیلد کلا ارسال نشه تا حجم کم بمونه
-	RawHttpx interface{} `json:"raw_httpx,omitempty"`
+// FoundURLResponse ساختار خروجی برای URLهای پیدا شده
+type FoundURLResponse struct {
+	ID        uint      `json:"id"`
+	Value     string    `json:"value"`
+	Source    string    `json:"source"` // مثلا wayback, gau
+	CreatedAt time.Time `json:"created_at"`
 }

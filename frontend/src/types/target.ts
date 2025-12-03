@@ -11,6 +11,7 @@ export interface Target {
   status: string; // READY, SCANNING
   current_phase?: string; // 👇 فیلد جدید (PHASE 1: ..., PHASE 2: ...)
   use_alterx: boolean;
+  scan_modules: string;
 }
 
 export interface TargetResponse {

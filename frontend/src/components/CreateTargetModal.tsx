@@ -11,6 +11,7 @@ interface Props {
 const MODULES = [
   { id: 'DISCOVERY', label: 'Phase 1: Discovery (Subdomains)' },
   { id: 'PROBING', label: 'Phase 2: Probing (HTTP/Tech)' },
+  { id: 'CRAWLING', label: 'Phase 3: Crawling (URLs/JS)' }, // 👈 اضافه شد
 ];
 
 export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
@@ -20,7 +21,7 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
     root_domain: '',
     description: '',
     frequency: 720, // پیش‌فرض ۱۲ ساعت
-    modules: ['DISCOVERY', 'PROBING'],
+    modules: ['DISCOVERY', 'PROBING', 'CRAWLING'],
     use_alterx: true, // 👈 پیش‌فرض روشن
   });
 
@@ -37,7 +38,7 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
         root_domain: '',
         description: '',
         frequency: 720,
-        modules: ['DISCOVERY', 'PROBING'],
+        modules: ['DISCOVERY', 'PROBING', 'CRAWLING'],
         use_alterx: true, // 👈 پیش‌فرض روشن
 
       });

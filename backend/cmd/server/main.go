@@ -71,6 +71,7 @@ func main() {
 
 	// Asset Routes
 	api.Get("/targets/:id/assets", handlers.GetTargetAssets)
+	api.Get("/targets/:id/urls", handlers.GetTargetURLs) // 👈 این خط جدید است
 
 	// 👇👇👇 روت‌های مدیریت کاربران (User Management)
 	api.Get("/users", handlers.GetUsers)

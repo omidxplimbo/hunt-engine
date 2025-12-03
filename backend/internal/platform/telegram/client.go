@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-// 👇 افزایش ظرفیت صف به ۵۰ هزار پیام (برای هندل کردن اسپایک‌های ناگهانی)
+// 👇 افزایش ظرفیت صف به ۵۰ هزار پیام
 const QueueSize = 50000
 
-// 👇 افزایش سرعت ارسال (۱ پیام در ثانیه برای تلگرام امن است)
+// 👇 سرعت ارسال (۱ پیام در ثانیه)
 const RateLimit = 1 * time.Second
 
 // کانال بافر دار
@@ -46,10 +46,6 @@ func processQueue() {
 	}
 }
 
-// SendMessage پیام را به صف اضافه می‌کند
-// 👇 تغییر مهم: این تابع دیگر Non-blocking نیست.
-// اگر صف ۵۰ هزارتایی پر شود، اینجا صبر می‌کند تا جا باز شود.
-// نتیجه: هیچ پیامی دور ریخته نمی‌شود.
 func SendMessage(text string) {
 	messageQueue <- text
 }
@@ -68,20 +64,17 @@ func performHTTPRequest(text string) {
 		"disable_web_page_preview": true,
 	})
 
-	// تایم‌اوت کوتاه برای جلوگیری از قفل شدن روی شبکه
 	client := http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Post(apiURL, "application/json", bytes.NewBuffer(reqBody))
 
 	if err != nil {
 		log.Printf("❌ Failed to send Telegram message: %v\n", err)
-		// نکته: در سیستم‌های خیلی حساس، اینجا باید پیام را دوباره به صف برگردانیم (Retry Queue)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		log.Printf("❌ Telegram API error: Status %d\n", resp.StatusCode)
-		// خطای 429 یعنی Too Many Requests. اگر دیدی، باید RateLimit را زیاد کنی
 		if resp.StatusCode == 429 {
 			log.Println("⚠️ Rate limit hit! Slowing down...")
 			time.Sleep(5 * time.Second)
@@ -94,17 +87,7 @@ func SendChangeAlert(targetDomain, assetValue, field, oldVal, newVal string) {
 	emoji := "🔄"
 	if field == "status_code" {
 		emoji = "🚦"
-	}
-	if field == "host_ip" {
-		emoji = "🌍"
-	}
-	if field == "technologies" {
-		emoji = "🛠"
-	}
-	if field == "title" {
-		emoji = "📑"
-	}
-	if field == "is_live" {
+	} else if field == "is_live" {
 		emoji = "🔌"
 	}
 
@@ -132,6 +115,19 @@ func SendNewAssetAlert(targetDomain, assetValue string) {
 			"🔗 *Asset:* `%s`\n\n"+
 			"⏰ _%s_",
 		targetDomain, assetValue, time.Now().Format("15:04:05"),
+	)
+	SendMessage(msg)
+}
+
+// 👇👇👇 تابع جدید برای URLهای پیدا شده
+func SendNewURLAlert(targetDomain, url, source string) {
+	msg := fmt.Sprintf(
+		"🕷 *FRESH CRAWL URL* 🕷\n\n"+
+			"🎯 *Target:* `%s`\n"+
+			"🔗 *URL:* `%s`\n"+
+			"lz *Source:* `%s`\n\n"+
+			"⏰ _%s_",
+		targetDomain, url, source, time.Now().Format("15:04:05"),
 	)
 	SendMessage(msg)
 }

@@ -2,8 +2,6 @@
 
 > A scalable, automated, and intelligent reconnaissance framework designed for security researchers and red teamers. Built with performance, modularity, and continuous monitoring in mind.
 
-
-
 ## 💡 Core Philosophy
 
 Unlike traditional, fire-and-forget scanner scripts, this platform is built as a **Continuous Hunting Machine**.
@@ -32,8 +30,8 @@ The system is built on a modern, containerized microservice-like architecture:
 * **Features:**
     * **Dashboard:** Live analytics and charts (Recharts).
     * **Target Management:** Create, Edit, Delete, **Stop/Resume** scans.
-    * **Configurable Scans:** Toggle modules like `Alterx` per target.
-    * **Asset Explorer:** Advanced data grid with Filtering, Search, **Import/Export (JSON)**, and detailed IP columns.
+    * **Configurable Scans:** Toggle modules like `Alterx` or `Crawling` per target.
+    * **Asset Explorer:** Advanced data grid with Filtering, Search, and Tabs for **Assets** vs **Crawled URLs**.
     * **User Management:** Admin panel to manage team access.
 
 ## 🛠️ Arsenal (Toolchain)
@@ -44,12 +42,13 @@ The platform integrates industry-standard Golang-based security tools within its
 * **Permutation/Mutation:** `alterx` (Optional per target)
 * **Validation/Resolution:** `dnsx` (w/ fixed resolvers)
 * **Probing:** `httpx` (Rich JSON output, WAF/CDN detection)
+* **Crawling & Content Discovery:** `gau`, `waybackurls`, `katana` (Active & Passive)
 * **Deep Scan:** `amass` (Integrated via Docker)
-* **Future Integration:** `gau`, `katana`, `ffuf` (Ready in Dockerfile)
+* **Future Integration:** `ffuf`, `nuclei` (Ready in Dockerfile)
 
 ---
 
-## 📊 Development Status: Phase 3 Complete
+## 📊 Development Status: Phase 4 Complete
 
 We are following a multi-phase development roadmap.
 
@@ -76,20 +75,22 @@ We are following a multi-phase development roadmap.
 **Goal:** A professional GUI to manage targets and secure the platform.
 * [x] **Authentication:** Secure Login/Logout with JWT.
 * [x] **User Management:** Admin interface.
-* [x] **Target Management:** Full CRUD + Configurable Modules (Alterx Toggle).
-* [x] **Data Management:** Import/Export JSON data.
+* [x] **Target Management:** Full CRUD + Configurable Modules.
 * [x] **Analytics:** Graphical dashboard with Stat Cards and Charts.
+
+### ✅ Phase 4: Deep Crawling & Content Discovery (COMPLETED)
+**Goal:** Harvest URLs, endpoints, and JS files from live assets.
+* [x] **Hybrid Crawling:** Integrated `gau`, `waybackurls` (Passive) and `katana` (Active).
+* [x] **Smart Deduplication:** Redis Sets used to prevent duplicate URL storage and minimize DB load.
+* [x] **Noise Filtering:** Auto-exclusion of static assets (images, fonts, css).
+* [x] **Frontend Integration:** Dedicated "Crawled URLs" tab in Asset Explorer.
+* [x] **Alerting:** Real-time Telegram notifications for fresh URLs.
 
 ---
 
-## 🔜 Next Steps (Phase 4 & 5)
+## 🔜 Next Steps (Phase 5)
 
-We are now transitioning to **Advanced Content Discovery** and **Vulnerability Scanning**.
-
-**Phase 4: Deep Crawling & Content Discovery (Backend)**
-* Enable `gau`, `waybackurls` for passive URL discovery.
-* Enable `katana` for active crawling and JS file discovery.
-* Store parsed URLs and JS Secrets in new database tables.
+We are now transitioning to **Vulnerability Scanning**.
 
 **Phase 5: Vulnerability Scanning (Backend)**
 * Integrate **Nuclei** for template-based scanning.

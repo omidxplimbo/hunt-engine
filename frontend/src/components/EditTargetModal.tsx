@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { updateTarget, type UpdateTargetPayload } from '../api/targets';
 import type { Target } from '../types/target';
 import { X, Loader2 } from 'lucide-react';
+import clsx from 'clsx'; // 👈 برای مدیریت کلاس‌های شرطی
 
 interface Props {
   isOpen: boolean;
@@ -10,19 +11,42 @@ interface Props {
   target: Target | null;
 }
 
+// لیست ماژول‌های قابل انتخاب (شامل فاز جدید Crawling)
+const MODULES = [
+  { id: 'DISCOVERY', label: 'Discovery' },
+  { id: 'PROBING', label: 'Probing' },
+  { id: 'CRAWLING', label: 'Crawling' },
+];
+
 export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
   const queryClient = useQueryClient();
   const [formData, setFormData] = useState<UpdateTargetPayload>({});
 
   useEffect(() => {
     if (target) {
+      // تلاش برای خواندن ماژول‌های فعال فعلی
+      // اگر دیتای scan_modules از سمت بک‌اند بیاید آن را پارس می‌کنیم
+      // در غیر این صورت پیش‌فرض همه را فعال در نظر می‌گیریم
+      let existingModules: string[] = ['DISCOVERY', 'PROBING', 'CRAWLING'];
+      
+      // از آنجایی که ممکن است تایپ Target هنوز در فرانت آپدیت نشده باشد، از any استفاده می‌کنیم
+      const t = target as any;
+      if (t.scan_modules) {
+          try {
+              const parsed = typeof t.scan_modules === 'string' ? JSON.parse(t.scan_modules) : t.scan_modules;
+              if (Array.isArray(parsed)) existingModules = parsed;
+          } catch (e) { 
+              console.error("Failed to parse modules", e); 
+          }
+      }
+
       setFormData({
         name: target.name,
         description: target.description,
         frequency: target.frequency,
         in_scope: target.in_scope,
-        // 👇👇👇 این خط اضافه شد: خواندن تنظیم فعلی
-        use_alterx: true, 
+        use_alterx: target.use_alterx,
+        modules: existingModules, // 👈 لیست ماژول‌ها در فرم قرار می‌گیرد
       });
     }
   }, [target]);
@@ -42,9 +66,24 @@ export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
     mutation.mutate(formData);
   };
 
+  // تابع تغییر وضعیت ماژول‌ها
+  const toggleModule = (moduleId: string) => {
+    setFormData(prev => {
+      const currentModules = prev.modules || [];
+      const exists = currentModules.includes(moduleId);
+      return {
+        ...prev,
+        modules: exists
+          ? currentModules.filter(m => m !== moduleId)
+          : [...currentModules, moduleId]
+      };
+    });
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
       <div className="bg-gray-900 border border-gray-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
+        {/* Header */}
         <div className="flex justify-between items-center p-5 border-b border-gray-800 bg-gray-800/50">
           <h2 className="text-lg font-bold text-white">Edit Target: {target.name}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
@@ -75,13 +114,34 @@ export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
             />
           </div>
 
-          {/* 👇👇👇 Alterx Toggle (بخش جدید برای ویرایش) */}
+          {/* Modules Selection - بخش جدید برای انتخاب فازها */}
+          <div>
+            <label className="block text-sm font-medium text-gray-400 mb-2">Active Phases</label>
+            <div className="flex gap-2">
+                {MODULES.map(mod => (
+                    <div
+                        key={mod.id}
+                        onClick={() => toggleModule(mod.id)}
+                        className={clsx(
+                            "cursor-pointer px-3 py-1.5 rounded-md text-xs font-bold border transition-colors select-none",
+                            (formData.modules || []).includes(mod.id)
+                                ? "bg-blue-900/30 text-blue-400 border-blue-800"
+                                : "bg-gray-950 text-gray-500 border-gray-800 hover:border-gray-700"
+                        )}
+                    >
+                        {mod.label}
+                    </div>
+                ))}
+            </div>
+          </div>
+
+          {/* Alterx Toggle */}
           <div className="flex items-center gap-3 p-3 bg-gray-950 border border-gray-800 rounded-lg">
              <input 
                 type="checkbox" 
                 id="edit_use_alterx"
                 // اگر مقدار undefined بود (هنوز ست نشده)، پیش‌فرض true باشه
-                checked={formData.use_alterx}
+                checked={formData.use_alterx ?? true}
                 onChange={e => setFormData({...formData, use_alterx: e.target.checked})}
                 className="w-4 h-4 rounded border-gray-700 bg-gray-900 text-blue-600 focus:ring-blue-600 cursor-pointer"
              />
