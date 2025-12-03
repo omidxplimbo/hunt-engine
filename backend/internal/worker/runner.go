@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
+	// 👇 پکیج کش اضافه شد
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/cache"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/telegram"
@@ -368,12 +370,10 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 	triggerNextModule(targetID, rootDomain, "CRAWLING")
 }
 
-// 👇👇👇 تابع جاافتاده که باعث ارور شده بود
 func runToolAndCollect(targetID uint, inputFile string, results map[string]string, sourceLabel string, cmdName string, cmdArgs ...string) {
 	var output []byte
 	var err error
 
-	// اگر ابزارها نیاز به پایپ کردن فایل داشته باشند (مثل gau و waybackurls وقتی لیست فایل مستقیم نمی‌گیرند)
 	if cmdName == "waybackurls" || cmdName == "gau" {
 		catCmd := exec.Command("cat", inputFile)
 		toolCmd := exec.Command(cmdName, cmdArgs...)
@@ -387,7 +387,6 @@ func runToolAndCollect(targetID uint, inputFile string, results map[string]strin
 		err = toolCmd.Wait()
 		output = outBuf.Bytes()
 	} else {
-		// اجرای معمولی با ورودی فایل
 		output, err = runCommandWithKillSwitch(targetID, cmdName, cmdArgs...)
 	}
 
@@ -408,7 +407,6 @@ func runToolAndCollect(targetID uint, inputFile string, results map[string]strin
 	}
 }
 
-// 👇 تابع ذخیره‌سازی که حالا با نوتیفیکیشن تلگرام ترکیب شده است
 func saveCrawledURLs(targetID uint, rootDomain string, urls map[string]string) {
 	log.Printf("💾 Processing %d collected URLs...", len(urls))
 
@@ -452,7 +450,6 @@ func saveCrawledURLs(targetID uint, rootDomain string, urls map[string]string) {
 
 		redisq.Client.SAdd(context.Background(), redisKey, u)
 
-		// 👇 ارسال نوتیفیکیشن
 		telegram.SendNewURLAlert(rootDomain, u, source)
 	}
 
@@ -467,6 +464,8 @@ func saveCrawledURLs(targetID uint, rootDomain string, urls map[string]string) {
 				log.Printf("⚠️ DB Insert Warning: %v\n", err)
 			}
 		}
+		// 👇👇👇 اینجا کش تارگت را می‌سوزانیم تا دیتای جدید در لیست‌ها دیده شود
+		cache.IncrementTargetVersion(targetID)
 		log.Printf("✅ Saved %d NEW URLs to DB.", len(newUrls))
 	} else {
 		log.Println("✅ No new URLs to save.")
@@ -561,6 +560,11 @@ func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveRes
 				log.Printf("❌ Bulk insert failed: %v\n", err)
 			}
 		}
+	}
+
+	// 👇👇👇 اینجا کش را می‌سوزانیم چون Asset جدید اضافه یا آپدیت شده
+	if countNew > 0 || countUpdated > 0 {
+		cache.IncrementTargetVersion(target.ID)
 	}
 	log.Printf("✅ DB Sync Complete. New: %d, Status Changed: %d.\n", countNew, countUpdated)
 }
@@ -665,14 +669,15 @@ func UpdateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 	if err != nil {
 		log.Printf("❌ Transaction failed: %v\n", err)
 	} else {
+		// 👇👇👇 اینجا هم کش را می‌سوزانیم
+		if countUpdated > 0 {
+			cache.IncrementTargetVersion(targetID)
+		}
 		log.Printf("✅ Smart Update Complete. Updated: %d, Changes Detected: %d.\n", countUpdated, countChanges)
 	}
 }
 
-// ==========================================
-// Helper Functions (Core Logic)
-// ==========================================
-
+// ... (Helper Functions)
 func runCommandWithKillSwitch(targetID uint, name string, args ...string) ([]byte, error) {
 	cmd := exec.Command(name, args...)
 	var outBuf bytes.Buffer

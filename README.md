@@ -31,7 +31,7 @@ The system is built on a modern, containerized microservice-like architecture:
     * **Dashboard:** Live analytics and charts (Recharts).
     * **Target Management:** Create, Edit, Delete, **Stop/Resume** scans.
     * **Configurable Scans:** Toggle modules like `Alterx` or `Crawling` per target.
-    * **Asset Explorer:** Advanced data grid with Filtering, Search, and Tabs for **Assets** vs **Crawled URLs**.
+    * **Asset Explorer:** Advanced data grid with Filtering, Search, **Tabs for Assets vs URLs**, and specific **JS Filtering**.
     * **User Management:** Admin panel to manage team access.
 
 ## 🛠️ Arsenal (Toolchain)
@@ -83,7 +83,7 @@ We are following a multi-phase development roadmap.
 * [x] **Hybrid Crawling:** Integrated `gau`, `waybackurls` (Passive) and `katana` (Active).
 * [x] **Smart Deduplication:** Redis Sets used to prevent duplicate URL storage and minimize DB load.
 * [x] **Noise Filtering:** Auto-exclusion of static assets (images, fonts, css).
-* [x] **Frontend Integration:** Dedicated "Crawled URLs" tab in Asset Explorer.
+* [x] **Frontend Integration:** Dedicated "Crawled URLs" tab with **JS File Filter** in Asset Explorer.
 * [x] **Alerting:** Real-time Telegram notifications for fresh URLs.
 
 ---
