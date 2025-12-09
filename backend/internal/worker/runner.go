@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
-	// 👇 پکیج کش اضافه شد
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/cache"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
@@ -26,7 +25,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// مسیرهای فایل‌های موقت
+// مسیرهای فایل‌های موقت (بهتر است داینامیک باشند، اما فعلا برای سازگاری نگه داشته شده‌اند)
+// نکته: در توابع جدید از نام‌های داینامیک استفاده کردیم
 const (
 	allFoundFile      = "/tmp/all_found.txt"
 	probingInputFile  = "/tmp/probing_input.txt"
@@ -87,7 +87,6 @@ func Start() {
 	fmt.Println()
 
 	fmt.Printf("%s%s%s\n", RED, " 🔍 Automated Reconnaissance System", NC)
-	fmt.Printf("%s%s%s\n", RED, " 👨‍💻 Recon And Watch Tower Tool From Mustache Team 👨‍💻", NC)
 	fmt.Printf("%s%s%s\n", RED, " 📅 "+time.Now().Format("2006-01-02 15:04:05"), NC)
 	fmt.Println(RED + "+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-" + NC)
 	fmt.Println()
@@ -308,7 +307,7 @@ func runProbingPhase(targetID uint, rootDomain string) {
 }
 
 // =================================================================
-// PHASE 3: Crawling Implementation
+// PHASE 3: Crawling Implementation (UPDATED)
 // =================================================================
 func runCrawlingPhase(targetID uint, rootDomain string) {
 	if checkStopRequest(targetID) {
@@ -318,45 +317,57 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 	log.Printf("🚀 Starting PHASE 3 (CRAWLING) for target ID: %d\n", targetID)
 	updateTargetPhase(targetID, "PHASE 3: FETCHING ASSETS")
 
+	// دریافت لیست ساب‌دامین‌های زنده برای ابزارهای عمیق (Gau, Katana)
 	var liveAssets []string
 	database.DB.Model(&models.Asset{}).
 		Where("target_id = ? AND is_live = true", targetID).
 		Pluck("value", &liveAssets)
 
-	if len(liveAssets) == 0 {
-		log.Println("⚠️ No live assets found for crawling. Skipping.")
-		triggerNextModule(targetID, rootDomain, "CRAWLING")
-		return
+		// ساخت فایل ورودی مخصوص ساب‌دامین‌ها (برای Gau و Katana)
+	crawlingAssetsFile := fmt.Sprintf("/tmp/crawling_assets_%d.txt", targetID)
+	if len(liveAssets) > 0 {
+		if err := writeSliceToFile(crawlingAssetsFile, liveAssets); err != nil {
+			log.Printf("❌ Failed to write crawling assets input: %v\n", err)
+			return
+		}
+	} else {
+		log.Println("⚠️ No live assets found. Gau and Katana will be skipped or run on empty list.")
 	}
 
-	const crawlingInputFile = "/tmp/crawling_input.txt"
-	if err := writeSliceToFile(crawlingInputFile, liveAssets); err != nil {
-		log.Printf("❌ Failed to write crawling input: %v\n", err)
+	// ساخت فایل ورودی مخصوص Root Domain (برای Waybackurls)
+	// 👇 تغییر مهم: فقط Root Domain برای Wayback استفاده می‌شود
+	crawlingRootFile := fmt.Sprintf("/tmp/crawling_root_%d.txt", targetID)
+	if err := writeSliceToFile(crawlingRootFile, []string{rootDomain}); err != nil {
+		log.Printf("❌ Failed to write crawling root input: %v\n", err)
 		return
 	}
 
 	urlsMap := make(map[string]string)
 
-	// Wayback
+	// 1. Waybackurls -> فقط روی Root Domain
 	if checkStopRequest(targetID) {
 		return
 	}
-	updateTargetPhase(targetID, "PHASE 3: RUNNING WAYBACK")
-	runToolAndCollect(targetID, crawlingInputFile, urlsMap, "wayback", "waybackurls")
+	updateTargetPhase(targetID, "PHASE 3: RUNNING WAYBACK (ROOT ONLY)")
+	runToolAndCollect(targetID, crawlingRootFile, urlsMap, "wayback", "waybackurls")
 
-	// GAU
-	if checkStopRequest(targetID) {
-		return
+	// 2. GAU -> روی همه ساب‌دامین‌های زنده
+	if len(liveAssets) > 0 {
+		if checkStopRequest(targetID) {
+			return
+		}
+		updateTargetPhase(targetID, "PHASE 3: RUNNING GAU (ALL ASSETS)")
+		runToolAndCollect(targetID, crawlingAssetsFile, urlsMap, "gau", "gau", "--threads", "10")
 	}
-	updateTargetPhase(targetID, "PHASE 3: RUNNING GAU")
-	runToolAndCollect(targetID, crawlingInputFile, urlsMap, "gau", "gau", "--threads", "10")
 
-	// Katana
-	if checkStopRequest(targetID) {
-		return
+	// 3. Katana -> روی همه ساب‌دامین‌های زنده
+	if len(liveAssets) > 0 {
+		if checkStopRequest(targetID) {
+			return
+		}
+		updateTargetPhase(targetID, "PHASE 3: RUNNING KATANA (ALL ASSETS)")
+		runToolAndCollect(targetID, crawlingAssetsFile, urlsMap, "katana", "katana", "-list", crawlingAssetsFile, "-jc", "-kf", "-silent", "-c", "10")
 	}
-	updateTargetPhase(targetID, "PHASE 3: RUNNING KATANA")
-	runToolAndCollect(targetID, crawlingInputFile, urlsMap, "katana", "katana", "-list", crawlingInputFile, "-jc", "-kf", "-silent", "-c", "10")
 
 	// Filtering & Saving
 	if checkStopRequest(targetID) {
@@ -364,7 +375,12 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 	}
 	updateTargetPhase(targetID, "PHASE 3: FILTERING & SAVING")
 
-	saveCrawledURLs(targetID, rootDomain, urlsMap)
+	// پاکسازی فایل‌های موقت
+	os.Remove(crawlingAssetsFile)
+	os.Remove(crawlingRootFile)
+
+	// 👇 ارسال پارامتر true برای silentMode (عدم ارسال نوتیفیکیشن تلگرام)
+	saveCrawledURLs(targetID, rootDomain, urlsMap, true)
 
 	log.Printf("🏁 PHASE 3 finished for %s.\n", rootDomain)
 	triggerNextModule(targetID, rootDomain, "CRAWLING")
@@ -407,7 +423,8 @@ func runToolAndCollect(targetID uint, inputFile string, results map[string]strin
 	}
 }
 
-func saveCrawledURLs(targetID uint, rootDomain string, urls map[string]string) {
+// saveCrawledURLs (UPDATED) اضافه شدن پارامتر silent
+func saveCrawledURLs(targetID uint, rootDomain string, urls map[string]string, silent bool) {
 	log.Printf("💾 Processing %d collected URLs...", len(urls))
 
 	ignoredExts := []string{
@@ -420,6 +437,7 @@ func saveCrawledURLs(targetID uint, rootDomain string, urls map[string]string) {
 	countSkippedCache := 0
 	countSkippedExt := 0
 
+	// کلید ردیس برای جلوگیری از تکرار در دفعات بعد (Continuous Monitoring)
 	redisKey := fmt.Sprintf("target:%d:crawled_urls", targetID)
 
 	for u, source := range urls {
@@ -436,6 +454,7 @@ func saveCrawledURLs(targetID uint, rootDomain string, urls map[string]string) {
 			continue
 		}
 
+		// 👇 چک کردن کش ردیس (Deduplication)
 		exists, err := redisq.Client.SIsMember(context.Background(), redisKey, u).Result()
 		if err == nil && exists {
 			countSkippedCache++
@@ -448,9 +467,13 @@ func saveCrawledURLs(targetID uint, rootDomain string, urls map[string]string) {
 			Source:   source,
 		})
 
+		// 👇 افزودن به کش ردیس
 		redisq.Client.SAdd(context.Background(), redisKey, u)
 
-		telegram.SendNewURLAlert(rootDomain, u, source)
+		// 👇 ارسال نوتیفیکیشن فقط اگر silent نباشد
+		if !silent {
+			telegram.SendNewURLAlert(rootDomain, u, source)
+		}
 	}
 
 	if len(newUrls) > 0 {
@@ -464,7 +487,7 @@ func saveCrawledURLs(targetID uint, rootDomain string, urls map[string]string) {
 				log.Printf("⚠️ DB Insert Warning: %v\n", err)
 			}
 		}
-		// 👇👇👇 اینجا کش تارگت را می‌سوزانیم تا دیتای جدید در لیست‌ها دیده شود
+		// کش تارگت را می‌سوزانیم تا دیتای جدید در لیست‌ها دیده شود
 		cache.IncrementTargetVersion(targetID)
 		log.Printf("✅ Saved %d NEW URLs to DB.", len(newUrls))
 	} else {
@@ -562,7 +585,7 @@ func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveRes
 		}
 	}
 
-	// 👇👇👇 اینجا کش را می‌سوزانیم چون Asset جدید اضافه یا آپدیت شده
+	// کش را می‌سوزانیم چون Asset جدید اضافه یا آپدیت شده
 	if countNew > 0 || countUpdated > 0 {
 		cache.IncrementTargetVersion(target.ID)
 	}
@@ -669,7 +692,7 @@ func UpdateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 	if err != nil {
 		log.Printf("❌ Transaction failed: %v\n", err)
 	} else {
-		// 👇👇👇 اینجا هم کش را می‌سوزانیم
+		// کش را می‌سوزانیم
 		if countUpdated > 0 {
 			cache.IncrementTargetVersion(targetID)
 		}
