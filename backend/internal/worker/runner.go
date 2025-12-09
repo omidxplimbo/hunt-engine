@@ -307,35 +307,36 @@ func runProbingPhase(targetID uint, rootDomain string) {
 }
 
 // =================================================================
-// PHASE 3: Crawling Implementation (UPDATED)
+// PHASE 3: Crawling Implementation (FIXED)
 // =================================================================
 func runCrawlingPhase(targetID uint, rootDomain string) {
 	if checkStopRequest(targetID) {
 		return
 	}
 
+	// 👇 1. دریافت تنظیمات تارگت (برای چک کردن UseWaymore)
+	var target models.Target
+	if err := database.DB.First(&target, targetID).Error; err != nil {
+		log.Printf("❌ Failed to fetch target config in Crawling Phase: %v\n", err)
+		return
+	}
+
 	log.Printf("🚀 Starting PHASE 3 (CRAWLING) for target ID: %d\n", targetID)
 	updateTargetPhase(targetID, "PHASE 3: FETCHING ASSETS")
 
-	// دریافت لیست ساب‌دامین‌های زنده برای ابزارهای عمیق (Gau, Katana)
 	var liveAssets []string
 	database.DB.Model(&models.Asset{}).
 		Where("target_id = ? AND is_live = true", targetID).
 		Pluck("value", &liveAssets)
 
-		// ساخت فایل ورودی مخصوص ساب‌دامین‌ها (برای Gau و Katana)
 	crawlingAssetsFile := fmt.Sprintf("/tmp/crawling_assets_%d.txt", targetID)
 	if len(liveAssets) > 0 {
 		if err := writeSliceToFile(crawlingAssetsFile, liveAssets); err != nil {
 			log.Printf("❌ Failed to write crawling assets input: %v\n", err)
 			return
 		}
-	} else {
-		log.Println("⚠️ No live assets found. Gau and Katana will be skipped or run on empty list.")
 	}
 
-	// ساخت فایل ورودی مخصوص Root Domain (برای Waybackurls)
-	// 👇 تغییر مهم: فقط Root Domain برای Wayback استفاده می‌شود
 	crawlingRootFile := fmt.Sprintf("/tmp/crawling_root_%d.txt", targetID)
 	if err := writeSliceToFile(crawlingRootFile, []string{rootDomain}); err != nil {
 		log.Printf("❌ Failed to write crawling root input: %v\n", err)
@@ -344,28 +345,73 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 
 	urlsMap := make(map[string]string)
 
-	// 1. Waybackurls -> فقط روی Root Domain
+	// 1. Waybackurls
 	if checkStopRequest(targetID) {
 		return
 	}
-	updateTargetPhase(targetID, "PHASE 3: RUNNING WAYBACK (ROOT ONLY)")
+	updateTargetPhase(targetID, "PHASE 3: RUNNING WAYBACK")
 	runToolAndCollect(targetID, crawlingRootFile, urlsMap, "wayback", "waybackurls")
 
-	// 2. GAU -> روی همه ساب‌دامین‌های زنده
+	// 2. GAU
 	if len(liveAssets) > 0 {
 		if checkStopRequest(targetID) {
 			return
 		}
-		updateTargetPhase(targetID, "PHASE 3: RUNNING GAU (ALL ASSETS)")
+		updateTargetPhase(targetID, "PHASE 3: RUNNING GAU")
 		runToolAndCollect(targetID, crawlingAssetsFile, urlsMap, "gau", "gau", "--threads", "10")
 	}
 
-	// 3. Katana -> روی همه ساب‌دامین‌های زنده
+	// 👇👇👇 3. Waymore Implementation (بخش اضافه شده)
+	if target.UseWaymore {
+		if checkStopRequest(targetID) {
+			return
+		}
+		updateTargetPhase(targetID, "PHASE 3: RUNNING WAYMORE")
+		log.Printf("🔥 Running Waymore for %s...\n", rootDomain)
+
+		// فایل خروجی موقت برای Waymore
+		waymoreOutputFile := fmt.Sprintf("/tmp/waymore_%d.txt", targetID)
+
+		// دستور Waymore:
+		// -i: دامنه ورودی
+		// -mode U: فقط URLها را برگردان
+		// -n: ساب‌دامین‌های جدید را اسکن نکن (فقط آرشیو)
+		// -oU: مسیر فایل خروجی URLها
+		_, err := runCommandWithKillSwitch(targetID, "waymore", "-i", rootDomain, "-mode", "U", "-n", "-oU", waymoreOutputFile)
+
+		if err != nil {
+			log.Printf("⚠️ Waymore execution failed: %v\n", err)
+		} else {
+			// خواندن فایل خروجی Waymore و اضافه کردن به لیست
+			content, err := ioutil.ReadFile(waymoreOutputFile)
+			if err == nil {
+				lines := strings.Split(string(content), "\n")
+				for _, line := range lines {
+					u := strings.TrimSpace(line)
+					if u != "" {
+						if _, exists := urlsMap[u]; !exists {
+							urlsMap[u] = "waymore"
+						}
+					}
+				}
+				log.Printf("✅ Waymore found %d URLs.\n", len(lines))
+			} else {
+				log.Printf("⚠️ Could not read Waymore output file: %v\n", err)
+			}
+			// پاک کردن فایل موقت Waymore
+			os.Remove(waymoreOutputFile)
+		}
+	} else {
+		log.Println("⏩ Skipping Waymore (Disabled in settings)")
+	}
+	// 👆👆👆 پایان بخش اضافه شده
+
+	// 4. Katana
 	if len(liveAssets) > 0 {
 		if checkStopRequest(targetID) {
 			return
 		}
-		updateTargetPhase(targetID, "PHASE 3: RUNNING KATANA (ALL ASSETS)")
+		updateTargetPhase(targetID, "PHASE 3: RUNNING KATANA")
 		runToolAndCollect(targetID, crawlingAssetsFile, urlsMap, "katana", "katana", "-list", crawlingAssetsFile, "-jc", "-kf", "-silent", "-c", "10")
 	}
 
@@ -375,11 +421,9 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 	}
 	updateTargetPhase(targetID, "PHASE 3: FILTERING & SAVING")
 
-	// پاکسازی فایل‌های موقت
 	os.Remove(crawlingAssetsFile)
 	os.Remove(crawlingRootFile)
 
-	// 👇 ارسال پارامتر true برای silentMode (عدم ارسال نوتیفیکیشن تلگرام)
 	saveCrawledURLs(targetID, rootDomain, urlsMap, true)
 
 	log.Printf("🏁 PHASE 3 finished for %s.\n", rootDomain)

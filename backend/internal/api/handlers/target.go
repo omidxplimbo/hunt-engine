@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -414,6 +415,7 @@ func StopScan(c *fiber.Ctx) error {
 
 // GetTargetURLs لیست URLهای کراول شده را برمی‌گرداند
 func GetTargetURLs(c *fiber.Ctx) error {
+	// ... (بخش‌های ابتدایی ثابت)
 	id := c.Params("id")
 	targetID := uint(0)
 	fmt.Sscanf(id, "%d", &targetID)
@@ -432,6 +434,21 @@ func GetTargetURLs(c *fiber.Ctx) error {
 
 	search := c.Query("search")
 	onlyJS := c.Query("only_js")
+	sources := c.Query("sources") // 👈 دریافت پارامتر جدید
+
+	sortBy := c.Query("sort_by", "created_at")
+	order := c.Query("order", "desc")
+
+	validSortFields := map[string]bool{
+		"value": true, "source": true, "created_at": true,
+	}
+	if !validSortFields[sortBy] {
+		sortBy = "created_at"
+	}
+	if order != "asc" && order != "desc" {
+		order = "desc"
+	}
+	orderClause := fmt.Sprintf("%s %s", sortBy, order)
 
 	db := database.DB.Model(&models.FoundURL{}).Where("target_id = ?", targetID)
 
@@ -443,11 +460,19 @@ func GetTargetURLs(c *fiber.Ctx) error {
 		db = db.Where("value LIKE ?", "%.js")
 	}
 
+	// 👇 لاجیک فیلتر کردن سورس‌ها
+	if sources != "" {
+		sourceList := strings.Split(sources, ",")
+		if len(sourceList) > 0 {
+			db = db.Where("source IN ?", sourceList)
+		}
+	}
+
 	var totalCount int64
 	db.Count(&totalCount)
 
 	var urls []models.FoundURL
-	db.Order("created_at desc").Limit(limit).Offset(offset).Find(&urls)
+	db.Order(orderClause).Limit(limit).Offset(offset).Find(&urls)
 
 	response := make([]dto.FoundURLResponse, len(urls))
 	for i, u := range urls {

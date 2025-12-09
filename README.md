@@ -30,19 +30,20 @@ The system is built on a modern, containerized microservice-like architecture:
 * **Features:**
     * **Dashboard:** Live analytics and charts (Recharts).
     * **Target Management:** Create, Edit, Delete, **Stop/Resume** scans.
-    * **Configurable Scans:** Toggle modules like `Alterx` or `Crawling` per target.
-    * **Asset Explorer:** Advanced data grid with Filtering, Search, **Tabs for Assets vs URLs**, and specific **JS Filtering**.
+    * **Configurable Scans:** Toggle modules like `Alterx`, `Waymore` or `Crawling` per target.
+    * **Asset Explorer:** Advanced data grid with Filtering, Search, **Tabs for Assets vs URLs**.
+    * **Intel Filtering:** Specific **JS Filtering** and **Multi-Source Filtering** (Wayback, Gau, Katana, Waymore) with **Sorting** capabilities.
     * **User Management:** Admin panel to manage team access.
 
 ## 🛠️ Arsenal (Toolchain)
 
-The platform integrates industry-standard Golang-based security tools within its isolated environment:
+The platform integrates industry-standard security tools within its isolated environment:
 
 * **Discovery:** `subfinder`, `assetfinder`
 * **Permutation/Mutation:** `alterx` (Optional per target)
 * **Validation/Resolution:** `dnsx` (w/ fixed resolvers)
 * **Probing:** `httpx` (Rich JSON output, WAF/CDN detection)
-* **Crawling & Content Discovery:** `gau`, `waybackurls`, `katana` (Active & Passive)
+* **Crawling & Content Discovery:** `gau`, `waybackurls`, `katana` (Active & Passive), `waymore` (Deep Archival Crawl)
 * **Deep Scan:** `amass` (Integrated via Docker)
 * **Future Integration:** `ffuf`, `nuclei` (Ready in Dockerfile)
 
@@ -80,10 +81,9 @@ We are following a multi-phase development roadmap.
 
 ### ✅ Phase 4: Deep Crawling & Content Discovery (COMPLETED)
 **Goal:** Harvest URLs, endpoints, and JS files from live assets.
-* [x] **Hybrid Crawling:** Integrated `gau`, `waybackurls` (Passive) and `katana` (Active).
+* [x] **Hybrid Crawling:** Integrated `gau`, `waybackurls` (Passive), `katana` (Active) and **Waymore** (Deep History).
 * [x] **Smart Deduplication:** Redis Sets used to prevent duplicate URL storage and minimize DB load.
-* [x] **Noise Filtering:** Auto-exclusion of static assets (images, fonts, css).
-* [x] **Frontend Integration:** Dedicated "Crawled URLs" tab with **JS File Filter** in Asset Explorer.
+* [x] **Frontend Integration:** Dedicated "Crawled URLs" tab with **JS File Filter**, **Source Filtering**, and **Column Sorting**.
 * [x] **Alerting:** Real-time Telegram notifications for fresh URLs.
 
 ---

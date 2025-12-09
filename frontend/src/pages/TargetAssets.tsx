@@ -5,6 +5,13 @@ import { getTargetAssets, getTargetDetails, getTargetURLs } from '../api/targets
 import { ArrowLeft, Globe, CheckCircle, XCircle, Search, Monitor, Loader2, Network, ArrowUp, ArrowDown, Link2, FileText, Database, FileCode } from 'lucide-react';
 import clsx from 'clsx';
 
+const KNOWN_SOURCES = [
+  { id: 'wayback', label: 'Wayback' },
+  { id: 'gau', label: 'GAU' },
+  { id: 'katana', label: 'Katana' },
+  { id: 'waymore', label: 'Waymore' },
+];
+
 const TargetAssets = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -20,19 +27,23 @@ const TargetAssets = () => {
   
   // URL Filters
   const [filterJsOnly, setFilterJsOnly] = useState<boolean>(false);
-  const [filterWaymore, setFilterWaymore] = useState<boolean>(false); // Waymore filter
+  const [filterSources, setFilterSources] = useState<string[]>([]); // 👈 استیت جدید برای فیلتر سورس‌ها
 
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [sortBy, setSortBy] = useState<string>('value');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [sortBy, setSortBy] = useState<string>('created_at');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
   useEffect(() => {
     const timer = setTimeout(() => { setDebouncedSearch(searchTerm); setPage(1); }, 500);
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
-  useEffect(() => { setPage(1); setSearchTerm(""); }, [filterLive, filterHttpx, filterDnsOnly, filterJsOnly, filterWaymore, activeTab]);
+  // اضافه شدن filterSources به وابستگی‌ها
+  useEffect(() => { 
+      setPage(1); 
+      setSearchTerm(""); 
+  }, [filterLive, filterHttpx, filterDnsOnly, filterJsOnly, filterSources, activeTab]);
 
   const toggleHttpx = () => {
       if (!filterHttpx) { setFilterDnsOnly(undefined); setFilterHttpx(true); } else { setFilterHttpx(undefined); }
@@ -40,6 +51,16 @@ const TargetAssets = () => {
   const toggleDnsOnly = () => {
       if (!filterDnsOnly) { setFilterHttpx(undefined); setFilterDnsOnly(true); } else { setFilterDnsOnly(undefined); }
   };
+
+  // تابع جدید برای مدیریت انتخاب سورس‌ها
+  const toggleSource = (sourceId: string) => {
+    setFilterSources(prev => 
+      prev.includes(sourceId) 
+        ? prev.filter(s => s !== sourceId) 
+        : [...prev, sourceId]
+    );
+  };
+
   const handleSort = (field: string) => {
     if (sortBy === field) { setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc'); } else { setSortBy(field); setSortOrder('asc'); }
   };
@@ -56,17 +77,18 @@ const TargetAssets = () => {
   const targetQuery = useQuery({ queryKey: ['target', targetId], queryFn: () => getTargetDetails(targetId), enabled: !!targetId });
   
   const assetsQuery = useQuery({ queryKey: ['assets', targetId, page, filterLive, filterHttpx, filterDnsOnly, debouncedSearch, sortBy, sortOrder], queryFn: () => getTargetAssets(targetId, page, 50, { is_live: filterLive, search: debouncedSearch, has_httpx: filterHttpx, dns_only: filterDnsOnly }, sortBy, sortOrder), enabled: !!targetId && activeTab === 'assets' });
-  const urlsQuery = useQuery({ queryKey: ['urls', targetId, page, debouncedSearch, filterJsOnly], queryFn: () => getTargetURLs(targetId, page, 50, debouncedSearch, filterJsOnly), enabled: !!targetId && activeTab === 'urls' });
+  
+  // آپدیت کوئری URLها با پارامترهای جدید
+  const urlsQuery = useQuery({ 
+    queryKey: ['urls', targetId, page, debouncedSearch, filterJsOnly, sortBy, sortOrder, filterSources], 
+    queryFn: () => getTargetURLs(targetId, page, 50, debouncedSearch, filterJsOnly, sortBy, sortOrder, filterSources), 
+    enabled: !!targetId && activeTab === 'urls' 
+  });
 
   const currentData = activeTab === 'assets' ? assetsQuery.data : urlsQuery.data;
   const isFetching = activeTab === 'assets' ? assetsQuery.isFetching : urlsQuery.isFetching;
 
-  // Client-side filtering for Waymore
-  const displayedUrls = activeTab === 'urls' 
-    ? (urlsQuery.data?.data || []).filter(u => !filterWaymore || (u.source && u.source.includes('waymore')))
-    : [];
-
-  // 👇 استفاده از safe mapping برای جلوگیری از کرش (|| [])
+  const displayedUrls = urlsQuery.data?.data || [];
   const displayedAssets = assetsQuery.data?.data || [];
 
   if (!targetId) return <div className="p-8 text-hack-danger font-mono"> FATAL ERROR: Invalid Target ID</div>;
@@ -132,9 +154,23 @@ const TargetAssets = () => {
                   <button onClick={() => setFilterJsOnly(!filterJsOnly)} className={clsx("hack-btn-ghost flex justify-center items-center gap-1 border px-3 whitespace-nowrap", filterJsOnly ? "border-hack-warning text-hack-warning bg-hack-warning/5" : "border-hack-border")}>
                     <FileCode size={12} /> JS Files
                   </button>
-                  <button onClick={() => setFilterWaymore(!filterWaymore)} className={clsx("hack-btn-ghost flex justify-center items-center gap-1 border px-3 whitespace-nowrap", filterWaymore ? "border-blue-400 text-blue-400 bg-blue-400/5" : "border-hack-border")}>
-                    <Globe size={12} /> Waymore
-                  </button>
+                  
+                  <div className="w-px h-4 bg-hack-border mx-1 hidden md:block"></div>
+
+                  {KNOWN_SOURCES.map(src => (
+                    <button 
+                        key={src.id}
+                        onClick={() => toggleSource(src.id)} 
+                        className={clsx(
+                            "hack-btn-ghost flex justify-center items-center gap-1 border px-2 py-1 text-[10px] uppercase tracking-wider", 
+                            filterSources.includes(src.id) 
+                                ? "border-hack-primary text-hack-primary bg-hack-primary/10" 
+                                : "border-hack-border text-hack-dim hover:text-white"
+                        )}
+                    >
+                        {src.label}
+                    </button>
+                  ))}
             </div>
         )}
       </div>
@@ -159,8 +195,8 @@ const TargetAssets = () => {
                 ) : (
                     <>
                     <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[60%]">Resource Locator</th>
-                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[20%]">Source</th>
-                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[20%] text-right">Timestamp</th>
+                    <SortableHeader field="source" label="Source" className="w-[20%]" />
+                    <SortableHeader field="created_at" label="Timestamp" className="w-[20%] text-right" />
                     </>
                 )}
                 </tr>
