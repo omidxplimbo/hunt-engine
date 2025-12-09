@@ -11,14 +11,14 @@ export interface Asset {
   status_code?: number;
   title?: string;
   content_length?: number;
-  host_ip?: string; // نکته: این فیلد فعلا به صورت رشته JSON میاد
-  dnsx_ip?: string; // 👈 فیلد جدید
+  host_ip?: string; 
+  dnsx_ip?: string;
   web_server?: string;
   cdn_name?: string;
-  technologies?: string[]; // آرایه‌ای از نام تکنولوژی‌ها
+  technologies?: string[] | string; // 👈 اصلاح تایپ برای هندل کردن آرایه یا رشته
   response_time_ms?: number;
   
-  // داده خام (اختیاری)
+  // داده خام
   raw_httpx?: any;
 }
 
@@ -28,7 +28,6 @@ export interface AssetResponse {
   page_count: number;
   total_count: number;
 }
-
 
 export interface AssetFilters {
   is_live?: boolean;

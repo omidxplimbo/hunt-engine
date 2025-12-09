@@ -32,7 +32,6 @@ func CreateTarget(c *fiber.Ctx) error {
 		bytes, _ := json.Marshal(req.Modules)
 		modulesJSON = string(bytes)
 	} else {
-		// پیش‌فرض اگر ماژولی انتخاب نشد
 		modulesJSON = "[\"DISCOVERY\", \"PROBING\", \"CRAWLING\"]"
 	}
 
@@ -50,7 +49,13 @@ func CreateTarget(c *fiber.Ctx) error {
 	if req.UseAlterx != nil {
 		target.UseAlterx = *req.UseAlterx
 	} else {
-		target.UseAlterx = true // پیش‌فرض روشن
+		target.UseAlterx = true
+	}
+
+	if req.UseWaymore != nil {
+		target.UseWaymore = *req.UseWaymore
+	} else {
+		target.UseWaymore = false
 	}
 
 	if err := database.DB.Create(&target).Error; err != nil {
@@ -156,7 +161,6 @@ func GetTargetAssets(c *fiber.Ctx) error {
 		limit = l
 	}
 
-	// Offset logic
 	offset := 0
 	if o, err := strconv.Atoi(c.Query("offset")); err == nil && o >= 0 {
 		offset = o
@@ -275,7 +279,6 @@ func StartProbing(c *fiber.Ctx) error {
 }
 
 // StartDiscovery هندلر شروع مجدد اسکن (هوشمند)
-// اصلاح شده: حالا اولین ماژول انتخابی کاربر را پیدا کرده و اجرا می‌کند
 func StartDiscovery(c *fiber.Ctx) error {
 	id := c.Params("id")
 	var target models.Target
@@ -287,26 +290,19 @@ func StartDiscovery(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"status": "error", "message": "Target is already being scanned."})
 	}
 
-	// 👇👇👇 لاجیک جدید: خواندن ماژول‌های انتخاب شده
 	var modules []string
 	if err := json.Unmarshal([]byte(target.ScanModules), &modules); err != nil || len(modules) == 0 {
-		// اگر ماژولی نبود یا ارور داشت، پیش‌فرض دیسکاوری را اجرا کن
 		modules = []string{"DISCOVERY"}
 	}
 
-	firstModule := modules[0] // اولین فاز انتخاب شده (مثلا CRAWLING)
+	firstModule := modules[0]
 
-	// آپدیت وضعیت در دیتابیس
 	database.DB.Model(&target).Updates(map[string]interface{}{
 		"status":        "SCANNING",
 		"current_phase": fmt.Sprintf("QUEUED: STARTING %s...", firstModule),
 	})
 
-	// ساخت پیلود بر اساس اولین ماژول
 	taskPayload := fmt.Sprintf("%s:%d:%s", firstModule, target.ID, target.RootDomain)
-
-	logMsg := fmt.Sprintf("Manual Start: Triggering '%s' for target %s", firstModule, target.Name)
-	fmt.Println(logMsg)
 
 	if err := redisq.Client.RPush(redisq.Ctx, redisq.QueueName, taskPayload).Err(); err != nil {
 		database.DB.Model(&target).Update("status", "READY")
@@ -352,6 +348,9 @@ func UpdateTarget(c *fiber.Ctx) error {
 	if req.UseAlterx != nil {
 		target.UseAlterx = *req.UseAlterx
 	}
+	if req.UseWaymore != nil {
+		target.UseWaymore = *req.UseWaymore
+	}
 
 	if err := database.DB.Save(&target).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to update target"})
@@ -380,10 +379,9 @@ func DeleteTarget(c *fiber.Ctx) error {
 		if err := tx.Exec("DELETE FROM assets WHERE target_id = ?", id).Error; err != nil {
 			return err
 		}
-		// 👇 پاک کردن URLهای پیدا شده هنگام حذف تارگت (اضافه شده برای فاز ۳)
-		// فرض بر این است که جدول found_urls ساخته شده باشد. اگر نه، این خط ارور نمیدهد ولی کاری هم نمیکند.
-		// بهتر است بعدا که مایگریشن را اعمال کردید، اینجا هم اضافه کنید:
-		// if err := tx.Exec("DELETE FROM found_urls WHERE target_id = ?", id).Error; err != nil { return err }
+		if err := tx.Exec("DELETE FROM found_urls WHERE target_id = ?", id).Error; err != nil {
+			return err
+		}
 
 		if err := tx.Unscoped().Delete(&target).Error; err != nil {
 			return err
@@ -414,6 +412,61 @@ func StopScan(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"status": "success", "message": "Stop signal sent. Scan will halt shortly."})
 }
 
+// GetTargetURLs لیست URLهای کراول شده را برمی‌گرداند
+func GetTargetURLs(c *fiber.Ctx) error {
+	id := c.Params("id")
+	targetID := uint(0)
+	fmt.Sscanf(id, "%d", &targetID)
+
+	limit := utils.DefaultLimit
+	if l, err := strconv.Atoi(c.Query("limit")); err == nil && l > 0 {
+		limit = l
+	}
+	offset := 0
+	if o, err := strconv.Atoi(c.Query("offset")); err == nil && o >= 0 {
+		offset = o
+	} else {
+		page, _ := strconv.Atoi(c.Query("page", "1"))
+		offset = (page - 1) * limit
+	}
+
+	search := c.Query("search")
+	onlyJS := c.Query("only_js")
+
+	db := database.DB.Model(&models.FoundURL{}).Where("target_id = ?", targetID)
+
+	if search != "" {
+		db = db.Where("value LIKE ?", "%"+search+"%")
+	}
+
+	if onlyJS == "true" {
+		db = db.Where("value LIKE ?", "%.js")
+	}
+
+	var totalCount int64
+	db.Count(&totalCount)
+
+	var urls []models.FoundURL
+	db.Order("created_at desc").Limit(limit).Offset(offset).Find(&urls)
+
+	response := make([]dto.FoundURLResponse, len(urls))
+	for i, u := range urls {
+		response[i] = dto.FoundURLResponse{
+			ID:        u.ID,
+			Value:     u.Value,
+			Source:    u.Source,
+			CreatedAt: u.CreatedAt,
+		}
+	}
+
+	return c.JSON(fiber.Map{
+		"status":      "success",
+		"data":        response,
+		"total_count": totalCount,
+		"page":        (offset / limit) + 1,
+	})
+}
+
 // ==========================================
 // Helper Functions (Model -> DTO Mapper)
 // ==========================================
@@ -431,8 +484,8 @@ func toTargetResponse(t models.Target, assetCount int64) dto.TargetResponse {
 		Status:       t.Status,
 		CurrentPhase: t.CurrentPhase,
 		UseAlterx:    t.UseAlterx,
-		// 👇👇👇 اضافه کردن ماژول‌ها به پاسخ برای استفاده در فرانت
-		ScanModules: t.ScanModules,
+		UseWaymore:   t.UseWaymore,
+		ScanModules:  t.ScanModules,
 	}
 }
 
@@ -465,63 +518,4 @@ func toAssetResponse(a models.Asset) dto.AssetResponse {
 		ResponseTime:  a.ResponseTimeMs,
 		RawHttpx:      rawHttpx,
 	}
-}
-
-// GetTargetURLs لیست URLهای کراول شده را برمی‌گرداند
-func GetTargetURLs(c *fiber.Ctx) error {
-	id := c.Params("id")
-	targetID := uint(0)
-	fmt.Sscanf(id, "%d", &targetID)
-
-	// Pagination
-	limit := utils.DefaultLimit
-	if l, err := strconv.Atoi(c.Query("limit")); err == nil && l > 0 {
-		limit = l
-	}
-	offset := 0
-	if o, err := strconv.Atoi(c.Query("offset")); err == nil && o >= 0 {
-		offset = o
-	} else {
-		page, _ := strconv.Atoi(c.Query("page", "1"))
-		offset = (page - 1) * limit
-	}
-
-	search := c.Query("search")
-	onlyJS := c.Query("only_js") // 👈 پارامتر جدید
-
-	db := database.DB.Model(&models.FoundURL{}).Where("target_id = ?", targetID)
-
-	// فیلتر جستجو
-	if search != "" {
-		db = db.Where("value LIKE ?", "%"+search+"%")
-	}
-
-	// 👇 فیلتر اختصاصی برای فایل‌های JS
-	if onlyJS == "true" {
-		db = db.Where("value LIKE ?", "%.js")
-	}
-
-	var totalCount int64
-	db.Count(&totalCount)
-
-	var urls []models.FoundURL
-	db.Order("created_at desc").Limit(limit).Offset(offset).Find(&urls)
-
-	// Convert to DTO
-	response := make([]dto.FoundURLResponse, len(urls))
-	for i, u := range urls {
-		response[i] = dto.FoundURLResponse{
-			ID:        u.ID,
-			Value:     u.Value,
-			Source:    u.Source,
-			CreatedAt: u.CreatedAt,
-		}
-	}
-
-	return c.JSON(fiber.Map{
-		"status":      "success",
-		"data":        response,
-		"total_count": totalCount,
-		"page":        (offset / limit) + 1,
-	})
 }

@@ -25,12 +25,15 @@ type Target struct {
 
 	Status string `gorm:"size:50;default:'READY'" json:"status"`
 
-	// 👇 فیلد جدید برای نمایش مرحله دقیق اسکن
 	CurrentPhase  string `gorm:"size:100;default:'IDLE'" json:"current_phase"`
 	StopRequested bool   `gorm:"default:false" json:"stop_requested"`
 	ScanCount     int    `gorm:"default:0" json:"scan_count"`
-	UseAlterx     bool   `gorm:"default:false" json:"use_alterx"`
-	ScanModules   string `gorm:"type:jsonb;default:'[\"DISCOVERY\", \"PROBING\"]'" json:"scan_modules"`
+
+	UseAlterx bool `gorm:"default:false" json:"use_alterx"`
+	// 👇 فیلد جدید برای Waymore (پیش‌فرض غیرفعال)
+	UseWaymore bool `gorm:"default:false" json:"use_waymore"`
+
+	ScanModules string `gorm:"type:jsonb;default:'[\"DISCOVERY\", \"PROBING\"]'" json:"scan_modules"`
 
 	Assets []Asset `json:"-"`
 }
@@ -53,7 +56,6 @@ type Asset struct {
 
 	LastChangeAt *time.Time `gorm:"index" json:"last_change_at"`
 
-	// --- فیلدهای کلیدی ---
 	FinalURL       string `gorm:"size:512" json:"final_url"`
 	StatusCode     int    `gorm:"index" json:"status_code"`
 	Title          string `gorm:"size:512" json:"title"`

@@ -8,9 +8,11 @@ export interface Target {
   asset_count: number;
   frequency?: number;
   last_scan_at?: string;
-  status: string; // READY, SCANNING
-  current_phase?: string; // 👇 فیلد جدید (PHASE 1: ..., PHASE 2: ...)
+  status: string;
+  current_phase?: string;
   use_alterx: boolean;
+  // 👇 اضافه شد
+  use_waymore: boolean;
   scan_modules: string;
 }
 

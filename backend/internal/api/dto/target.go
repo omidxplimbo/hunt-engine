@@ -8,6 +8,8 @@ type CreateTargetRequest struct {
 	Frequency   int      `json:"frequency"`
 	Modules     []string `json:"modules"`
 	UseAlterx   *bool    `json:"use_alterx"`
+	// 👇 اضافه شد
+	UseWaymore *bool `json:"use_waymore"`
 }
 
 // UpdateTargetRequest برای ویرایش تنظیمات تارگت
@@ -18,4 +20,6 @@ type UpdateTargetRequest struct {
 	InScope     *bool    `json:"in_scope"`
 	Modules     []string `json:"modules"`
 	UseAlterx   *bool    `json:"use_alterx"`
+	// 👇 اضافه شد
+	UseWaymore *bool `json:"use_waymore"`
 }

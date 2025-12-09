@@ -20,7 +20,9 @@ export interface CreateTargetPayload {
   description?: string;
   frequency: number;
   modules: string[];
-  use_alterx: boolean; // 👈 جدید
+  use_alterx: boolean;
+  // 👇 اضافه شد
+  use_waymore: boolean;
 }
 
 export const createTarget = async (payload: CreateTargetPayload) => {
@@ -31,14 +33,16 @@ export const createTarget = async (payload: CreateTargetPayload) => {
   return response.data;
 };
 
-// ویرایش تارگت
+
 export interface UpdateTargetPayload {
   name?: string;
   description?: string;
   frequency?: number;
   in_scope?: boolean;
   modules?: string[];
-  use_alterx?: boolean; // 👈 جدید
+  use_alterx?: boolean;
+  // 👇 اضافه شد
+  use_waymore?: boolean;
 }
 
 export const updateTarget = async (id: number, payload: UpdateTargetPayload) => {

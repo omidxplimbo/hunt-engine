@@ -16,13 +16,14 @@ type TargetResponse struct {
 	Status       string     `json:"status"`
 	CurrentPhase string     `json:"current_phase"`
 
-	// 👇 این فیلد جا افتاده بود و باعث خطا می‌شد
 	UseAlterx bool `json:"use_alterx"`
+	// 👇 اضافه شد
+	UseWaymore bool `json:"use_waymore"`
 
 	ScanModules string `json:"scan_modules"`
 }
 
-// AssetResponse ساختار خروجی برای دارایی‌ها
+// ... (بقیه DTOها بدون تغییر)
 type AssetResponse struct {
 	ID            uint        `json:"id"`
 	Value         string      `json:"value"`
@@ -43,10 +44,9 @@ type AssetResponse struct {
 	RawHttpx      interface{} `json:"raw_httpx,omitempty"`
 }
 
-// FoundURLResponse ساختار خروجی برای URLهای پیدا شده
 type FoundURLResponse struct {
 	ID        uint      `json:"id"`
 	Value     string    `json:"value"`
-	Source    string    `json:"source"` // مثلا wayback, gau
+	Source    string    `json:"source"`
 	CreatedAt time.Time `json:"created_at"`
 }

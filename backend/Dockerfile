@@ -7,7 +7,7 @@ WORKDIR /app
 
 # --- نصب ابزارهای شکار (Recon Tools) ---
 
-# فاز ۱: کشف (puredns حذف شد، dnsx جایگزین شد)
+# فاز ۱: کشف
 RUN go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
 RUN go install -v github.com/tomnomnom/assetfinder@latest
 RUN go install -v github.com/projectdiscovery/alterx/cmd/alterx@latest
@@ -33,7 +33,16 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o hunt-engine-api ./cmd/
 # ================================================
 FROM alpine:3.18
 LABEL maintainer="Omid Security Researcher"
-RUN apk --no-cache add ca-certificates bind-tools jq curl
+
+# 👇 نصب پایتون و ابزارهای بیلد مورد نیاز برای Waymore (gcc, headers, etc)
+# اضافه شدن: gcc python3-dev musl-dev linux-headers libffi-dev
+RUN apk --no-cache add ca-certificates bind-tools jq curl python3 py3-pip git gcc python3-dev musl-dev linux-headers libffi-dev
+
+# نصب Waymore
+# نکته: Waymore نیاز به پایتون دارد. ما آن را از طریق pip نصب می‌کنیم.
+# فلگ --break-system-packages برای توزیع‌های جدید Alpine لازم است
+RUN pip3 install --no-cache-dir waymore --break-system-packages
+
 WORKDIR /root/
 
 # --- کپی ابزارها ---
@@ -50,7 +59,7 @@ COPY --from=go_builder /go/bin/ffuf /usr/local/bin/ffuf
 # کپی برنامه اصلی
 COPY --from=go_builder /app/hunt-engine-api .
 
-# کپی Amass (همچنان نگه می‌داریم)
+# کپی Amass
 COPY --from=caffix/amass:latest /bin/amass /usr/local/bin/amass
 
 # دانلود وردلیست‌ها

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { createTarget, type CreateTargetPayload } from '../api/targets';
-import { X, Loader2, Target, Zap } from 'lucide-react';
+import { X, Loader2, Target, Zap, Globe } from 'lucide-react';
 import clsx from 'clsx';
 
 interface Props {
@@ -24,6 +24,7 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
     frequency: 720,
     modules: ['DISCOVERY', 'PROBING', 'CRAWLING'],
     use_alterx: true,
+    use_waymore: false, // پیش‌فرض
   });
 
   const mutation = useMutation({
@@ -31,7 +32,7 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['targets'] });
       onClose();
-      setFormData({ name: '', root_domain: '', description: '', frequency: 720, modules: ['DISCOVERY', 'PROBING', 'CRAWLING'], use_alterx: true });
+      setFormData({ name: '', root_domain: '', description: '', frequency: 720, modules: ['DISCOVERY', 'PROBING', 'CRAWLING'], use_alterx: true, use_waymore: false });
     },
   });
 
@@ -73,12 +74,22 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
             <input type="number" min="0" className="hack-input w-full" value={formData.frequency} onChange={e => setFormData({ ...formData, frequency: parseInt(e.target.value) || 0 })} />
           </div>
 
-          <div className="p-3 border border-hack-border bg-black/30 flex items-center gap-3">
-             <input type="checkbox" id="use_alterx" checked={formData.use_alterx} onChange={e => setFormData({...formData, use_alterx: e.target.checked})} className="accent-hack-primary h-4 w-4" />
-             <div>
-                <label htmlFor="use_alterx" className="block text-xs font-bold text-hack-text tracking-wide cursor-pointer flex items-center gap-2"><Zap size={12} className="text-hack-warning"/> ENABLE MUTATION (ALTERX)</label>
-                <p className="text-[9px] text-hack-dim">Generates extensive permutation lists. Resource intensive.</p>
-             </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="p-3 border border-hack-border bg-black/30 flex flex-col justify-center gap-2">
+                <div className="flex items-center gap-2">
+                    <input type="checkbox" id="use_alterx" checked={formData.use_alterx} onChange={e => setFormData({...formData, use_alterx: e.target.checked})} className="accent-hack-primary h-4 w-4" />
+                    <label htmlFor="use_alterx" className="text-xs font-bold text-hack-text tracking-wide cursor-pointer flex items-center gap-1"><Zap size={12} className="text-hack-warning"/> ALTERX</label>
+                </div>
+                <p className="text-[8px] text-hack-dim leading-tight">Generate permutations.</p>
+            </div>
+
+            <div className="p-3 border border-hack-border bg-black/30 flex flex-col justify-center gap-2">
+                <div className="flex items-center gap-2">
+                    <input type="checkbox" id="use_waymore" checked={formData.use_waymore} onChange={e => setFormData({...formData, use_waymore: e.target.checked})} className="accent-hack-primary h-4 w-4" />
+                    <label htmlFor="use_waymore" className="text-xs font-bold text-hack-text tracking-wide cursor-pointer flex items-center gap-1"><Globe size={12} className="text-blue-400"/> WAYMORE</label>
+                </div>
+                <p className="text-[8px] text-hack-dim leading-tight">Deep historical crawl.</p>
+            </div>
           </div>
 
           <div className="space-y-2">

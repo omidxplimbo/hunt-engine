@@ -12,10 +12,16 @@ const TargetAssets = () => {
 
   const [activeTab, setActiveTab] = useState<'assets' | 'urls'>('assets');
   const [page, setPage] = useState(1);
+  
+  // Asset Filters
   const [filterLive, setFilterLive] = useState<boolean | undefined>(undefined);
   const [filterHttpx, setFilterHttpx] = useState<boolean | undefined>(undefined);
   const [filterDnsOnly, setFilterDnsOnly] = useState<boolean | undefined>(undefined);
+  
+  // URL Filters
   const [filterJsOnly, setFilterJsOnly] = useState<boolean>(false);
+  const [filterWaymore, setFilterWaymore] = useState<boolean>(false); // Waymore filter
+
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [sortBy, setSortBy] = useState<string>('value');
@@ -26,7 +32,7 @@ const TargetAssets = () => {
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
-  useEffect(() => { setPage(1); setSearchTerm(""); }, [filterLive, filterHttpx, filterDnsOnly, filterJsOnly, activeTab]);
+  useEffect(() => { setPage(1); setSearchTerm(""); }, [filterLive, filterHttpx, filterDnsOnly, filterJsOnly, filterWaymore, activeTab]);
 
   const toggleHttpx = () => {
       if (!filterHttpx) { setFilterDnsOnly(undefined); setFilterHttpx(true); } else { setFilterHttpx(undefined); }
@@ -48,11 +54,20 @@ const TargetAssets = () => {
   );
 
   const targetQuery = useQuery({ queryKey: ['target', targetId], queryFn: () => getTargetDetails(targetId), enabled: !!targetId });
+  
   const assetsQuery = useQuery({ queryKey: ['assets', targetId, page, filterLive, filterHttpx, filterDnsOnly, debouncedSearch, sortBy, sortOrder], queryFn: () => getTargetAssets(targetId, page, 50, { is_live: filterLive, search: debouncedSearch, has_httpx: filterHttpx, dns_only: filterDnsOnly }, sortBy, sortOrder), enabled: !!targetId && activeTab === 'assets' });
   const urlsQuery = useQuery({ queryKey: ['urls', targetId, page, debouncedSearch, filterJsOnly], queryFn: () => getTargetURLs(targetId, page, 50, debouncedSearch, filterJsOnly), enabled: !!targetId && activeTab === 'urls' });
 
   const currentData = activeTab === 'assets' ? assetsQuery.data : urlsQuery.data;
   const isFetching = activeTab === 'assets' ? assetsQuery.isFetching : urlsQuery.isFetching;
+
+  // Client-side filtering for Waymore
+  const displayedUrls = activeTab === 'urls' 
+    ? (urlsQuery.data?.data || []).filter(u => !filterWaymore || (u.source && u.source.includes('waymore')))
+    : [];
+
+  // 👇 استفاده از safe mapping برای جلوگیری از کرش (|| [])
+  const displayedAssets = assetsQuery.data?.data || [];
 
   if (!targetId) return <div className="p-8 text-hack-danger font-mono"> FATAL ERROR: Invalid Target ID</div>;
 
@@ -80,7 +95,7 @@ const TargetAssets = () => {
               <Database size={14} /> Assets
           </button>
           <button onClick={() => setActiveTab('urls')} className={clsx("hack-btn flex-1 md:flex-none justify-center", activeTab === 'urls' ? "bg-hack-primary text-black" : "bg-transparent text-hack-dim border-hack-dim/30")}>
-              <Link2 size={14} /> Intel
+              <Link2 size={14} /> Intel / URLs
           </button>
       </div>
 
@@ -113,9 +128,12 @@ const TargetAssets = () => {
         )}
 
         {activeTab === 'urls' && (
-            <div className="flex items-center gap-2 w-full md:w-auto">
-                  <button onClick={() => setFilterJsOnly(!filterJsOnly)} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border w-full", filterJsOnly ? "border-hack-warning text-hack-warning" : "border-hack-border")}>
-                    <FileCode size={12} /> JS Only
+            <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto">
+                  <button onClick={() => setFilterJsOnly(!filterJsOnly)} className={clsx("hack-btn-ghost flex justify-center items-center gap-1 border px-3 whitespace-nowrap", filterJsOnly ? "border-hack-warning text-hack-warning bg-hack-warning/5" : "border-hack-border")}>
+                    <FileCode size={12} /> JS Files
+                  </button>
+                  <button onClick={() => setFilterWaymore(!filterWaymore)} className={clsx("hack-btn-ghost flex justify-center items-center gap-1 border px-3 whitespace-nowrap", filterWaymore ? "border-blue-400 text-blue-400 bg-blue-400/5" : "border-hack-border")}>
+                    <Globe size={12} /> Waymore
                   </button>
             </div>
         )}
@@ -131,8 +149,8 @@ const TargetAssets = () => {
                 {activeTab === 'assets' ? (
                     <>
                     <SortableHeader field="value" label="Asset" className="w-[300px]" />
-                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">Phase 1 IP</th>
-                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">Phase 2 IP</th>
+                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">DNS IP</th>
+                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">HTTP IP</th>
                     <SortableHeader field="status_code" label="Stat" className="w-[80px]" />
                     <SortableHeader field="title" label="Title" className="w-[250px]" />
                     <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">Stack</th>
@@ -140,22 +158,39 @@ const TargetAssets = () => {
                     </>
                 ) : (
                     <>
-                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[70%]">Resource Locator</th>
-                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[15%]">Origin</th>
-                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[15%] text-right">Timestamp</th>
+                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[60%]">Resource Locator</th>
+                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[20%]">Source</th>
+                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[20%] text-right">Timestamp</th>
                     </>
                 )}
                 </tr>
             </thead>
             <tbody className="divide-y divide-hack-border/30">
-                {activeTab === 'assets' ? assetsQuery.data?.data.map((asset) => {
+                {activeTab === 'assets' ? displayedAssets.map((asset) => {
                     const statusCode = asset.status_code ?? 0;
+                    
                     let dnsxIps: string[] = [];
-                    try { const p = JSON.parse(asset.dnsx_ip || "[]"); dnsxIps = Array.isArray(p) ? p : [p]; } catch { if (asset.dnsx_ip) dnsxIps = [asset.dnsx_ip]; }
+                    try { 
+                        if (asset.dnsx_ip && asset.dnsx_ip !== "[]") {
+                            const p = JSON.parse(asset.dnsx_ip);
+                            dnsxIps = Array.isArray(p) ? p : [p];
+                        }
+                    } catch (e) { console.error("IP Parse Error", e); }
+
                     let httpxIps: string[] = [];
-                    try { const p = JSON.parse(asset.host_ip || "[]"); httpxIps = Array.isArray(p) ? p : [p]; } catch { if (asset.host_ip) httpxIps = [asset.host_ip]; }
+                    try { 
+                        if (asset.host_ip && asset.host_ip !== "[]") {
+                            const p = JSON.parse(asset.host_ip);
+                            httpxIps = Array.isArray(p) ? p : [p];
+                        }
+                    } catch (e) { console.error("HostIP Parse Error", e); }
+
                     let techs: string[] = [];
-                    if (Array.isArray(asset.technologies)) { techs = asset.technologies as string[]; } else if (typeof asset.technologies === 'string') { try { techs = JSON.parse(asset.technologies); } catch {} }
+                    if (Array.isArray(asset.technologies)) { 
+                        techs = asset.technologies as string[]; 
+                    } else if (typeof asset.technologies === 'string') { 
+                        try { techs = JSON.parse(asset.technologies); } catch {} 
+                    }
 
                     return (
                     <tr key={asset.id} className="hover:bg-hack-primary/5 transition-colors font-mono text-sm group">
@@ -165,14 +200,14 @@ const TargetAssets = () => {
                             <div className="min-w-0"><a href={`http://${asset.value}`} target="_blank" rel="noreferrer" className="text-gray-300 hover:text-hack-primary transition-colors break-all group-hover:underline underline-offset-4">{asset.value}</a></div>
                         </div>
                         </td>
-                        <td className="px-6 py-3 align-top"><div className="flex flex-col gap-1">{dnsxIps.length > 0 && dnsxIps[0] !== "" ? dnsxIps.map((ip, idx) => <span key={idx} className="text-[10px] text-hack-secondary">{ip}</span>) : <span className="text-hack-dim">-</span>}</div></td>
-                        <td className="px-6 py-3 align-top"><div className="flex flex-col gap-1">{httpxIps.length > 0 && httpxIps[0] !== "" ? httpxIps.map((ip, idx) => <span key={idx} className="text-[10px] text-hack-dim">{ip}</span>) : <span className="text-hack-dim">-</span>}</div></td>
+                        <td className="px-6 py-3 align-top"><div className="flex flex-col gap-1">{dnsxIps.length > 0 ? dnsxIps.map((ip, idx) => <span key={idx} className="text-[10px] text-hack-secondary">{ip}</span>) : <span className="text-hack-dim">-</span>}</div></td>
+                        <td className="px-6 py-3 align-top"><div className="flex flex-col gap-1">{httpxIps.length > 0 ? httpxIps.map((ip, idx) => <span key={idx} className="text-[10px] text-hack-dim">{ip}</span>) : <span className="text-hack-dim">-</span>}</div></td>
                         <td className="px-6 py-3 align-top">{asset.is_live ? (statusCode > 0 ? <span className={`px-1.5 py-0.5 text-[10px] font-bold border ${statusCode >= 200 && statusCode < 300 ? 'border-hack-primary text-hack-primary' : statusCode >= 300 && statusCode < 400 ? 'border-hack-warning text-hack-warning' : 'border-hack-danger text-hack-danger'}`}>{statusCode}</span> : <span className="text-hack-dim">-</span>) : <span className="text-[10px] text-hack-dim border border-hack-dim px-1">DEAD</span>}</td>
                         <td className="px-6 py-3 align-top"><span className="text-xs text-hack-text block line-clamp-2 opacity-80 min-w-[200px]" title={asset.title}>{asset.title || '-'}</span></td>
                         <td className="px-6 py-3 align-top"><div className="flex flex-wrap gap-1 max-h-[60px] overflow-y-auto min-w-[150px]">{asset.web_server && <span className="px-1 py-0.5 bg-white/5 text-[9px] border border-white/10 text-hack-text whitespace-nowrap">{asset.web_server}</span>}{techs.map((tech, i) => <span key={i} className="px-1 py-0.5 bg-hack-primary/5 text-[9px] border border-hack-primary/20 text-hack-primary whitespace-nowrap">{tech}</span>)}</div></td>
                         <td className="px-6 py-3 align-top text-right text-xs text-hack-dim">{asset.content_length ? `${(asset.content_length / 1024).toFixed(1)} KB` : '-'}</td>
                     </tr>
-                    )}) : urlsQuery.data?.data.map((url) => (
+                    )}) : displayedUrls.map((url) => (
                     <tr key={url.id} className="hover:bg-hack-primary/5 transition-colors group font-mono text-sm">
                         <td className="px-6 py-3 align-top">
                             <div className="flex items-start gap-3">
@@ -180,7 +215,14 @@ const TargetAssets = () => {
                                 <a href={url.value} target="_blank" rel="noreferrer" className={clsx("transition-colors break-all block leading-relaxed hover:underline underline-offset-4 min-w-0", url.value.endsWith('.js') ? "text-hack-warning hover:text-white" : "text-hack-dim hover:text-hack-primary")}>{url.value}</a>
                             </div>
                         </td>
-                        <td className="px-6 py-3 align-top"><span className="text-[10px] text-hack-dim border border-hack-border px-1 uppercase">{url.source}</span></td>
+                        <td className="px-6 py-3 align-top">
+                            <span className={clsx("text-[10px] px-1.5 py-0.5 border uppercase tracking-wider", 
+                                url.source === 'waymore' ? "border-blue-500 text-blue-400 bg-blue-900/20" : 
+                                url.source?.includes('katana') ? "border-hack-danger text-hack-danger bg-hack-danger/10" : 
+                                "border-hack-border text-hack-dim")}>
+                                {url.source || 'UNKNOWN'}
+                            </span>
+                        </td>
                         <td className="px-6 py-3 align-top text-right text-xs text-hack-dim whitespace-nowrap">{new Date(url.created_at).toLocaleString()}</td>
                     </tr>
                     ))}

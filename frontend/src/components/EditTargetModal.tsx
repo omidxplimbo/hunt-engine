@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { updateTarget, type UpdateTargetPayload } from '../api/targets';
 import type { Target } from '../types/target';
-import { X, Loader2, Settings, Zap } from 'lucide-react';
+import { X, Loader2, Settings, Zap, Globe } from 'lucide-react';
 import clsx from 'clsx';
 
 interface Props {
@@ -37,6 +37,7 @@ export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
         frequency: target.frequency,
         in_scope: target.in_scope,
         use_alterx: target.use_alterx,
+        use_waymore: target.use_waymore, // 👈 مقداردهی اولیه
         modules: existingModules,
       });
     }
@@ -90,9 +91,16 @@ export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
             </div>
           </div>
 
-          <div className="p-3 border border-hack-border bg-black/30 flex items-center gap-3">
-             <input type="checkbox" checked={formData.use_alterx ?? true} onChange={e => setFormData({...formData, use_alterx: e.target.checked})} className="accent-hack-primary h-4 w-4" />
-             <label className="block text-xs font-bold text-hack-text tracking-wide cursor-pointer flex items-center gap-2"><Zap size={12} className="text-hack-warning"/> ENABLE MUTATION</label>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="p-3 border border-hack-border bg-black/30 flex items-center gap-2">
+                <input type="checkbox" checked={formData.use_alterx ?? true} onChange={e => setFormData({...formData, use_alterx: e.target.checked})} className="accent-hack-primary h-4 w-4" />
+                <label className="block text-xs font-bold text-hack-text tracking-wide cursor-pointer flex items-center gap-1"><Zap size={12} className="text-hack-warning"/> ALTERX</label>
+            </div>
+
+            <div className="p-3 border border-hack-border bg-black/30 flex items-center gap-2">
+                <input type="checkbox" checked={formData.use_waymore ?? false} onChange={e => setFormData({...formData, use_waymore: e.target.checked})} className="accent-hack-primary h-4 w-4" />
+                <label className="block text-xs font-bold text-hack-text tracking-wide cursor-pointer flex items-center gap-1"><Globe size={12} className="text-blue-400"/> WAYMORE</label>
+            </div>
           </div>
 
           <div className="flex items-center gap-3">
