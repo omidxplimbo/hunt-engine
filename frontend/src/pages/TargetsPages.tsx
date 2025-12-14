@@ -1,15 +1,19 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getTargets, deleteTarget, stopTarget, startDiscovery } from '../api/targets';
-import { Plus, Globe, Clock, Database, Trash2, Edit2, Activity, Square, Play, Terminal } from 'lucide-react';
+import { Plus, Globe, Clock, Database, Trash2, Edit2, Activity, Square, Play, Terminal, Download, Upload } from 'lucide-react';
 import { CreateTargetModal } from '../components/CreateTargetModal';
 import { EditTargetModal } from '../components/EditTargetModal';
+import { ImportTargetModal } from '../components/ImportTargetModal';
+import { ExportTargetModal } from '../components/ExportTargetModal';
 import { Link } from 'react-router-dom';
 import type { Target } from '../types/target';
 
 const TargetsPage = () => {
   const queryClient = useQueryClient();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [isExportOpen, setIsExportOpen] = useState(false);
   const [editingTarget, setEditingTarget] = useState<Target | null>(null);
 
   const { data, isLoading, isError } = useQuery({
@@ -51,9 +55,19 @@ const TargetsPage = () => {
           <h1 className="hack-title text-xl md:text-2xl">ACTIVE TARGETS</h1>
           <p className="text-hack-dim text-xs font-mono mt-1 tracking-wider">Scope Management & Operations</p>
         </div>
-        <button onClick={() => setIsCreateOpen(true)} className="hack-btn w-full md:w-auto">
-          <Plus size={16} /> New Target
-        </button>
+        <div className="flex flex-wrap gap-2 w-full md:w-auto">
+          <button onClick={() => setIsExportOpen(true)} className="hack-btn-ghost border border-hack-border flex items-center gap-2">
+            <Download size={16} />
+            Export
+          </button>
+          <button onClick={() => setIsImportOpen(true)} className="hack-btn-ghost border border-hack-border flex items-center gap-2">
+            <Upload size={16} />
+            Import
+          </button>
+          <button onClick={() => setIsCreateOpen(true)} className="hack-btn flex items-center gap-2">
+            <Plus size={16} /> New Target
+          </button>
+        </div>
       </div>
 
       <div className="hack-box p-1 mb-6 flex items-center">
@@ -160,6 +174,8 @@ const TargetsPage = () => {
 
       <CreateTargetModal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} />
       <EditTargetModal isOpen={!!editingTarget} target={editingTarget} onClose={() => setEditingTarget(null)} />
+      <ImportTargetModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} />
+      <ExportTargetModal isOpen={isExportOpen} onClose={() => setIsExportOpen(false)} />
     </div>
   );
 };

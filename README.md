@@ -33,6 +33,7 @@ The system is built on a modern, containerized microservice-like architecture:
     * **Configurable Scans:** Toggle modules like `Alterx`, `Waymore` or `Crawling` per target.
     * **Asset Explorer:** Advanced data grid with Filtering, Search, **Tabs for Assets vs URLs**.
     * **Intel Filtering:** Specific **JS Filtering** and **Multi-Source Filtering** (Wayback, Gau, Katana, Waymore) with **Sorting** capabilities.
+    * **Data Import/Export:** Export targets with all related data (Assets, URLs) and import them back with duplicate handling.
     * **User Management:** Admin panel to manage team access.
 
 ## 🛠️ Arsenal (Toolchain)
@@ -86,7 +87,149 @@ We are following a multi-phase development roadmap.
 * [x] **Frontend Integration:** Dedicated "Crawled URLs" tab with **JS File Filter**, **Source Filtering**, and **Column Sorting**.
 * [x] **Alerting:** Real-time Telegram notifications for fresh URLs.
 
+### ✅ Phase 4.5: Data Import/Export & Module Sorting (COMPLETED)
+**Goal:** Enable data portability and ensure proper scan module ordering.
+* [x] **Export System:** Full export of targets with all related data (Assets, URLs) in standardized JSON format.
+* [x] **Import System:** Complete import with duplicate handling and data validation.
+* [x] **Selective Export:** Choose specific targets or export all at once.
+* [x] **Module Sorting:** Automatic sorting of scan modules (DISCOVERY → PROBING → CRAWLING) to ensure correct execution order.
+* [x] **Data Integrity:** Comprehensive export includes all subdomains, URLs, and metadata for complete data portability.
+
 ---
+
+## 🚀 Quick Start
+
+### Prerequisites
+* Docker & Docker Compose
+* Go 1.21+ (for local development)
+* Node.js 18+ (for frontend development)
+
+### Installation
+
+1. **Clone the repository:**
+```bash
+git clone https://github.com/omidxplimbo/hunt-engine.git
+cd hunt-engine
+```
+
+2. **Configure environment variables:**
+```bash
+cp .env.example .env
+# Edit .env with your configuration (Database, Redis, Telegram Bot Token, etc.)
+```
+
+3. **Start the platform:**
+```bash
+docker-compose up -d
+```
+
+4. **Access the dashboard:**
+* Frontend: `http://localhost:3000`
+* Backend API: `http://localhost:8080/api`
+* Default credentials: `admin` / `admin123` (⚠️ Change in production!)
+
+## 📖 Usage Guide
+
+### Target Management
+
+#### Creating a Target
+1. Navigate to **Targets** page
+2. Click **New Target**
+3. Fill in:
+   * **Operation Codename:** A friendly name for your target
+   * **Target Root:** The root domain (e.g., `example.com`)
+   * **Recon Frequency:** Minutes between scans (default: 720 = 12 hours)
+   * **Modules:** Select scan phases (DISCOVERY, PROBING, CRAWLING)
+   * **Options:** Toggle Alterx (permutation) and Waymore (deep crawl)
+
+#### Exporting Targets
+1. Click **Export** button on Targets page
+2. Select targets to export (or leave empty to export all)
+3. Download includes:
+   * Target configuration
+   * All discovered subdomains (Assets)
+   * All crawled URLs
+   * Complete metadata
+
+#### Importing Targets
+1. Click **Import** button on Targets page
+2. Select exported JSON file
+3. Choose **Skip existing targets** to avoid duplicates
+4. Import will restore all data including Assets and URLs
+
+### Asset Explorer
+
+#### Filtering Assets
+* **Live Only:** Show only active subdomains
+* **New Assets:** Recently discovered subdomains
+* **DNS Only:** Subdomains without HTTP response
+* **Search:** Filter by domain name
+
+#### URL Management
+* Switch to **URLs** tab to view crawled endpoints
+* **JS Files Filter:** Show only JavaScript files
+* **Source Filter:** Filter by discovery source (Wayback, GAU, Katana, Waymore)
+* **Sorting:** Sort by value, source, or creation date
+
+### Module Execution Order
+
+The platform automatically ensures scan modules execute in the correct order:
+1. **DISCOVERY** - Passive subdomain discovery
+2. **PROBING** - HTTP probing and fingerprinting
+3. **CRAWLING** - URL and endpoint discovery
+
+This order is enforced automatically, even if modules are specified in a different order.
+
+## 🔌 API Endpoints
+
+### Authentication
+* `POST /api/auth/login` - Login and receive JWT token
+
+### Targets
+* `GET /api/targets` - List all targets (paginated)
+* `POST /api/targets` - Create new target
+* `GET /api/targets/:id` - Get target details
+* `PATCH /api/targets/:id` - Update target
+* `DELETE /api/targets/:id` - Delete target
+* `POST /api/targets/:id/discovery` - Start/resume scan
+* `POST /api/targets/:id/stop` - Stop running scan
+
+### Export/Import
+* `GET /api/targets/export` - Export all targets
+* `POST /api/targets/export` - Export selected targets (body: `{target_ids: [1,2,3]}`)
+* `POST /api/targets/import` - Import targets from JSON
+
+### Assets & URLs
+* `GET /api/targets/:id/assets` - Get target assets (with filters)
+* `GET /api/targets/:id/urls` - Get target URLs (with filters)
+
+## 📦 Export/Import Format
+
+### Export Structure
+```json
+{
+  "version": "1.0",
+  "export_date": "2025-12-14T12:00:00Z",
+  "targets": [
+    {
+      "name": "Example Target",
+      "root_domain": "example.com",
+      "description": "Target description",
+      "in_scope": true,
+      "frequency": 720,
+      "modules": ["DISCOVERY", "PROBING", "CRAWLING"],
+      "use_alterx": true,
+      "use_waymore": false,
+      "assets": [...],
+      "urls": [...]
+    }
+  ]
+}
+```
+
+### Import Options
+* **Skip Existing:** If enabled, targets with matching `root_domain` are skipped
+* **Duplicate Handling:** Assets and URLs are automatically deduplicated during import
 
 ## 🔜 Next Steps (Phase 5)
 
@@ -96,3 +239,15 @@ We are now transitioning to **Vulnerability Scanning**.
 * Integrate **Nuclei** for template-based scanning.
 * Implement **Smart Filtering** (e.g., run WordPress templates only on WordPress sites).
 * Immediate Telegram alerts for **Critical/High** vulnerabilities.
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## 📝 License
+
+This project is licensed under the MIT License.
+
+## ⚠️ Disclaimer
+
+This tool is for **authorized security testing and research purposes only**. Users are responsible for ensuring they have proper authorization before scanning any targets.

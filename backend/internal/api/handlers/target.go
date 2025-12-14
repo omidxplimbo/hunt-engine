@@ -17,6 +17,7 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/utils"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // 👇 تابع کمکی برای مرتب‌سازی ماژول‌ها به ترتیب منطقی
@@ -574,4 +575,331 @@ func toAssetResponse(a models.Asset) dto.AssetResponse {
 		ResponseTime:  a.ResponseTimeMs,
 		RawHttpx:      rawHttpx,
 	}
+}
+
+// ExportTargetRequest درخواست Export تارگت‌ها
+type ExportTargetRequest struct {
+	TargetIDs []uint `json:"target_ids"` // لیست IDهای تارگت‌ها (اگر خالی باشد، همه export می‌شوند)
+}
+
+// ExportTarget هندلر Export یک یا چند تارگت به فرمت JSON استاندارد (شامل تمام داده‌های مرتبط)
+func ExportTarget(c *fiber.Ctx) error {
+	var req ExportTargetRequest
+	
+	// اگر method POST بود، body را parse می‌کنیم
+	if c.Method() == "POST" {
+		_ = c.BodyParser(&req) // خطا را ignore می‌کنیم
+	}
+	
+	// اگر method GET بود یا body خالی بود، از query param استفاده می‌کنیم
+	if len(req.TargetIDs) == 0 {
+		if id := c.Query("id"); id != "" {
+			targetID := uint(0)
+			if _, err := fmt.Sscanf(id, "%d", &targetID); err == nil {
+				req.TargetIDs = []uint{targetID}
+			}
+		}
+	}
+	
+	var targets []models.Target
+	var err error
+	
+	if len(req.TargetIDs) > 0 {
+		// Export تارگت‌های انتخاب شده
+		err = database.DB.Where("id IN ?", req.TargetIDs).Find(&targets).Error
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"status":  "error",
+				"message": "Failed to fetch targets",
+				"error":   err.Error(),
+			})
+		}
+		if len(targets) == 0 {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+				"status":  "error",
+				"message": "No targets found",
+			})
+		}
+	} else {
+		// Export همه تارگت‌ها
+		err = database.DB.Find(&targets).Error
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"status":  "error",
+				"message": "Failed to fetch targets",
+				"error":   err.Error(),
+			})
+		}
+	}
+
+	// تبدیل به فرمت Export (شامل Assets و URLs)
+	exportItems := make([]dto.TargetExportItem, len(targets))
+	for i, t := range targets {
+		var modules []string
+		if t.ScanModules != "" {
+			_ = json.Unmarshal([]byte(t.ScanModules), &modules)
+		}
+		if len(modules) == 0 {
+			modules = []string{"DISCOVERY", "PROBING", "CRAWLING"}
+		}
+
+		// دریافت Assets
+		var assets []models.Asset
+		database.DB.Where("target_id = ?", t.ID).Find(&assets)
+		assetItems := make([]dto.AssetExportItem, len(assets))
+		for j, a := range assets {
+			assetItems[j] = dto.AssetExportItem{
+				Value:          a.Value,
+				Type:           a.Type,
+				IsNew:          a.IsNew,
+				IsLive:         a.IsLive,
+				FinalURL:       a.FinalURL,
+				StatusCode:     a.StatusCode,
+				Title:          a.Title,
+				ContentLength:  a.ContentLength,
+				HostIP:         a.HostIP,
+				DnsxIP:         a.DnsxIP,
+				WebServer:      a.WebServer,
+				CDNName:        a.CDNName,
+				Technologies:   a.Technologies,
+				BodyHash:       a.BodyHash,
+				HeaderHash:     a.HeaderHash,
+				ResponseTimeMs: a.ResponseTimeMs,
+				RawHttpx:       a.RawHttpx,
+				CreatedAt:      a.CreatedAt.Format(time.RFC3339),
+			}
+		}
+
+		// دریافت URLs
+		var urls []models.FoundURL
+		database.DB.Where("target_id = ?", t.ID).Find(&urls)
+		urlItems := make([]dto.URLExportItem, len(urls))
+		for j, u := range urls {
+			urlItems[j] = dto.URLExportItem{
+				Value:     u.Value,
+				Source:    u.Source,
+				CreatedAt: u.CreatedAt.Format(time.RFC3339),
+			}
+		}
+
+		exportItems[i] = dto.TargetExportItem{
+			Name:        t.Name,
+			RootDomain:  t.RootDomain,
+			Description: t.Description,
+			InScope:     t.InScope,
+			Frequency:   t.Frequency,
+			Modules:     modules,
+			UseAlterx:   t.UseAlterx,
+			UseWaymore:  t.UseWaymore,
+			Assets:      assetItems,
+			URLs:        urlItems,
+		}
+	}
+
+	exportData := dto.TargetExportData{
+		Version:    "1.0",
+		ExportDate: time.Now().Format(time.RFC3339),
+		Targets:    exportItems,
+	}
+
+	// تنظیم هدر برای دانلود فایل
+	c.Set("Content-Type", "application/json")
+	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"targets_export_%s.json\"", time.Now().Format("20060102_150405")))
+
+	return c.JSON(exportData)
+}
+
+// ImportTarget هندلر Import تارگت‌ها از فایل JSON
+func ImportTarget(c *fiber.Ctx) error {
+	req := new(dto.ImportTargetRequest)
+	if err := c.BodyParser(req); err != nil {
+		log.Printf("❌ Import error - BodyParser failed: %v\n", err)
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Invalid request body",
+			"error":   err.Error(),
+		})
+	}
+
+	// اعتبارسنجی نسخه فرمت
+	if req.Data.Version != "1.0" {
+		log.Printf("❌ Import error - Unsupported version: %s\n", req.Data.Version)
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status":  "error",
+			"message": fmt.Sprintf("Unsupported export format version: %s (expected: 1.0)", req.Data.Version),
+		})
+	}
+
+	log.Printf("📥 Importing %d target(s)...\n", len(req.Data.Targets))
+
+	var created []models.Target
+	var skipped []string
+	var errors []string
+
+	for _, item := range req.Data.Targets {
+		// بررسی وجود تارگت با root_domain یکسان
+		var existing models.Target
+		if err := database.DB.Where("root_domain = ?", item.RootDomain).First(&existing).Error; err == nil {
+			if req.SkipExisting {
+				skipped = append(skipped, item.RootDomain)
+				continue
+			}
+			// اگر skip_existing false باشد، خطا می‌دهیم
+			errors = append(errors, fmt.Sprintf("Target with root_domain '%s' already exists", item.RootDomain))
+			continue
+		}
+
+		// مرتب‌سازی ماژول‌ها
+		modules := item.Modules
+		if len(modules) == 0 {
+			modules = []string{"DISCOVERY", "PROBING", "CRAWLING"}
+		} else {
+			modules = sortScanModules(modules)
+		}
+
+		modulesJSON, _ := json.Marshal(modules)
+
+		// ایجاد تارگت جدید
+		target := models.Target{
+			Name:         item.Name,
+			RootDomain:   item.RootDomain,
+			Description:  item.Description,
+			InScope:      item.InScope,
+			Frequency:    item.Frequency,
+			ScanModules:  string(modulesJSON),
+			Status:       "READY", // تارگت‌های import شده به صورت READY هستند (نه SCANNING)
+			CurrentPhase: "IDLE",
+			UseAlterx:    item.UseAlterx,
+			UseWaymore:   item.UseWaymore,
+		}
+
+		if err := database.DB.Create(&target).Error; err != nil {
+			errors = append(errors, fmt.Sprintf("Failed to create target '%s': %v", item.RootDomain, err))
+			continue
+		}
+
+		// Import Assets
+		if len(item.Assets) > 0 {
+			assets := make([]models.Asset, 0, len(item.Assets))
+			for _, aItem := range item.Assets {
+				// Skip empty values (unique constraint)
+				if aItem.Value == "" {
+					continue
+				}
+				
+				createdAt := time.Now()
+				if aItem.CreatedAt != "" {
+					if parsed, err := time.Parse(time.RFC3339, aItem.CreatedAt); err == nil {
+						createdAt = parsed
+					}
+				}
+				
+				assets = append(assets, models.Asset{
+					TargetID:       target.ID,
+					Value:          aItem.Value,
+					Type:           aItem.Type,
+					IsNew:          aItem.IsNew,
+					IsLive:         aItem.IsLive,
+					FinalURL:       aItem.FinalURL,
+					StatusCode:     aItem.StatusCode,
+					Title:          aItem.Title,
+					ContentLength:  aItem.ContentLength,
+					HostIP:         aItem.HostIP,
+					DnsxIP:         aItem.DnsxIP,
+					WebServer:      aItem.WebServer,
+					CDNName:        aItem.CDNName,
+					Technologies:   aItem.Technologies,
+					BodyHash:       aItem.BodyHash,
+					HeaderHash:     aItem.HeaderHash,
+					ResponseTimeMs: aItem.ResponseTimeMs,
+					RawHttpx:       aItem.RawHttpx,
+					CreatedAt:      createdAt,
+				})
+			}
+			// استفاده از CreateInBatches با ON CONFLICT برای جلوگیری از duplicate
+			if len(assets) > 0 {
+				// استفاده از ON CONFLICT DO NOTHING برای skip کردن duplicate ها
+				if err := database.DB.Clauses(clause.OnConflict{
+					Columns:   []clause.Column{{Name: "value"}},
+					DoNothing: true,
+				}).CreateInBatches(assets, 500).Error; err != nil {
+					log.Printf("⚠️ Warning: Failed to import some assets for target '%s': %v\n", item.RootDomain, err)
+					errors = append(errors, fmt.Sprintf("Failed to import assets for '%s': %v", item.RootDomain, err))
+				} else {
+					log.Printf("✅ Imported %d assets for target '%s'\n", len(assets), item.RootDomain)
+				}
+			}
+		}
+
+		// Import URLs
+		if len(item.URLs) > 0 {
+			urls := make([]models.FoundURL, 0, len(item.URLs))
+			for _, uItem := range item.URLs {
+				// Skip empty values
+				if uItem.Value == "" {
+					continue
+				}
+				
+				createdAt := time.Now()
+				if uItem.CreatedAt != "" {
+					if parsed, err := time.Parse(time.RFC3339, uItem.CreatedAt); err == nil {
+						createdAt = parsed
+					}
+				}
+				
+				urls = append(urls, models.FoundURL{
+					TargetID:  target.ID,
+					Value:     uItem.Value,
+					Source:    uItem.Source,
+					CreatedAt: createdAt,
+				})
+			}
+			// استفاده از CreateInBatches با ON CONFLICT برای جلوگیری از duplicate
+			if len(urls) > 0 {
+				// برای URLs، unique constraint روی (target_id, value) است، پس باید هر دو را چک کنیم
+				// اما GORM ON CONFLICT برای multiple columns مشکل دارد، پس از روش دیگری استفاده می‌کنیم
+				// چک کردن وجود URL قبل از insert
+				existingURLs := make(map[string]bool)
+				var existingFoundURLs []models.FoundURL
+				database.DB.Where("target_id = ?", target.ID).Select("value").Find(&existingFoundURLs)
+				for _, u := range existingFoundURLs {
+					existingURLs[u.Value] = true
+				}
+				
+				// فیلتر کردن URLs که قبلاً وجود ندارند
+				newURLs := make([]models.FoundURL, 0)
+				for _, u := range urls {
+					if !existingURLs[u.Value] {
+						newURLs = append(newURLs, u)
+					}
+				}
+				
+				if len(newURLs) > 0 {
+					if err := database.DB.CreateInBatches(newURLs, 500).Error; err != nil {
+						log.Printf("⚠️ Warning: Failed to import some URLs for target '%s': %v\n", item.RootDomain, err)
+						errors = append(errors, fmt.Sprintf("Failed to import URLs for '%s': %v", item.RootDomain, err))
+					} else {
+						log.Printf("✅ Imported %d URLs for target '%s' (%d skipped as duplicates)\n", len(newURLs), item.RootDomain, len(urls)-len(newURLs))
+					}
+				} else if len(urls) > 0 {
+					log.Printf("ℹ️ All URLs for target '%s' already exist, skipping\n", item.RootDomain)
+				}
+			}
+		}
+
+		created = append(created, target)
+	}
+
+	// پاک کردن کش
+	cache.ClearCache()
+
+	return c.JSON(fiber.Map{
+		"status":  "success",
+		"message": fmt.Sprintf("Import completed: %d created, %d skipped, %d errors", len(created), len(skipped), len(errors)),
+		"data": fiber.Map{
+			"created": created,
+			"skipped": skipped,
+			"errors":  errors,
+		},
+	})
 }

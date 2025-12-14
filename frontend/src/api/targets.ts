@@ -143,3 +143,102 @@ export const getTargetURLs = async (
   const response = await apiClient.get<FoundURLResponse>(`/targets/${targetId}/urls`, { params });
   return response.data;
 };
+
+// --- بخش Export/Import تارگت‌ها ---
+
+// ساختار داده Export/Import
+export interface TargetExportData {
+  version: string;
+  export_date: string;
+  targets: TargetExportItem[];
+}
+
+export interface TargetExportItem {
+  name: string;
+  root_domain: string;
+  description: string;
+  in_scope: boolean;
+  frequency: number;
+  modules: string[];
+  use_alterx: boolean;
+  use_waymore: boolean;
+  assets: AssetExportItem[];
+  urls: URLExportItem[];
+}
+
+export interface AssetExportItem {
+  value: string;
+  type: string;
+  is_new: boolean;
+  is_live: boolean;
+  final_url: string;
+  status_code: number;
+  title: string;
+  content_length: number;
+  host_ip: string;
+  dnsx_ip: string;
+  web_server: string;
+  cdn_name: string;
+  technologies: string;
+  body_hash: string;
+  header_hash: string;
+  response_time_ms: number;
+  raw_httpx: string;
+  created_at: string;
+}
+
+export interface URLExportItem {
+  value: string;
+  source: string;
+  created_at: string;
+}
+
+export interface ImportTargetPayload {
+  data: TargetExportData;
+  skip_existing?: boolean;
+}
+
+export interface ImportTargetResponse {
+  status: string;
+  message: string;
+  data: {
+    created: Target[];
+    skipped: string[];
+    errors: string[];
+  };
+}
+
+// Export تارگت‌ها (اگر targetIds ارسال شود، فقط آن تارگت‌ها export می‌شوند، در غیر این صورت همه)
+export const exportTargets = async (targetIds?: number[]): Promise<void> => {
+  let response;
+  
+  if (targetIds && targetIds.length > 0) {
+    // ارسال لیست IDها در body
+    response = await apiClient.post('/targets/export', 
+      { target_ids: targetIds },
+      { responseType: 'blob' }
+    );
+  } else {
+    // Export همه تارگت‌ها
+    response = await apiClient.get('/targets/export', {
+      responseType: 'blob',
+    });
+  }
+  
+  // ایجاد لینک دانلود
+  const blob = new Blob([response.data], { type: 'application/json' });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `targets_export_${new Date().toISOString().split('T')[0]}.json`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.URL.revokeObjectURL(url);
+};
+
+// Import تارگت‌ها
+export const importTargets = async (payload: ImportTargetPayload): Promise<ImportTargetResponse> => {
+  const response = await apiClient.post<ImportTargetResponse>('/targets/import', payload);
+  return response.data;
+};

@@ -58,8 +58,16 @@ func main() {
 	api.Use(middleware.Protected())
 
 	// Target Routes
+	// ⚠️ مهم: route‌های static باید قبل از route‌های dynamic قرار بگیرند
 	api.Post("/targets", handlers.CreateTarget)
 	api.Get("/targets", handlers.GetTargets)
+
+	// Export/Import Routes (باید قبل از /targets/:id قرار بگیرند)
+	api.Get("/targets/export", handlers.ExportTarget)  // Export تارگت‌ها (با query param ?id= برای یک تارگت خاص)
+	api.Post("/targets/export", handlers.ExportTarget) // Export تارگت‌ها (با body شامل لیست IDها)
+	api.Post("/targets/import", handlers.ImportTarget) // Import تارگت‌ها
+
+	// Dynamic Routes (باید بعد از static routes قرار بگیرند)
 	api.Get("/targets/:id", handlers.GetTargetDetails)
 	api.Patch("/targets/:id", handlers.UpdateTarget)
 	api.Delete("/targets/:id", handlers.DeleteTarget)

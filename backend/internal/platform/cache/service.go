@@ -67,3 +67,17 @@ func GenerateAssetKey(targetID uint, offset, limit int, filters string) string {
 	// تغییر p (page) به o (offset)
 	return fmt.Sprintf("assets:tid:%d:v:%d:o:%d:l:%d:f:%s", targetID, version, offset, limit, filters)
 }
+
+// ClearCache پاک کردن کش‌های مربوط به لیست تارگت‌ها
+// این تابع برای استفاده بعد از Import/Export یا تغییرات عمده در تارگت‌ها است
+func ClearCache() {
+	// پاک کردن کلیدهای مربوط به لیست تارگت‌ها
+	pattern := "targets:list:*"
+	keys, err := redisq.Client.Keys(ctx, pattern).Result()
+	if err != nil {
+		return
+	}
+	if len(keys) > 0 {
+		redisq.Client.Del(ctx, keys...)
+	}
+}
