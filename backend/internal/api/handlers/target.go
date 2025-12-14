@@ -3,6 +3,8 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"log"
+	"sort" // 👈 اضافه شده برای مرتب‌سازی
 	"strconv"
 	"strings"
 	"time"
@@ -17,24 +19,47 @@ import (
 	"gorm.io/gorm"
 )
 
-// CreateTarget هندلر ساخت یک هدف جدید است
+// 👇 تابع کمکی برای مرتب‌سازی ماژول‌ها به ترتیب منطقی
+func sortScanModules(modules []string) []string {
+	// نقشه اولویت‌بندی مراحل
+	priority := map[string]int{
+		"DISCOVERY": 1,
+		"PROBING":   2,
+		"CRAWLING":  3,
+	}
+
+	sort.Slice(modules, func(i, j int) bool {
+		p1, ok1 := priority[modules[i]]
+		p2, ok2 := priority[modules[j]]
+
+		// اگر ماژولی در لیست نبود (ناشناخته)، می‌رود ته لیست
+		if !ok1 {
+			p1 = 99
+		}
+		if !ok2 {
+			p2 = 99
+		}
+
+		return p1 < p2
+	})
+	return modules
+}
+
+// CreateTarget هندلر ساخت یک هدف جدید
 func CreateTarget(c *fiber.Ctx) error {
 	req := new(dto.CreateTargetRequest)
 	if err := c.BodyParser(req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"status":  "error",
-			"message": "Invalid request body format",
-			"error":   err.Error(),
-		})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "Invalid request body", "error": err.Error()})
 	}
 
-	modulesJSON := "[]"
+	// 👇 مرتب‌سازی ماژول‌ها قبل از ذخیره
 	if len(req.Modules) > 0 {
-		bytes, _ := json.Marshal(req.Modules)
-		modulesJSON = string(bytes)
+		req.Modules = sortScanModules(req.Modules)
 	} else {
-		modulesJSON = "[\"DISCOVERY\", \"PROBING\", \"CRAWLING\"]"
+		req.Modules = []string{"DISCOVERY", "PROBING", "CRAWLING"}
 	}
+
+	modulesJSON, _ := json.Marshal(req.Modules)
 
 	target := models.Target{
 		Name:         req.Name,
@@ -42,46 +67,138 @@ func CreateTarget(c *fiber.Ctx) error {
 		Description:  req.Description,
 		InScope:      true,
 		Frequency:    req.Frequency,
-		ScanModules:  modulesJSON,
+		ScanModules:  string(modulesJSON),
 		Status:       "SCANNING",
 		CurrentPhase: "QUEUED: STARTING...",
+		UseAlterx:    true,
+		UseWaymore:   false,
 	}
 
 	if req.UseAlterx != nil {
 		target.UseAlterx = *req.UseAlterx
-	} else {
-		target.UseAlterx = true
 	}
-
 	if req.UseWaymore != nil {
 		target.UseWaymore = *req.UseWaymore
-	} else {
-		target.UseWaymore = false
 	}
 
 	if err := database.DB.Create(&target).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"status":  "error",
-			"message": "Could not save target to database",
-			"error":   err.Error(),
-		})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Could not save target", "error": err.Error()})
 	}
 
-	taskPayload := fmt.Sprintf("DISCOVERY:%d:%s", target.ID, target.RootDomain)
-	err := redisq.Client.RPush(redisq.Ctx, redisq.QueueName, taskPayload).Err()
-	if err != nil {
+	// شروع اولین ماژول (چون مرتب شده، مطمئنیم درسته)
+	firstModule := req.Modules[0]
+	taskPayload := fmt.Sprintf("%s:%d:%s", firstModule, target.ID, target.RootDomain)
+
+	if err := redisq.Client.RPush(redisq.Ctx, redisq.QueueName, taskPayload).Err(); err != nil {
 		database.DB.Model(&target).Update("status", "READY")
-		fmt.Printf("⚠️ Failed to enqueue discovery task for %s: %v\n", target.RootDomain, err)
-	} else {
-		fmt.Printf("Have enqueued discovery task for: %s [Payload: %s]\n", target.RootDomain, taskPayload)
+		log.Printf("⚠️ Failed to enqueue task: %v\n", err)
 	}
 
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"status": "success", "message": "Target created & started!", "data": target})
+}
+
+// UpdateTarget ویرایش تارگت (جایی که باگ اصلی بود)
+func UpdateTarget(c *fiber.Ctx) error {
+	id := c.Params("id")
+	var target models.Target
+	if err := database.DB.First(&target, id).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Target not found"})
+	}
+
+	req := new(dto.UpdateTargetRequest)
+	if err := c.BodyParser(req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "Invalid body"})
+	}
+
+	if req.Name != "" {
+		target.Name = req.Name
+	}
+	if req.Description != "" {
+		target.Description = req.Description
+	}
+	if req.Frequency != nil {
+		target.Frequency = *req.Frequency
+	}
+	if req.InScope != nil {
+		target.InScope = *req.InScope
+	}
+
+	if req.UseAlterx != nil {
+		target.UseAlterx = *req.UseAlterx
+	}
+	if req.UseWaymore != nil {
+		target.UseWaymore = *req.UseWaymore
+	}
+
+	// 👇👇👇 فیکس اصلی اینجاست: مرتب‌سازی لیست ماژول‌ها قبل از آپدیت دیتابیس
+	if len(req.Modules) > 0 {
+		sortedModules := sortScanModules(req.Modules)
+		bytes, _ := json.Marshal(sortedModules)
+		target.ScanModules = string(bytes)
+	}
+
+	if err := database.DB.Save(&target).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to update target"})
+	}
+
+	// پاک کردن کش لیست تارگت‌ها برای اعمال تغییرات در فرانت
+	// (اگر سیستم کشینگ دارید، اینجا باید کلیدهای مربوطه را Invalidate کنید)
+
+	return c.JSON(fiber.Map{
 		"status":  "success",
-		"message": "Target created successfully AND discovery queued!",
+		"message": "Target updated successfully",
 		"data":    target,
 	})
 }
+
+// StartDiscovery هندلر شروع مجدد اسکن (هوشمند)
+func StartDiscovery(c *fiber.Ctx) error {
+	id := c.Params("id")
+	var target models.Target
+	if err := database.DB.First(&target, id).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Target not found"})
+	}
+
+	if target.Status == "SCANNING" {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"status": "error", "message": "Target is already being scanned."})
+	}
+
+	var modules []string
+	if err := json.Unmarshal([]byte(target.ScanModules), &modules); err != nil || len(modules) == 0 {
+		modules = []string{"DISCOVERY", "PROBING", "CRAWLING"}
+	}
+
+	// 👇 اطمینان حاصل می‌کنیم که حتی اگر دیتای قدیمی در دیتابیس نامرتب است، اینجا درست شروع شود
+	modules = sortScanModules(modules)
+
+	// آپدیت کردن ترتیب درست در دیتابیس (برای اینکه ورکر در مراحل بعد گیج نشود)
+	sortedJSON, _ := json.Marshal(modules)
+	if string(sortedJSON) != target.ScanModules {
+		database.DB.Model(&target).Update("scan_modules", string(sortedJSON))
+	}
+
+	firstModule := modules[0]
+
+	database.DB.Model(&target).Updates(map[string]interface{}{
+		"status":        "SCANNING",
+		"current_phase": fmt.Sprintf("QUEUED: STARTING %s...", firstModule),
+	})
+
+	taskPayload := fmt.Sprintf("%s:%d:%s", firstModule, target.ID, target.RootDomain)
+
+	if err := redisq.Client.RPush(redisq.Ctx, redisq.QueueName, taskPayload).Err(); err != nil {
+		database.DB.Model(&target).Update("status", "READY")
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to enqueue job"})
+	}
+
+	return c.JSON(fiber.Map{
+		"status":  "success",
+		"message": fmt.Sprintf("Scan started. First phase: %s", firstModule),
+	})
+}
+
+// ... (بقیه هندلرها: GetTargets, GetTargetDetails, GetTargetAssets, StartProbing, DeleteTarget, StopScan, GetTargetURLs بدون تغییر باقی می‌مانند)
+// فقط کدهای بالا را جایگزین توابع مشابه در فایل فعلی کنید.
 
 // GetTargets لیست تمام تارگت‌ها را به صورت صفحه‌بندی شده برمی‌گردونه
 func GetTargets(c *fiber.Ctx) error {
@@ -279,91 +396,6 @@ func StartProbing(c *fiber.Ctx) error {
 	})
 }
 
-// StartDiscovery هندلر شروع مجدد اسکن (هوشمند)
-func StartDiscovery(c *fiber.Ctx) error {
-	id := c.Params("id")
-	var target models.Target
-	if err := database.DB.First(&target, id).Error; err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Target not found"})
-	}
-
-	if target.Status == "SCANNING" {
-		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"status": "error", "message": "Target is already being scanned."})
-	}
-
-	var modules []string
-	if err := json.Unmarshal([]byte(target.ScanModules), &modules); err != nil || len(modules) == 0 {
-		modules = []string{"DISCOVERY"}
-	}
-
-	firstModule := modules[0]
-
-	database.DB.Model(&target).Updates(map[string]interface{}{
-		"status":        "SCANNING",
-		"current_phase": fmt.Sprintf("QUEUED: STARTING %s...", firstModule),
-	})
-
-	taskPayload := fmt.Sprintf("%s:%d:%s", firstModule, target.ID, target.RootDomain)
-
-	if err := redisq.Client.RPush(redisq.Ctx, redisq.QueueName, taskPayload).Err(); err != nil {
-		database.DB.Model(&target).Update("status", "READY")
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to enqueue job"})
-	}
-
-	return c.JSON(fiber.Map{
-		"status":  "success",
-		"message": fmt.Sprintf("Scan started. First phase: %s", firstModule),
-	})
-}
-
-// UpdateTarget ویرایش تارگت
-func UpdateTarget(c *fiber.Ctx) error {
-	id := c.Params("id")
-	var target models.Target
-	if err := database.DB.First(&target, id).Error; err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Target not found"})
-	}
-
-	req := new(dto.UpdateTargetRequest)
-	if err := c.BodyParser(req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "Invalid body"})
-	}
-
-	if req.Name != "" {
-		target.Name = req.Name
-	}
-	if req.Description != "" {
-		target.Description = req.Description
-	}
-	if req.Frequency != nil {
-		target.Frequency = *req.Frequency
-	}
-	if req.InScope != nil {
-		target.InScope = *req.InScope
-	}
-	if len(req.Modules) > 0 {
-		bytes, _ := json.Marshal(req.Modules)
-		target.ScanModules = string(bytes)
-	}
-
-	if req.UseAlterx != nil {
-		target.UseAlterx = *req.UseAlterx
-	}
-	if req.UseWaymore != nil {
-		target.UseWaymore = *req.UseWaymore
-	}
-
-	if err := database.DB.Save(&target).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to update target"})
-	}
-
-	return c.JSON(fiber.Map{
-		"status":  "success",
-		"message": "Target updated successfully",
-		"data":    target,
-	})
-}
-
 // DeleteTarget حذف کامل تارگت
 func DeleteTarget(c *fiber.Ctx) error {
 	id := c.Params("id")
@@ -415,7 +447,6 @@ func StopScan(c *fiber.Ctx) error {
 
 // GetTargetURLs لیست URLهای کراول شده را برمی‌گرداند
 func GetTargetURLs(c *fiber.Ctx) error {
-	// ... (بخش‌های ابتدایی ثابت)
 	id := c.Params("id")
 	targetID := uint(0)
 	fmt.Sscanf(id, "%d", &targetID)
@@ -434,7 +465,7 @@ func GetTargetURLs(c *fiber.Ctx) error {
 
 	search := c.Query("search")
 	onlyJS := c.Query("only_js")
-	sources := c.Query("sources") // 👈 دریافت پارامتر جدید
+	sources := c.Query("sources")
 
 	sortBy := c.Query("sort_by", "created_at")
 	order := c.Query("order", "desc")
@@ -460,9 +491,11 @@ func GetTargetURLs(c *fiber.Ctx) error {
 		db = db.Where("value LIKE ?", "%.js")
 	}
 
-	// 👇 لاجیک فیلتر کردن سورس‌ها
 	if sources != "" {
-		sourceList := strings.Split(sources, ",")
+		sourceList := strings.Split(sources, ",") // اصلاح شد: نیاز به strings.Split نیست چون قبلا استفاده نکردیم
+		// نه صبر کن، بالا استفاده نکرده بودیم اینجا باید strings اضافه بشه به ایمپورت ها
+		// چون strings توی ایمپورت ها نیست، اینجا کد ساده تر میزنم یا باید strings رو اضافه کنی
+		// بذار یه کار تمیزتر کنیم، strings رو دستی به ایمپورت ها اضافه کردم (بالا).
 		if len(sourceList) > 0 {
 			db = db.Where("source IN ?", sourceList)
 		}
@@ -492,9 +525,7 @@ func GetTargetURLs(c *fiber.Ctx) error {
 	})
 }
 
-// ==========================================
-// Helper Functions (Model -> DTO Mapper)
-// ==========================================
+// ... (Helper Functions DTO - اینا رو بذار همونطور که هستن بمونن یا اگه خواستی کپی کن از فایل قبلی)
 func toTargetResponse(t models.Target, assetCount int64) dto.TargetResponse {
 	return dto.TargetResponse{
 		ID:           t.ID,
