@@ -34,5 +34,6 @@ export interface AssetFilters {
   is_new?: boolean;
   search?: string;
   has_httpx?: boolean;
-  dns_only?: boolean; // 👈 فیلد جدید
+  dns_only?: boolean;
+  no_cdn?: boolean; // 👈 فیلتر برای نمایش فقط ساب‌دامین‌های بدون CDN
 }

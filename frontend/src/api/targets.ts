@@ -73,9 +73,8 @@ export const getTargetAssets = async (
   if (filters?.is_new !== undefined) params.is_new = filters.is_new;
   if (filters?.search) params.search = filters.search;
   if (filters?.has_httpx !== undefined) params.has_httpx = filters.has_httpx;
-  
-  // 👇 ارسال پارامتر جدید به بک‌اند
   if (filters?.dns_only !== undefined) params.dns_only = filters.dns_only;
+  if (filters?.no_cdn !== undefined) params.no_cdn = filters.no_cdn;
 
   const response = await apiClient.get<AssetResponse>(`/targets/${targetId}/assets`, {
     params,
@@ -241,4 +240,23 @@ export const exportTargets = async (targetIds?: number[]): Promise<void> => {
 export const importTargets = async (payload: ImportTargetPayload): Promise<ImportTargetResponse> => {
   const response = await apiClient.post<ImportTargetResponse>('/targets/import', payload);
   return response.data;
+};
+
+// Export IPs یک تارگت به صورت فایل txt
+export const exportTargetIPs = async (targetId: number, rootDomain: string): Promise<void> => {
+  const response = await apiClient.get(`/targets/${targetId}/ips`, {
+    responseType: 'blob',
+  });
+  
+  // ایجاد لینک دانلود
+  const blob = new Blob([response.data], { type: 'text/plain' });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  // نام فایل: root_domain_ips.txt (جایگزین . با _)
+  link.download = `${rootDomain.replace(/\./g, '_')}_ips.txt`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.URL.revokeObjectURL(url);
 };

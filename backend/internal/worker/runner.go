@@ -213,6 +213,14 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	database.DB.First(&target, targetID)
 	saveDiscoveryResultsToDB(target, masterList, dnsxResults)
 
+	// 6. CDN Check for IPs that haven't been probed by httpx yet
+	if checkStopRequest(targetID) {
+		return
+	}
+	updateTargetPhase(targetID, "PHASE 1: CDN CHECK")
+	log.Printf("🔍 Starting CDN check for assets without httpx data...\n")
+	runCdnCheckForUnprobedAssets(targetID, dnsxResults)
+
 	log.Printf("🏁 PHASE 1 finished for %s in %s.\n", rootDomain, time.Since(startTime))
 	triggerNextModule(targetID, rootDomain, "DISCOVERY")
 }
@@ -987,4 +995,187 @@ func mergeUnique(slice1, slice2 []string) []string {
 func writeSliceToFile(filename string, data []string) error {
 	content := strings.Join(data, "\n")
 	return ioutil.WriteFile(filename, []byte(content), 0644)
+}
+
+// CdnCheckResult ساختار نتیجه cdncheck
+type CdnCheckResult struct {
+	IP      string `json:"ip"`
+	IsCDN   bool   `json:"cdn"`
+	CDNName string `json:"cdn_name"`
+	// برای سازگاری با فرمت‌های مختلف
+	CDN interface{} `json:"cdn,omitempty"` // ممکن است boolean یا string باشد
+}
+
+// runCdnCheckForUnprobedAssets چک کردن CDN برای IPهایی که dnsx resolve کرده ولی httpx هنوز handle نکرده
+func runCdnCheckForUnprobedAssets(targetID uint, dnsxResults map[string][]string) {
+	// پیدا کردن assets که dnsx_ip دارند ولی httpx نداشته‌اند
+	var unprobedAssets []models.Asset
+	database.DB.Where("target_id = ? AND dnsx_ip != '[]' AND dnsx_ip != '' AND (raw_httpx = '' OR raw_httpx = '{}' OR raw_httpx IS NULL)", targetID).
+		Find(&unprobedAssets)
+
+	if len(unprobedAssets) == 0 {
+		log.Printf("ℹ️ No unprobed assets found for CDN check.\n")
+		return
+	}
+
+	log.Printf("🔍 Checking CDN for %d unprobed assets...\n", len(unprobedAssets))
+
+	// جمع‌آوری تمام IPهای منحصر به فرد
+	ipSet := make(map[string]bool)
+	ipToAssets := make(map[string][]uint) // IP -> []AssetID
+
+	for _, asset := range unprobedAssets {
+		var ips []string
+		if err := json.Unmarshal([]byte(asset.DnsxIP), &ips); err == nil {
+			for _, ip := range ips {
+				if ip != "" {
+					ipSet[ip] = true
+					ipToAssets[ip] = append(ipToAssets[ip], asset.ID)
+				}
+			}
+		}
+	}
+
+	if len(ipSet) == 0 {
+		log.Printf("ℹ️ No IPs found for CDN check.\n")
+		return
+	}
+
+	// تبدیل set به slice برای cdncheck
+	ipList := make([]string, 0, len(ipSet))
+	for ip := range ipSet {
+		ipList = append(ipList, ip)
+	}
+
+	// اجرای cdncheck
+	cdnResults := runCdnCheck(targetID, ipList)
+	if len(cdnResults) == 0 {
+		log.Printf("⚠️ No CDN check results returned.\n")
+		return
+	}
+
+	// به‌روزرسانی assets با اطلاعات CDN
+	// برای هر asset، اگر حداقل یکی از IPهایش پشت CDN باشد، CDN name را ذخیره می‌کنیم
+	assetCDNMap := make(map[uint]string) // AssetID -> CDNName (اولین CDN پیدا شده)
+	
+	for ip, cdnInfo := range cdnResults {
+		if assetIDs, exists := ipToAssets[ip]; exists {
+			for _, assetID := range assetIDs {
+				// اگر این asset قبلاً CDN نداشته و این IP پشت CDN است، ذخیره می‌کنیم
+				if cdnInfo.IsCDN && cdnInfo.CDNName != "" {
+					if _, alreadySet := assetCDNMap[assetID]; !alreadySet {
+						assetCDNMap[assetID] = cdnInfo.CDNName
+					}
+				}
+			}
+		}
+	}
+
+	// به‌روزرسانی assets
+	updatedCount := 0
+	for assetID, cdnName := range assetCDNMap {
+		var asset models.Asset
+		if err := database.DB.First(&asset, assetID).Error; err == nil {
+			// فقط اگر هنوز httpx نداشته باشد، CDN info را آپدیت می‌کنیم
+			if asset.RawHttpx == "" || asset.RawHttpx == "{}" {
+				database.DB.Model(&asset).Update("cdn_name", cdnName)
+				updatedCount++
+			}
+		}
+	}
+
+	// برای assets که هیچ IP آنها پشت CDN نیست، مطمئن شویم cdn_name خالی است
+	allCheckedAssetIDs := make(map[uint]bool)
+	for _, assetIDs := range ipToAssets {
+		for _, assetID := range assetIDs {
+			allCheckedAssetIDs[assetID] = true
+		}
+	}
+
+	for assetID := range allCheckedAssetIDs {
+		if _, hasCDN := assetCDNMap[assetID]; !hasCDN {
+			var asset models.Asset
+			if err := database.DB.First(&asset, assetID).Error; err == nil {
+				if (asset.RawHttpx == "" || asset.RawHttpx == "{}") && asset.CDNName != "" {
+					database.DB.Model(&asset).Update("cdn_name", "")
+				}
+			}
+		}
+	}
+
+	log.Printf("✅ CDN check completed. Updated %d assets with CDN information.\n", updatedCount)
+}
+
+// runCdnCheck اجرای cdncheck روی لیست IPها
+func runCdnCheck(targetID uint, ips []string) map[string]CdnCheckResult {
+	if len(ips) == 0 {
+		return make(map[string]CdnCheckResult)
+	}
+
+	const inputFile = "/tmp/cdncheck_input.txt"
+	const outputFile = "/tmp/cdncheck_output.json"
+
+	// نوشتن IPها در فایل
+	if err := writeSliceToFile(inputFile, ips); err != nil {
+		log.Printf("❌ Error writing cdncheck input file: %v\n", err)
+		return make(map[string]CdnCheckResult)
+	}
+
+	// اجرای cdncheck
+	_, err := runCommandWithKillSwitch(targetID, "cdncheck",
+		"-l", inputFile,
+		"-json",
+		"-o", outputFile,
+		"-silent",
+	)
+	if err != nil {
+		if err.Error() != "process killed by user request" {
+			log.Printf("⚠️ Cdncheck error: %v\n", err)
+		}
+		return make(map[string]CdnCheckResult)
+	}
+
+	// خواندن نتایج
+	results := make(map[string]CdnCheckResult)
+	file, err := os.Open(outputFile)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("❌ Error opening cdncheck output: %v\n", err)
+		}
+		return results
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		var rawResult map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &rawResult); err == nil {
+			ip, ok := rawResult["ip"].(string)
+			if !ok || ip == "" {
+				continue
+			}
+
+			result := CdnCheckResult{IP: ip}
+
+			// بررسی فیلد cdn (ممکن است boolean یا string باشد)
+			if cdnVal, exists := rawResult["cdn"]; exists {
+				switch v := cdnVal.(type) {
+				case bool:
+					result.IsCDN = v
+				case string:
+					result.IsCDN = (v == "true" || v == "1" || v == "yes")
+				}
+			}
+
+			// بررسی فیلد cdn_name
+			if cdnName, ok := rawResult["cdn_name"].(string); ok {
+				result.CDNName = cdnName
+			}
+
+			results[result.IP] = result
+		}
+	}
+
+	return results
 }

@@ -15,6 +15,7 @@ RUN go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest
 
 # فاز ۲: پروبینگ
 RUN go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
+RUN go install -v github.com/projectdiscovery/cdncheck/cmd/cdncheck@latest
 
 # فاز ۳: خزش و کشف محتوا
 RUN go install github.com/tomnomnom/waybackurls@latest
@@ -51,6 +52,7 @@ COPY --from=go_builder /go/bin/assetfinder /usr/local/bin/assetfinder
 COPY --from=go_builder /go/bin/alterx /usr/local/bin/alterx
 COPY --from=go_builder /go/bin/dnsx /usr/local/bin/dnsx
 COPY --from=go_builder /go/bin/httpx /usr/local/bin/httpx
+COPY --from=go_builder /go/bin/cdncheck /usr/local/bin/cdncheck
 COPY --from=go_builder /go/bin/waybackurls /usr/local/bin/waybackurls
 COPY --from=go_builder /go/bin/gau /usr/local/bin/gau
 COPY --from=go_builder /go/bin/katana /usr/local/bin/katana

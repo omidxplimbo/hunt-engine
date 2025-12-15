@@ -294,6 +294,7 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	search := c.Query("search")
 	hasHttpx := c.Query("has_httpx")
 	dnsOnly := c.Query("dns_only")
+	noCdn := c.Query("no_cdn")
 
 	// Sorting Params
 	sortBy := c.Query("sort_by", "value")
@@ -310,7 +311,7 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	}
 	orderClause := fmt.Sprintf("%s %s", sortBy, order)
 
-	filtersKey := fmt.Sprintf("l:%s|n:%s|s:%s|h:%s|d:%s|sb:%s|o:%s", isLive, isNew, search, hasHttpx, dnsOnly, sortBy, order)
+	filtersKey := fmt.Sprintf("l:%s|n:%s|s:%s|h:%s|d:%s|c:%s|sb:%s|o:%s", isLive, isNew, search, hasHttpx, dnsOnly, noCdn, sortBy, order)
 	cacheKey := cache.GenerateAssetKey(targetID, offset, limit, filtersKey)
 
 	var cachedResponse fiber.Map
@@ -337,6 +338,10 @@ func GetTargetAssets(c *fiber.Ctx) error {
 
 	if dnsOnly == "true" {
 		db = db.Where("jsonb_array_length(dnsx_ip) > 0 AND jsonb_array_length(host_ip) = 0")
+	}
+
+	if noCdn == "true" {
+		db = db.Where("(cdn_name IS NULL OR cdn_name = '' OR cdn_name = 'null')")
 	}
 
 	var totalCount int64
@@ -902,4 +907,75 @@ func ImportTarget(c *fiber.Ctx) error {
 			"errors":  errors,
 		},
 	})
+}
+
+// ExportTargetIPs هندلر Export تمام IPهای منحصر به فرد یک تارگت به صورت فایل txt
+func ExportTargetIPs(c *fiber.Ctx) error {
+	id := c.Params("id")
+	targetID := uint(0)
+	fmt.Sscanf(id, "%d", &targetID)
+
+	// دریافت اطلاعات تارگت برای root_domain
+	var target models.Target
+	if err := database.DB.First(&target, targetID).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Target not found",
+		})
+	}
+
+	// دریافت تمام assets این تارگت
+	var assets []models.Asset
+	if err := database.DB.Where("target_id = ?", targetID).Find(&assets).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Failed to fetch assets",
+			"error":   err.Error(),
+		})
+	}
+
+	// جمع‌آوری تمام IPهای منحصر به فرد
+	ipSet := make(map[string]bool)
+
+	for _, asset := range assets {
+		// IPهای DNSX
+		if asset.DnsxIP != "" && asset.DnsxIP != "[]" {
+			var dnsxIPs []string
+			if err := json.Unmarshal([]byte(asset.DnsxIP), &dnsxIPs); err == nil {
+				for _, ip := range dnsxIPs {
+					if ip != "" && strings.TrimSpace(ip) != "" {
+						ipSet[strings.TrimSpace(ip)] = true
+					}
+				}
+			}
+		}
+
+		// IPهای HTTPX
+		if asset.HostIP != "" && asset.HostIP != "[]" {
+			var httpxIPs []string
+			if err := json.Unmarshal([]byte(asset.HostIP), &httpxIPs); err == nil {
+				for _, ip := range httpxIPs {
+					if ip != "" && strings.TrimSpace(ip) != "" {
+						ipSet[strings.TrimSpace(ip)] = true
+					}
+				}
+			}
+		}
+	}
+
+	// تبدیل set به slice و مرتب‌سازی
+	ipList := make([]string, 0, len(ipSet))
+	for ip := range ipSet {
+		ipList = append(ipList, ip)
+	}
+	sort.Strings(ipList)
+
+	// ساخت محتوای فایل (هر IP در یک خط)
+	content := strings.Join(ipList, "\n")
+
+	// تنظیم هدر برای دانلود فایل txt
+	c.Set("Content-Type", "text/plain; charset=utf-8")
+	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s_ips.txt\"", strings.ReplaceAll(target.RootDomain, ".", "_")))
+
+	return c.SendString(content)
 }

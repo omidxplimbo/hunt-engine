@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { getTargetAssets, getTargetDetails, getTargetURLs } from '../api/targets';
-import { ArrowLeft, Globe, CheckCircle, XCircle, Search, Monitor, Loader2, Network, ArrowUp, ArrowDown, Link2, FileText, Database, FileCode } from 'lucide-react';
+import { getTargetAssets, getTargetDetails, getTargetURLs, exportTargetIPs } from '../api/targets';
+import { ArrowLeft, Globe, CheckCircle, XCircle, Search, Monitor, Loader2, Network, ArrowUp, ArrowDown, Link2, FileText, Database, FileCode, Shield, Download } from 'lucide-react';
 import clsx from 'clsx';
 
 const KNOWN_SOURCES = [
@@ -24,6 +24,7 @@ const TargetAssets = () => {
   const [filterLive, setFilterLive] = useState<boolean | undefined>(undefined);
   const [filterHttpx, setFilterHttpx] = useState<boolean | undefined>(undefined);
   const [filterDnsOnly, setFilterDnsOnly] = useState<boolean | undefined>(undefined);
+  const [filterNoCdn, setFilterNoCdn] = useState<boolean | undefined>(undefined);
   
   // URL Filters
   const [filterJsOnly, setFilterJsOnly] = useState<boolean>(false);
@@ -39,17 +40,20 @@ const TargetAssets = () => {
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
-  // اضافه شدن filterSources به وابستگی‌ها
+  // اضافه شدن filterSources و filterNoCdn به وابستگی‌ها
   useEffect(() => { 
       setPage(1); 
       setSearchTerm(""); 
-  }, [filterLive, filterHttpx, filterDnsOnly, filterJsOnly, filterSources, activeTab]);
+  }, [filterLive, filterHttpx, filterDnsOnly, filterNoCdn, filterJsOnly, filterSources, activeTab]);
 
   const toggleHttpx = () => {
       if (!filterHttpx) { setFilterDnsOnly(undefined); setFilterHttpx(true); } else { setFilterHttpx(undefined); }
   };
   const toggleDnsOnly = () => {
       if (!filterDnsOnly) { setFilterHttpx(undefined); setFilterDnsOnly(true); } else { setFilterDnsOnly(undefined); }
+  };
+  const toggleNoCdn = () => {
+      setFilterNoCdn(prev => !prev ? true : undefined);
   };
 
   // تابع جدید برای مدیریت انتخاب سورس‌ها
@@ -76,7 +80,7 @@ const TargetAssets = () => {
 
   const targetQuery = useQuery({ queryKey: ['target', targetId], queryFn: () => getTargetDetails(targetId), enabled: !!targetId });
   
-  const assetsQuery = useQuery({ queryKey: ['assets', targetId, page, filterLive, filterHttpx, filterDnsOnly, debouncedSearch, sortBy, sortOrder], queryFn: () => getTargetAssets(targetId, page, 50, { is_live: filterLive, search: debouncedSearch, has_httpx: filterHttpx, dns_only: filterDnsOnly }, sortBy, sortOrder), enabled: !!targetId && activeTab === 'assets' });
+  const assetsQuery = useQuery({ queryKey: ['assets', targetId, page, filterLive, filterHttpx, filterDnsOnly, filterNoCdn, debouncedSearch, sortBy, sortOrder], queryFn: () => getTargetAssets(targetId, page, 50, { is_live: filterLive, search: debouncedSearch, has_httpx: filterHttpx, dns_only: filterDnsOnly, no_cdn: filterNoCdn }, sortBy, sortOrder), enabled: !!targetId && activeTab === 'assets' });
   
   // آپدیت کوئری URLها با پارامترهای جدید
   const urlsQuery = useQuery({ 
@@ -112,13 +116,23 @@ const TargetAssets = () => {
         </div>
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex gap-2 items-center">
           <button onClick={() => setActiveTab('assets')} className={clsx("hack-btn flex-1 md:flex-none justify-center", activeTab === 'assets' ? "bg-hack-primary text-black" : "bg-transparent text-hack-dim border-hack-dim/30")}>
               <Database size={14} /> Assets
           </button>
           <button onClick={() => setActiveTab('urls')} className={clsx("hack-btn flex-1 md:flex-none justify-center", activeTab === 'urls' ? "bg-hack-primary text-black" : "bg-transparent text-hack-dim border-hack-dim/30")}>
               <Link2 size={14} /> Intel / URLs
           </button>
+          {activeTab === 'assets' && targetQuery.data && (
+            <button 
+              onClick={() => exportTargetIPs(targetId, targetQuery.data.root_domain)} 
+              className="hack-btn-ghost border border-hack-border flex items-center gap-2 px-3"
+              title="Download all unique IPs as TXT file"
+            >
+              <Download size={14} />
+              <span className="hidden md:inline">Export IPs</span>
+            </button>
+          )}
       </div>
 
       <div className="hack-box p-3 flex flex-col md:flex-row flex-wrap items-stretch md:items-center gap-4 justify-between flex-shrink-0">
@@ -145,6 +159,7 @@ const TargetAssets = () => {
                 <div className="flex gap-2 w-full md:w-auto">
                     <button onClick={toggleHttpx} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterHttpx ? "border-hack-primary text-hack-primary" : "border-hack-border")}><Monitor size={12} /> Web</button>
                     <button onClick={toggleDnsOnly} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterDnsOnly ? "border-hack-warning text-hack-warning" : "border-hack-border")}><Network size={12} /> DNS</button>
+                    <button onClick={toggleNoCdn} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterNoCdn ? "border-hack-danger text-hack-danger bg-hack-danger/5" : "border-hack-border")}><Shield size={12} /> No CDN</button>
                 </div>
             </div>
         )}
@@ -188,6 +203,7 @@ const TargetAssets = () => {
                     <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">DNS IP</th>
                     <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">HTTP IP</th>
                     <SortableHeader field="status_code" label="Stat" className="w-[80px]" />
+                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">CDN</th>
                     <SortableHeader field="title" label="Title" className="w-[250px]" />
                     <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">Stack</th>
                     <SortableHeader field="content_length" label="Size" className="w-[100px] text-right" />
@@ -239,6 +255,22 @@ const TargetAssets = () => {
                         <td className="px-6 py-3 align-top"><div className="flex flex-col gap-1">{dnsxIps.length > 0 ? dnsxIps.map((ip, idx) => <span key={idx} className="text-[10px] text-hack-secondary">{ip}</span>) : <span className="text-hack-dim">-</span>}</div></td>
                         <td className="px-6 py-3 align-top"><div className="flex flex-col gap-1">{httpxIps.length > 0 ? httpxIps.map((ip, idx) => <span key={idx} className="text-[10px] text-hack-dim">{ip}</span>) : <span className="text-hack-dim">-</span>}</div></td>
                         <td className="px-6 py-3 align-top">{asset.is_live ? (statusCode > 0 ? <span className={`px-1.5 py-0.5 text-[10px] font-bold border ${statusCode >= 200 && statusCode < 300 ? 'border-hack-primary text-hack-primary' : statusCode >= 300 && statusCode < 400 ? 'border-hack-warning text-hack-warning' : 'border-hack-danger text-hack-danger'}`}>{statusCode}</span> : <span className="text-hack-dim">-</span>) : <span className="text-[10px] text-hack-dim border border-hack-dim px-1">DEAD</span>}</td>
+                        <td className="px-6 py-3 align-top">
+                            {asset.cdn_name && asset.cdn_name.trim() !== '' ? (
+                                <div className="flex flex-col gap-1">
+                                    <div className="flex items-center gap-1">
+                                        <span className="px-1.5 py-0.5 text-[9px] font-bold border border-hack-warning/50 text-hack-warning bg-hack-warning/10 uppercase tracking-wider">CDN</span>
+                                        {/* نشانگر اینکه CDN از cdncheck آمده (نه httpx) */}
+                                        {(!asset.status_code || asset.status_code === 0) && asset.dnsx_ip && asset.dnsx_ip !== "[]" ? (
+                                            <span className="px-1 py-0.5 text-[8px] border border-hack-secondary/50 text-hack-secondary bg-hack-secondary/10 font-mono" title="Detected by cdncheck (before httpx)">CDN✓</span>
+                                        ) : null}
+                                    </div>
+                                    <span className="text-[10px] text-hack-warning/80 font-mono">{asset.cdn_name}</span>
+                                </div>
+                            ) : (
+                                <span className="text-hack-dim text-[10px]">-</span>
+                            )}
+                        </td>
                         <td className="px-6 py-3 align-top"><span className="text-xs text-hack-text block line-clamp-2 opacity-80 min-w-[200px]" title={asset.title}>{asset.title || '-'}</span></td>
                         <td className="px-6 py-3 align-top"><div className="flex flex-wrap gap-1 max-h-[60px] overflow-y-auto min-w-[150px]">{asset.web_server && <span className="px-1 py-0.5 bg-white/5 text-[9px] border border-white/10 text-hack-text whitespace-nowrap">{asset.web_server}</span>}{techs.map((tech, i) => <span key={i} className="px-1 py-0.5 bg-hack-primary/5 text-[9px] border border-hack-primary/20 text-hack-primary whitespace-nowrap">{tech}</span>)}</div></td>
                         <td className="px-6 py-3 align-top text-right text-xs text-hack-dim">{asset.content_length ? `${(asset.content_length / 1024).toFixed(1)} KB` : '-'}</td>

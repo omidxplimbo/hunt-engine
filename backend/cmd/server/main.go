@@ -80,6 +80,7 @@ func main() {
 	// Asset Routes
 	api.Get("/targets/:id/assets", handlers.GetTargetAssets)
 	api.Get("/targets/:id/urls", handlers.GetTargetURLs) // 👈 این خط جدید است
+	api.Get("/targets/:id/ips", handlers.ExportTargetIPs) // Export IPs به صورت txt
 
 	// 👇👇👇 روت‌های مدیریت کاربران (User Management)
 	api.Get("/users", handlers.GetUsers)
