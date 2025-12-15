@@ -1,0 +1,44 @@
+// BIND9 DNS Server Configuration - Options
+
+options {
+    directory "/var/cache/bind";
+    
+    // Listen on all interfaces
+    listen-on port 53 { any; };
+    listen-on-v6 port 53 { any; };
+    
+    // Allow queries from anywhere (you can restrict this if needed)
+    allow-query { any; };
+    allow-recursion { any; };
+    allow-transfer { none; };
+    
+    // Forwarders (use public DNS servers as fallback)
+    forwarders {
+        8.8.8.8;
+        8.8.4.4;
+        1.1.1.1;
+        1.0.0.1;
+    };
+    forward only;
+    
+    // Security
+    dnssec-validation auto;
+    auth-nxdomain no;
+    
+    // Logging
+    version "DNS Server";
+    
+    // Performance
+    max-cache-size 256M;
+};
+
+// Logging configuration
+logging {
+    channel default_log {
+        file "/var/log/named/named.log" versions 3 size 5m;
+        severity dynamic;
+        print-time yes;
+    };
+    category default { default_log; };
+    category queries { default_log; };
+};

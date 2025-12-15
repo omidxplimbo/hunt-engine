@@ -1062,10 +1062,14 @@ func runCdnCheckForUnprobedAssets(targetID uint, dnsxResults map[string][]string
 		if assetIDs, exists := ipToAssets[ip]; exists {
 			for _, assetID := range assetIDs {
 				// اگر این asset قبلاً CDN نداشته و این IP پشت CDN است، ذخیره می‌کنیم
+				// فقط اگر cdn_name موجود باشد آن را ذخیره می‌کنیم
 				if cdnInfo.IsCDN && cdnInfo.CDNName != "" {
 					if _, alreadySet := assetCDNMap[assetID]; !alreadySet {
 						assetCDNMap[assetID] = cdnInfo.CDNName
 					}
+				} else if cdnInfo.IsCDN && cdnInfo.CDNName == "" {
+					// CDN detected اما نام مشخص نیست - لاگ برای دیباگ
+					log.Printf("  ⚠️ IP %s: CDN detected but cdn_name is empty\n", ip)
 				}
 			}
 		}
@@ -1113,7 +1117,6 @@ func runCdnCheck(targetID uint, ips []string) map[string]CdnCheckResult {
 	}
 
 	const inputFile = "/tmp/cdncheck_input.txt"
-	const outputFile = "/tmp/cdncheck_output.json"
 
 	// نوشتن IPها در فایل
 	if err := writeSliceToFile(inputFile, ips); err != nil {
@@ -1121,12 +1124,12 @@ func runCdnCheck(targetID uint, ips []string) map[string]CdnCheckResult {
 		return make(map[string]CdnCheckResult)
 	}
 
-	// اجرای cdncheck
-	_, err := runCommandWithKillSwitch(targetID, "cdncheck",
-		"-l", inputFile,
-		"-json",
-		"-o", outputFile,
-		"-silent",
+	// اجرای cdncheck با فلگ‌های صحیح: -i برای input file و -j برای JSON output به stdout
+	log.Printf("🔍 Running cdncheck on %d IPs...\n", len(ips))
+	output, err := runCommandWithKillSwitch(targetID, "cdncheck",
+		"-i", inputFile,
+		"-j",
+		"-nc", // no-color برای جلوگیری از ANSI codes در خروجی
 	)
 	if err != nil {
 		if err.Error() != "process killed by user request" {
@@ -1134,47 +1137,66 @@ func runCdnCheck(targetID uint, ips []string) map[string]CdnCheckResult {
 		}
 		return make(map[string]CdnCheckResult)
 	}
-
-	// خواندن نتایج
-	results := make(map[string]CdnCheckResult)
-	file, err := os.Open(outputFile)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			log.Printf("❌ Error opening cdncheck output: %v\n", err)
-		}
-		return results
+	
+	if len(output) == 0 {
+		log.Printf("⚠️ Cdncheck returned empty output.\n")
+		return make(map[string]CdnCheckResult)
 	}
-	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		var rawResult map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &rawResult); err == nil {
-			ip, ok := rawResult["ip"].(string)
-			if !ok || ip == "" {
-				continue
-			}
-
-			result := CdnCheckResult{IP: ip}
-
-			// بررسی فیلد cdn (ممکن است boolean یا string باشد)
-			if cdnVal, exists := rawResult["cdn"]; exists {
-				switch v := cdnVal.(type) {
-				case bool:
-					result.IsCDN = v
-				case string:
-					result.IsCDN = (v == "true" || v == "1" || v == "yes")
-				}
-			}
-
-			// بررسی فیلد cdn_name
-			if cdnName, ok := rawResult["cdn_name"].(string); ok {
-				result.CDNName = cdnName
-			}
-
-			results[result.IP] = result
+	// خواندن نتایج از stdout
+	results := make(map[string]CdnCheckResult)
+	lines := strings.Split(string(output), "\n")
+	parsedCount := 0
+	
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
 		}
+		
+		// فقط خطوطی که با { شروع می‌شوند JSON هستند (خطوط info/error معمولاً این فرمت را ندارند)
+		if !strings.HasPrefix(line, "{") {
+			continue
+		}
+
+		var rawResult map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &rawResult); err != nil {
+			// خطا در parse کردن JSON - این خط احتمالاً info message است
+			continue
+		}
+
+		ip, ok := rawResult["ip"].(string)
+		if !ok || ip == "" {
+			continue
+		}
+
+		result := CdnCheckResult{IP: ip}
+
+		// بررسی فیلد cdn (boolean است در خروجی cdncheck)
+		if cdnVal, exists := rawResult["cdn"]; exists {
+			switch v := cdnVal.(type) {
+			case bool:
+				result.IsCDN = v
+			case string:
+				result.IsCDN = (v == "true" || v == "1" || v == "yes")
+			}
+		}
+
+		// بررسی فیلد cdn_name
+		if cdnName, ok := rawResult["cdn_name"].(string); ok && cdnName != "" {
+			result.CDNName = cdnName
+		}
+
+		// ذخیره همه نتایج (چه CDN باشد چه نباشد) تا بتوانیم تشخیص دهیم
+		results[result.IP] = result
+		if result.IsCDN {
+			parsedCount++
+			log.Printf("  ✓ IP %s: CDN detected - %s\n", result.IP, result.CDNName)
+		}
+	}
+
+	if parsedCount > 0 {
+		log.Printf("✅ Parsed %d CDN results from cdncheck output.\n", parsedCount)
 	}
 
 	return results

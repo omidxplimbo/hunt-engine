@@ -1,21 +1,63 @@
-# Go related
-/backend/bin/
-/backend/vendor/
-/backend/go.sum
-**/*.exe
-**/*.test
+# Environment variables
+.env
+.env.local
+.env.*.local
 
-# Node/Frontend related
-/frontend/node_modules/
-/frontend/build/
-/frontend/dist/
-/frontend/.env.local
+# SSL Certificates
+certbot/
+*.pem
+*.key
+*.crt
 
-# Database & Storage related
+# DNS Zones and Logs
+dns/zones/
+dns/logs/
+
+# Docker volumes
 postgres_data/
 redis_data/
-*.db
-*.log
+nginx_logs/
+dns_cache/
 
-# OS related
+# Build artifacts
+backend/bin/
+frontend/dist/
+frontend/build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Node modules (for local development)
+node_modules/
+
+# Go binaries
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*.test
+coverage/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3

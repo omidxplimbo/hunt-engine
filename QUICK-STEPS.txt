@@ -1,0 +1,89 @@
+═══════════════════════════════════════════════════════════
+  راهنمای سریع - تنظیم DNS و دامنه (مرحله به مرحله)
+═══════════════════════════════════════════════════════════
+
+مرحله 1: تنظیم .env
+────────────────────
+cd /root/hunt-engine
+cp .env.example .env
+nano .env
+
+در فایل .env این مقادیر را وارد کنید:
+DOMAIN_NAME=yourdomain.com
+SSL_EMAIL=admin@yourdomain.com
+SERVER_IP=YOUR_SERVER_IP
+
+Ctrl+X, Y, Enter برای ذخیره
+
+
+مرحله 2: باز کردن پورت‌ها
+─────────────────────────
+sudo ufw allow 53/udp
+sudo ufw allow 53/tcp
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw reload
+
+
+مرحله 3: Build و راه‌اندازی DNS
+─────────────────────────────────
+cd /root/hunt-engine
+docker compose build dns
+docker compose up -d dns
+docker compose logs dns
+
+⚠️ اگر خطای port 53 گرفتید، نگران نباشید - تنظیمات بهینه شده است.
+
+
+مرحله 4: تنظیم Name Servers در Registrar
+─────────────────────────────────────────
+در پنل Registrar دامنه خود:
+- Name Server 1: ns1.yourdomain.com
+- Name Server 2: ns2.yourdomain.com
+
+(اگر گزینه Glue Records بود، ns1 و ns2 را به IP سرور اشاره دهید)
+
+
+مرحله 5: منتظر DNS Propagation بمانید
+───────────────────────────────────────
+(15 دقیقه تا 2 ساعت - گاهی تا 48 ساعت)
+
+بررسی کنید:
+dig @8.8.8.8 yourdomain.com
+
+باید IP سرور شما را ببینید.
+
+
+مرحله 6: Build Frontend
+────────────────────────
+docker compose build frontend
+
+
+مرحله 7: راه‌اندازی همه سرویس‌ها
+──────────────────────────────────
+docker compose up -d
+docker compose ps
+
+
+مرحله 8: دریافت SSL
+────────────────────
+./init-ssl.sh
+
+
+مرحله 9: تست
+─────────────
+در مرورگر: https://yourdomain.com
+
+باید سایت شما باز شود!
+
+
+مرحله 10: تمدید خودکار SSL (اختیاری)
+──────────────────────────────────────
+crontab -e
+
+این خط را اضافه کنید:
+0 0 * * * cd /root/hunt-engine && ./renew-ssl.sh
+
+═══════════════════════════════════════════════════════════
+برای اطلاعات کامل، فایل SETUP-GUIDE.md را ببینید
+═══════════════════════════════════════════════════════════

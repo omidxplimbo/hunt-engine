@@ -44,6 +44,7 @@ The platform integrates industry-standard security tools within its isolated env
 * **Permutation/Mutation:** `alterx` (Optional per target)
 * **Validation/Resolution:** `dnsx` (w/ fixed resolvers)
 * **Probing:** `httpx` (Rich JSON output, WAF/CDN detection)
+* **CDN Detection:** `cdncheck` (Early CDN detection from DNS results, separate from httpx)
 * **Crawling & Content Discovery:** `gau`, `waybackurls`, `katana` (Active & Passive), `waymore` (Deep Archival Crawl)
 * **Deep Scan:** `amass` (Integrated via Docker)
 * **Future Integration:** `ffuf`, `nuclei` (Ready in Dockerfile)
@@ -95,6 +96,14 @@ We are following a multi-phase development roadmap.
 * [x] **Module Sorting:** Automatic sorting of scan modules (DISCOVERY → PROBING → CRAWLING) to ensure correct execution order.
 * [x] **Data Integrity:** Comprehensive export includes all subdomains, URLs, and metadata for complete data portability.
 
+### ✅ Phase 4.6: CDN Detection & Infrastructure Setup (COMPLETED)
+**Goal:** Enhanced CDN detection and production-ready deployment infrastructure.
+* [x] **Early CDN Detection:** Integrated `cdncheck` for CDN detection from DNS results before httpx probing.
+* [x] **DNS Server:** Self-hosted BIND9 DNS server for complete domain control.
+* [x] **SSL/TLS:** Automated Let's Encrypt certificate management with auto-renewal.
+* [x] **Reverse Proxy:** Nginx with HTTPS enforcement and security headers.
+* [x] **Domain Management:** Dynamic domain configuration via environment variables.
+
 ---
 
 ## 🚀 Quick Start
@@ -120,13 +129,57 @@ cp .env.example .env
 
 3. **Start the platform:**
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 4. **Access the dashboard:**
-* Frontend: `http://localhost:3000`
+* Frontend: `http://localhost:4000`
 * Backend API: `http://localhost:8080/api`
 * Default credentials: `admin` / `admin123` (⚠️ Change in production!)
+
+## 🌐 Production Deployment with Domain & SSL
+
+For production deployment with your own domain and SSL certificate:
+
+### Quick Setup
+
+1. **Configure domain:**
+```bash
+cp .env.example .env
+nano .env
+```
+
+Add your domain configuration:
+```env
+DOMAIN_NAME=yourdomain.com
+SSL_EMAIL=admin@yourdomain.com
+SERVER_IP=YOUR_SERVER_PUBLIC_IP
+```
+
+2. **Follow the complete setup guide:**
+```bash
+cat SETUP-GUIDE.md
+```
+
+Or use the quick reference:
+```bash
+cat QUICK-STEPS.txt
+```
+
+### Features
+
+* **Self-Hosted DNS:** BIND9 DNS server for complete domain control
+* **SSL/TLS:** Automated Let's Encrypt certificates with auto-renewal
+* **HTTPS Only:** Automatic HTTP to HTTPS redirect
+* **Security:** IP blocking, security headers, rate limiting
+* **Dynamic Configuration:** Easy domain changes via environment variables
+
+### Documentation
+
+* **SETUP-GUIDE.md** - Complete step-by-step setup guide
+* **DNS-SETUP.md** - DNS server configuration details
+* **DOMAIN-SETUP.md** - Domain and SSL setup (alternative method)
+* **QUICK-STEPS.txt** - Quick reference checklist
 
 ## 📖 Usage Guide
 
@@ -163,7 +216,9 @@ docker-compose up -d
 * **Live Only:** Show only active subdomains
 * **New Assets:** Recently discovered subdomains
 * **DNS Only:** Subdomains without HTTP response
+* **No CDN:** Filter assets without CDN protection
 * **Search:** Filter by domain name
+* **CDN Detection:** Visual indicator for CDN-detected assets (via cdncheck)
 
 #### URL Management
 * Switch to **URLs** tab to view crawled endpoints
@@ -230,6 +285,26 @@ This order is enforced automatically, even if modules are specified in a differe
 ### Import Options
 * **Skip Existing:** If enabled, targets with matching `root_domain` are skipped
 * **Duplicate Handling:** Assets and URLs are automatically deduplicated during import
+
+## 🏗️ Infrastructure Components
+
+### DNS Server (BIND9)
+* Self-hosted DNS server for complete domain control
+* Automatic zone file generation
+* Name Server configuration (ns1/ns2.yourdomain.com)
+* Wildcard subdomain support
+
+### Reverse Proxy (Nginx)
+* SSL/TLS termination with Let's Encrypt
+* HTTP to HTTPS redirect
+* Security headers (HSTS, XSS Protection, etc.)
+* Rate limiting
+* IP-based access control (domain-only access)
+
+### SSL Management
+* Automated certificate generation with Let's Encrypt
+* Auto-renewal via cron job
+* Certificate monitoring and alerts
 
 ## 🔜 Next Steps (Phase 5)
 

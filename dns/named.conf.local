@@ -1,0 +1,5 @@
+// BIND9 DNS Server - Local Configuration
+// This file will be generated automatically based on DOMAIN_NAME
+
+// Include zone files
+include "/etc/bind/named.conf.zones";

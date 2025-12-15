@@ -260,8 +260,8 @@ const TargetAssets = () => {
                                 <div className="flex flex-col gap-1">
                                     <div className="flex items-center gap-1">
                                         <span className="px-1.5 py-0.5 text-[9px] font-bold border border-hack-warning/50 text-hack-warning bg-hack-warning/10 uppercase tracking-wider">CDN</span>
-                                        {/* نشانگر اینکه CDN از cdncheck آمده (نه httpx) */}
-                                        {(!asset.status_code || asset.status_code === 0) && asset.dnsx_ip && asset.dnsx_ip !== "[]" ? (
+                                        {/* نشانگر اینکه CDN از cdncheck آمده (قبل از httpx) - اگر dnsx_ip داریم ولی httpx نداشته‌ایم */}
+                                        {(!asset.status_code || asset.status_code === 0) && dnsxIps.length > 0 && httpxIps.length === 0 ? (
                                             <span className="px-1 py-0.5 text-[8px] border border-hack-secondary/50 text-hack-secondary bg-hack-secondary/10 font-mono" title="Detected by cdncheck (before httpx)">CDN✓</span>
                                         ) : null}
                                     </div>
