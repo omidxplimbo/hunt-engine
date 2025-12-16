@@ -1241,7 +1241,7 @@ func runCdnCheck(targetID uint, ips []string) map[string]CdnCheckResult {
 		}
 
 		// merge if we already saw this ip with another detection type
-		result, _ := results[ip]
+		result := results[ip]
 		result.IP = ip
 
 		// CDN
