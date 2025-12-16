@@ -44,7 +44,7 @@ The platform integrates industry-standard security tools within its isolated env
 * **Permutation/Mutation:** `alterx` (Optional per target)
 * **Validation/Resolution:** `dnsx` (w/ fixed resolvers)
 * **Probing:** `httpx` (Rich JSON output, WAF/CDN detection)
-* **CDN Detection:** `cdncheck` (Early CDN detection from DNS results, separate from httpx)
+* **Edge Tech Detection:** `cdncheck` (Early detection from DNS results: **CDN / WAF / CLOUD**, separate from httpx)
 * **Crawling & Content Discovery:** `gau`, `waybackurls`, `katana` (Active & Passive), `waymore` (Deep Archival Crawl)
 * **Deep Scan:** `amass` (Integrated via Docker)
 * **Future Integration:** `ffuf`, `nuclei` (Ready in Dockerfile)
@@ -96,9 +96,9 @@ We are following a multi-phase development roadmap.
 * [x] **Module Sorting:** Automatic sorting of scan modules (DISCOVERY → PROBING → CRAWLING) to ensure correct execution order.
 * [x] **Data Integrity:** Comprehensive export includes all subdomains, URLs, and metadata for complete data portability.
 
-### ✅ Phase 4.6: CDN Detection & Infrastructure Setup (COMPLETED)
-**Goal:** Enhanced CDN detection and production-ready deployment infrastructure.
-* [x] **Early CDN Detection:** Integrated `cdncheck` for CDN detection from DNS results before httpx probing.
+### ✅ Phase 4.6: CDN/WAF/CLOUD Detection & Infrastructure Setup (COMPLETED)
+**Goal:** Enhanced edge technology detection and production-ready deployment infrastructure.
+* [x] **Early Edge Tech Detection:** Integrated `cdncheck` for **CDN/WAF/CLOUD** detection from DNS results (before httpx probing).
 * [x] **DNS Server:** Self-hosted BIND9 DNS server for complete domain control.
 * [x] **SSL/TLS:** Automated Let's Encrypt certificate management with auto-renewal.
 * [x] **Reverse Proxy:** Nginx with HTTPS enforcement and security headers.
@@ -262,9 +262,12 @@ cat QUICK-STEPS.txt
 * **Live Only:** Show only active subdomains
 * **New Assets:** Recently discovered subdomains
 * **DNS Only:** Subdomains without HTTP response
-* **No CDN:** Filter assets without CDN protection
+* **No CDN:** Filter assets without CDN protection (both `httpx` CDN + `cdncheck` CDN)
+* **CDN:** Show only assets with CDN detected (httpx or cdncheck)
+* **WAF:** Show only assets with WAF detected (cdncheck)
+* **CLOUD:** Show only assets with CLOUD provider detected (cdncheck)
 * **Search:** Filter by domain name
-* **CDN Detection:** Visual indicator for CDN-detected assets (via cdncheck)
+* **CDN/WAF/CLOUD Badges:** Visual indicators per asset (separate fields)
 
 #### URL Management
 * Switch to **URLs** tab to view crawled endpoints
@@ -303,6 +306,15 @@ This order is enforced automatically, even if modules are specified in a differe
 ### Assets & URLs
 * `GET /api/targets/:id/assets` - Get target assets (with filters)
 * `GET /api/targets/:id/urls` - Get target URLs (with filters)
+* `GET /api/targets/:id/ips` - Export unique target IPs as TXT (**non-CDN only**)
+
+#### Assets Filters (Query Params)
+You can combine these query params on `GET /api/targets/:id/assets`:
+
+* `no_cdn=true` - only assets without CDN (httpx + cdncheck)
+* `has_cdn=true` - only assets with CDN detected (httpx or cdncheck)
+* `has_waf=true` - only assets with WAF detected (cdncheck)
+* `has_cloud=true` - only assets with CLOUD detected (cdncheck)
 
 ## 📦 Export/Import Format
 

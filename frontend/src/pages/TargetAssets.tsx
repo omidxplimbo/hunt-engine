@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { getTargetAssets, getTargetDetails, getTargetURLs, exportTargetIPs } from '../api/targets';
-import { ArrowLeft, Globe, CheckCircle, XCircle, Search, Monitor, Loader2, Network, ArrowUp, ArrowDown, Link2, FileText, Database, FileCode, Shield, Download } from 'lucide-react';
+import { ArrowLeft, Globe, CheckCircle, XCircle, Search, Monitor, Loader2, Network, ArrowUp, ArrowDown, Link2, FileText, Database, FileCode, Shield, Download, Cloud } from 'lucide-react';
 import clsx from 'clsx';
 
 const KNOWN_SOURCES = [
@@ -25,6 +25,9 @@ const TargetAssets = () => {
   const [filterHttpx, setFilterHttpx] = useState<boolean | undefined>(undefined);
   const [filterDnsOnly, setFilterDnsOnly] = useState<boolean | undefined>(undefined);
   const [filterNoCdn, setFilterNoCdn] = useState<boolean | undefined>(undefined);
+  const [filterHasCdn, setFilterHasCdn] = useState<boolean | undefined>(undefined);
+  const [filterHasWaf, setFilterHasWaf] = useState<boolean | undefined>(undefined);
+  const [filterHasCloud, setFilterHasCloud] = useState<boolean | undefined>(undefined);
   
   // URL Filters
   const [filterJsOnly, setFilterJsOnly] = useState<boolean>(false);
@@ -44,7 +47,7 @@ const TargetAssets = () => {
   useEffect(() => { 
       setPage(1); 
       setSearchTerm(""); 
-  }, [filterLive, filterHttpx, filterDnsOnly, filterNoCdn, filterJsOnly, filterSources, activeTab]);
+  }, [filterLive, filterHttpx, filterDnsOnly, filterNoCdn, filterHasCdn, filterHasWaf, filterHasCloud, filterJsOnly, filterSources, activeTab]);
 
   const toggleHttpx = () => {
       if (!filterHttpx) { setFilterDnsOnly(undefined); setFilterHttpx(true); } else { setFilterHttpx(undefined); }
@@ -54,6 +57,15 @@ const TargetAssets = () => {
   };
   const toggleNoCdn = () => {
       setFilterNoCdn(prev => !prev ? true : undefined);
+  };
+  const toggleHasCdn = () => {
+      setFilterHasCdn(prev => !prev ? true : undefined);
+  };
+  const toggleHasWaf = () => {
+      setFilterHasWaf(prev => !prev ? true : undefined);
+  };
+  const toggleHasCloud = () => {
+      setFilterHasCloud(prev => !prev ? true : undefined);
   };
 
   // تابع جدید برای مدیریت انتخاب سورس‌ها
@@ -80,7 +92,7 @@ const TargetAssets = () => {
 
   const targetQuery = useQuery({ queryKey: ['target', targetId], queryFn: () => getTargetDetails(targetId), enabled: !!targetId });
   
-  const assetsQuery = useQuery({ queryKey: ['assets', targetId, page, filterLive, filterHttpx, filterDnsOnly, filterNoCdn, debouncedSearch, sortBy, sortOrder], queryFn: () => getTargetAssets(targetId, page, 50, { is_live: filterLive, search: debouncedSearch, has_httpx: filterHttpx, dns_only: filterDnsOnly, no_cdn: filterNoCdn }, sortBy, sortOrder), enabled: !!targetId && activeTab === 'assets' });
+  const assetsQuery = useQuery({ queryKey: ['assets', targetId, page, filterLive, filterHttpx, filterDnsOnly, filterNoCdn, filterHasCdn, filterHasWaf, filterHasCloud, debouncedSearch, sortBy, sortOrder], queryFn: () => getTargetAssets(targetId, page, 50, { is_live: filterLive, search: debouncedSearch, has_httpx: filterHttpx, dns_only: filterDnsOnly, no_cdn: filterNoCdn, has_cdn: filterHasCdn, has_waf: filterHasWaf, has_cloud: filterHasCloud }, sortBy, sortOrder), enabled: !!targetId && activeTab === 'assets' });
   
   // آپدیت کوئری URLها با پارامترهای جدید
   const urlsQuery = useQuery({ 
@@ -160,6 +172,9 @@ const TargetAssets = () => {
                     <button onClick={toggleHttpx} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterHttpx ? "border-hack-primary text-hack-primary" : "border-hack-border")}><Monitor size={12} /> Web</button>
                     <button onClick={toggleDnsOnly} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterDnsOnly ? "border-hack-warning text-hack-warning" : "border-hack-border")}><Network size={12} /> DNS</button>
                     <button onClick={toggleNoCdn} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterNoCdn ? "border-hack-danger text-hack-danger bg-hack-danger/5" : "border-hack-border")}><Shield size={12} /> No CDN</button>
+                    <button onClick={toggleHasCdn} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterHasCdn ? "border-hack-warning text-hack-warning bg-hack-warning/5" : "border-hack-border")}><Shield size={12} /> CDN</button>
+                    <button onClick={toggleHasWaf} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterHasWaf ? "border-hack-secondary text-hack-secondary bg-hack-secondary/5" : "border-hack-border")}><Shield size={12} /> WAF</button>
+                    <button onClick={toggleHasCloud} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterHasCloud ? "border-hack-primary text-hack-primary bg-hack-primary/10" : "border-hack-border")}><Cloud size={12} /> CLOUD</button>
                 </div>
             </div>
         )}
@@ -280,9 +295,37 @@ const TargetAssets = () => {
                                         <span className="px-1.5 py-0.5 text-[9px] font-bold border border-hack-secondary/50 text-hack-secondary bg-hack-secondary/10 uppercase tracking-wider">CDN✓</span>
                                     </div>
                                 ) : null}
+
+                                {/* نمایش WAF از cdncheck */}
+                                {asset.wafcheck && asset.wafcheck_name && asset.wafcheck_name.trim() !== '' ? (
+                                    <div className="flex flex-col gap-1">
+                                        <div className="flex items-center gap-1">
+                                            <span className="px-1.5 py-0.5 text-[9px] font-bold border border-hack-danger/50 text-hack-danger bg-hack-danger/10 uppercase tracking-wider">WAF✓</span>
+                                        </div>
+                                        <span className="text-[10px] text-hack-danger/80 font-mono">{asset.wafcheck_name}</span>
+                                    </div>
+                                ) : asset.wafcheck ? (
+                                    <div className="flex items-center gap-1">
+                                        <span className="px-1.5 py-0.5 text-[9px] font-bold border border-hack-danger/50 text-hack-danger bg-hack-danger/10 uppercase tracking-wider">WAF✓</span>
+                                    </div>
+                                ) : null}
+
+                                {/* نمایش CLOUD از cdncheck */}
+                                {asset.cloudcheck && asset.cloudcheck_name && asset.cloudcheck_name.trim() !== '' ? (
+                                    <div className="flex flex-col gap-1">
+                                        <div className="flex items-center gap-1">
+                                            <span className="px-1.5 py-0.5 text-[9px] font-bold border border-hack-primary/50 text-hack-primary bg-hack-primary/10 uppercase tracking-wider">CLOUD✓</span>
+                                        </div>
+                                        <span className="text-[10px] text-hack-primary/80 font-mono">{asset.cloudcheck_name}</span>
+                                    </div>
+                                ) : asset.cloudcheck ? (
+                                    <div className="flex items-center gap-1">
+                                        <span className="px-1.5 py-0.5 text-[9px] font-bold border border-hack-primary/50 text-hack-primary bg-hack-primary/10 uppercase tracking-wider">CLOUD✓</span>
+                                    </div>
+                                ) : null}
                                 
-                                {/* اگر هیچ CDN وجود نداشت */}
-                                {(!asset.cdn_name || asset.cdn_name.trim() === '') && !asset.cdncheck ? (
+                                {/* اگر هیچ چیزی وجود نداشت */}
+                                {(!asset.cdn_name || asset.cdn_name.trim() === '') && !asset.cdncheck && !asset.wafcheck && !asset.cloudcheck ? (
                                     <span className="text-hack-dim text-[10px]">-</span>
                                 ) : null}
                             </div>

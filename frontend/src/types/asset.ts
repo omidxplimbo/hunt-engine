@@ -17,6 +17,10 @@ export interface Asset {
   cdn_name?: string;
   cdncheck?: boolean;
   cdncheck_name?: string;
+  wafcheck?: boolean;
+  wafcheck_name?: string;
+  cloudcheck?: boolean;
+  cloudcheck_name?: string;
   technologies?: string[] | string; // 👈 اصلاح تایپ برای هندل کردن آرایه یا رشته
   response_time_ms?: number;
   
@@ -38,4 +42,7 @@ export interface AssetFilters {
   has_httpx?: boolean;
   dns_only?: boolean;
   no_cdn?: boolean; // 👈 فیلتر برای نمایش فقط ساب‌دامین‌های بدون CDN
+  has_cdn?: boolean; // 👈 فقط آیتم‌هایی که CDN دارند
+  has_waf?: boolean; // 👈 فقط آیتم‌هایی که WAF دارند
+  has_cloud?: boolean; // 👈 فقط آیتم‌هایی که CLOUD دارند
 }

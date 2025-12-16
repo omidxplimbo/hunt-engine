@@ -41,6 +41,10 @@ type AssetResponse struct {
 	CDNName       string      `json:"cdn_name"`
 	Cdncheck      bool        `json:"cdncheck"`
 	CdncheckName  string      `json:"cdncheck_name"`
+	Wafcheck      bool        `json:"wafcheck"`
+	WafcheckName  string      `json:"wafcheck_name"`
+	Cloudcheck    bool        `json:"cloudcheck"`
+	CloudcheckName string     `json:"cloudcheck_name"`
 	Technologies  interface{} `json:"technologies"`
 	ResponseTime  int64       `json:"response_time_ms"`
 	RawHttpx      interface{} `json:"raw_httpx,omitempty"`

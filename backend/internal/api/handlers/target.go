@@ -295,6 +295,9 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	hasHttpx := c.Query("has_httpx")
 	dnsOnly := c.Query("dns_only")
 	noCdn := c.Query("no_cdn")
+	hasCdn := c.Query("has_cdn")
+	hasWaf := c.Query("has_waf")
+	hasCloud := c.Query("has_cloud")
 
 	// Sorting Params
 	sortBy := c.Query("sort_by", "value")
@@ -311,7 +314,7 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	}
 	orderClause := fmt.Sprintf("%s %s", sortBy, order)
 
-	filtersKey := fmt.Sprintf("l:%s|n:%s|s:%s|h:%s|d:%s|c:%s|sb:%s|o:%s", isLive, isNew, search, hasHttpx, dnsOnly, noCdn, sortBy, order)
+	filtersKey := fmt.Sprintf("l:%s|n:%s|s:%s|h:%s|d:%s|no_cdn:%s|cdn:%s|waf:%s|cloud:%s|sb:%s|o:%s", isLive, isNew, search, hasHttpx, dnsOnly, noCdn, hasCdn, hasWaf, hasCloud, sortBy, order)
 	cacheKey := cache.GenerateAssetKey(targetID, offset, limit, filtersKey)
 
 	var cachedResponse fiber.Map
@@ -338,6 +341,16 @@ func GetTargetAssets(c *fiber.Ctx) error {
 
 	if dnsOnly == "true" {
 		db = db.Where("jsonb_array_length(dnsx_ip) > 0 AND jsonb_array_length(host_ip) = 0")
+	}
+
+	if hasCdn == "true" {
+		db = db.Where("( (cdn_name IS NOT NULL AND cdn_name != '' AND cdn_name != 'null') OR cdncheck = true OR (cdncheck_name IS NOT NULL AND cdncheck_name != '' AND cdncheck_name != 'null') )")
+	}
+	if hasWaf == "true" {
+		db = db.Where("( wafcheck = true OR (wafcheck_name IS NOT NULL AND wafcheck_name != '' AND wafcheck_name != 'null') )")
+	}
+	if hasCloud == "true" {
+		db = db.Where("( cloudcheck = true OR (cloudcheck_name IS NOT NULL AND cloudcheck_name != '' AND cloudcheck_name != 'null') )")
 	}
 
 	if noCdn == "true" {
@@ -582,6 +595,10 @@ func toAssetResponse(a models.Asset) dto.AssetResponse {
 		CDNName:       a.CDNName,
 		Cdncheck:      a.Cdncheck,
 		CdncheckName:  a.CdncheckName,
+		Wafcheck:      a.Wafcheck,
+		WafcheckName:  a.WafcheckName,
+		Cloudcheck:    a.Cloudcheck,
+		CloudcheckName: a.CloudcheckName,
 		Technologies:  techs,
 		ResponseTime:  a.ResponseTimeMs,
 		RawHttpx:      rawHttpx,

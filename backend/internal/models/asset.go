@@ -66,6 +66,10 @@ type Asset struct {
 	CDNName        string `gorm:"size:100;index" json:"cdn_name"`
 	Cdncheck       bool   `gorm:"default:false;index" json:"cdncheck"`
 	CdncheckName   string `gorm:"size:100" json:"cdncheck_name"`
+	Wafcheck       bool   `gorm:"default:false;index" json:"wafcheck"`
+	WafcheckName   string `gorm:"size:100" json:"wafcheck_name"`
+	Cloudcheck     bool   `gorm:"default:false;index" json:"cloudcheck"`
+	CloudcheckName string `gorm:"size:100" json:"cloudcheck_name"`
 	Technologies   string `gorm:"type:jsonb;default:'[]'" json:"technologies"`
 	BodyHash       string `gorm:"size:64" json:"body_hash"`
 	HeaderHash     string `gorm:"size:64" json:"header_hash"`

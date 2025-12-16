@@ -75,6 +75,9 @@ export const getTargetAssets = async (
   if (filters?.has_httpx !== undefined) params.has_httpx = filters.has_httpx;
   if (filters?.dns_only !== undefined) params.dns_only = filters.dns_only;
   if (filters?.no_cdn !== undefined) params.no_cdn = filters.no_cdn;
+  if (filters?.has_cdn !== undefined) params.has_cdn = filters.has_cdn;
+  if (filters?.has_waf !== undefined) params.has_waf = filters.has_waf;
+  if (filters?.has_cloud !== undefined) params.has_cloud = filters.has_cloud;
 
   const response = await apiClient.get<AssetResponse>(`/targets/${targetId}/assets`, {
     params,

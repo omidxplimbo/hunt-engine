@@ -999,9 +999,13 @@ func writeSliceToFile(filename string, data []string) error {
 
 // CdnCheckResult ساختار نتیجه cdncheck
 type CdnCheckResult struct {
-	IP      string `json:"ip"`
-	IsCDN   bool   `json:"cdn"`
-	CDNName string `json:"cdn_name"`
+	IP        string `json:"ip"`
+	IsCDN     bool   `json:"cdn"`
+	CDNName   string `json:"cdn_name"`
+	IsWAF     bool   `json:"waf"`
+	WAFName   string `json:"waf_name"`
+	IsCloud   bool   `json:"cloud"`
+	CloudName string `json:"cloud_name"`
 }
 
 // runCdnCheckForLiveAssets چک کردن CDN برای همه IPهای لایو که dnsx resolve کرده
@@ -1055,8 +1059,8 @@ func runCdnCheckForLiveAssets(targetID uint, dnsxResults map[string][]string) {
 		assetMap[allAssets[i].Value] = &allAssets[i]
 	}
 
-	// به‌روزرسانی assets با اطلاعات CDN
-	// برای هر asset، اگر حداقل یکی از IPهایش پشت CDN باشد، cdncheck و cdncheck_name را ذخیره می‌کنیم
+	// به‌روزرسانی assets با اطلاعات CDN/WAF/CLOUD از cdncheck
+	// برای هر asset، اگر حداقل یکی از IPهایش پشت CDN/WAF/CLOUD باشد، فیلدهای مربوطه را ذخیره می‌کنیم
 	updatedCount := 0
 
 	for subdomain, ips := range dnsxResults {
@@ -1067,18 +1071,36 @@ func runCdnCheckForLiveAssets(targetID uint, dnsxResults map[string][]string) {
 
 		hasCDN := false
 		cdnName := ""
+		hasWAF := false
+		wafName := ""
+		hasCloud := false
+		cloudName := ""
 
 		// چک کردن همه IPهای این asset
 		for _, ip := range ips {
-			if cdnInfo, found := cdnResults[ip]; found && cdnInfo.IsCDN {
-				hasCDN = true
-				if cdnInfo.CDNName != "" && cdnName == "" {
-					cdnName = cdnInfo.CDNName
+			if cdnInfo, found := cdnResults[ip]; found {
+				if cdnInfo.IsCDN {
+					hasCDN = true
+					if cdnInfo.CDNName != "" && cdnName == "" {
+						cdnName = cdnInfo.CDNName
+					}
+				}
+				if cdnInfo.IsWAF {
+					hasWAF = true
+					if cdnInfo.WAFName != "" && wafName == "" {
+						wafName = cdnInfo.WAFName
+					}
+				}
+				if cdnInfo.IsCloud {
+					hasCloud = true
+					if cdnInfo.CloudName != "" && cloudName == "" {
+						cloudName = cdnInfo.CloudName
+					}
 				}
 			}
 		}
 
-		// به‌روزرسانی فیلدهای cdncheck و cdncheck_name
+		// به‌روزرسانی فیلدهای cdncheck/cdncheck_name و wafcheck/wafcheck_name و cloudcheck/cloudcheck_name
 		updates := make(map[string]interface{})
 		if asset.Cdncheck != hasCDN {
 			updates["cdncheck"] = hasCDN
@@ -1087,6 +1109,24 @@ func runCdnCheckForLiveAssets(targetID uint, dnsxResults map[string][]string) {
 			updates["cdncheck_name"] = cdnName
 		} else if !hasCDN && asset.CdncheckName != "" {
 			updates["cdncheck_name"] = ""
+		}
+
+		if asset.Wafcheck != hasWAF {
+			updates["wafcheck"] = hasWAF
+		}
+		if hasWAF && asset.WafcheckName != wafName {
+			updates["wafcheck_name"] = wafName
+		} else if !hasWAF && asset.WafcheckName != "" {
+			updates["wafcheck_name"] = ""
+		}
+
+		if asset.Cloudcheck != hasCloud {
+			updates["cloudcheck"] = hasCloud
+		}
+		if hasCloud && asset.CloudcheckName != cloudName {
+			updates["cloudcheck_name"] = cloudName
+		} else if !hasCloud && asset.CloudcheckName != "" {
+			updates["cloudcheck_name"] = ""
 		}
 
 		if len(updates) > 0 {
@@ -1117,6 +1157,7 @@ func runCdnCheck(targetID uint, ips []string) map[string]CdnCheckResult {
 	output, err := runCommandWithKillSwitch(targetID, "cdncheck",
 		"-i", inputFile,
 		"-j",
+		"-silent",
 		"-nc", // no-color برای جلوگیری از ANSI codes در خروجی
 	)
 	if err != nil {
@@ -1158,33 +1199,58 @@ func runCdnCheck(targetID uint, ips []string) map[string]CdnCheckResult {
 			continue
 		}
 
-		result := CdnCheckResult{IP: ip}
+		// merge if we already saw this ip with another detection type
+		result, _ := results[ip]
+		result.IP = ip
 
-		// بررسی فیلد cdn (boolean است در خروجی cdncheck)
+		// CDN
 		if cdnVal, exists := rawResult["cdn"]; exists {
 			switch v := cdnVal.(type) {
 			case bool:
-				result.IsCDN = v
+				result.IsCDN = result.IsCDN || v
 			case string:
-				result.IsCDN = (v == "true" || v == "1" || v == "yes")
+				result.IsCDN = result.IsCDN || (v == "true" || v == "1" || v == "yes")
 			}
 		}
-
-		// بررسی فیلد cdn_name
-		if cdnName, ok := rawResult["cdn_name"].(string); ok && cdnName != "" {
+		if cdnName, ok := rawResult["cdn_name"].(string); ok && cdnName != "" && result.CDNName == "" {
 			result.CDNName = cdnName
 		}
 
+		// WAF
+		if wafVal, exists := rawResult["waf"]; exists {
+			switch v := wafVal.(type) {
+			case bool:
+				result.IsWAF = result.IsWAF || v
+			case string:
+				result.IsWAF = result.IsWAF || (v == "true" || v == "1" || v == "yes")
+			}
+		}
+		if wafName, ok := rawResult["waf_name"].(string); ok && wafName != "" && result.WAFName == "" {
+			result.WAFName = wafName
+		}
+
+		// CLOUD
+		if cloudVal, exists := rawResult["cloud"]; exists {
+			switch v := cloudVal.(type) {
+			case bool:
+				result.IsCloud = result.IsCloud || v
+			case string:
+				result.IsCloud = result.IsCloud || (v == "true" || v == "1" || v == "yes")
+			}
+		}
+		if cloudName, ok := rawResult["cloud_name"].(string); ok && cloudName != "" && result.CloudName == "" {
+			result.CloudName = cloudName
+		}
+
 		// ذخیره همه نتایج (چه CDN باشد چه نباشد) تا بتوانیم تشخیص دهیم
-		results[result.IP] = result
-		if result.IsCDN {
+		results[ip] = result
+		if result.IsCDN || result.IsWAF || result.IsCloud {
 			parsedCount++
-			log.Printf("  ✓ IP %s: CDN detected - %s\n", result.IP, result.CDNName)
 		}
 	}
 
 	if parsedCount > 0 {
-		log.Printf("✅ Parsed %d CDN results from cdncheck output.\n", parsedCount)
+		log.Printf("✅ Parsed %d technology results from cdncheck output.\n", parsedCount)
 	}
 
 	return results
