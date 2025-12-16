@@ -1060,7 +1060,7 @@ func runCdnCheckForLiveAssets(targetID uint, dnsxResults map[string][]string) {
 	// به‌روزرسانی assets با اطلاعات CDN
 	// برای هر asset، اگر حداقل یکی از IPهایش پشت CDN باشد، cdncheck و cdncheck_name را ذخیره می‌کنیم
 	updatedCount := 0
-	
+
 	for subdomain, ips := range dnsxResults {
 		asset, exists := assetMap[subdomain]
 		if !exists {

@@ -341,7 +341,11 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	}
 
 	if noCdn == "true" {
-		db = db.Where("(cdn_name IS NULL OR cdn_name = '' OR cdn_name = 'null')")
+		// No CDN یعنی هم httpx CDN تشخیص نداده، هم cdncheck چیزی پیدا نکرده
+		db = db.
+			Where("(cdn_name IS NULL OR cdn_name = '' OR cdn_name = 'null')").
+			Where("cdncheck = ?", false).
+			Where("(cdncheck_name IS NULL OR cdncheck_name = '' OR cdncheck_name = 'null')")
 	}
 
 	var totalCount int64
@@ -576,6 +580,8 @@ func toAssetResponse(a models.Asset) dto.AssetResponse {
 		DnsxIP:        a.DnsxIP,
 		WebServer:     a.WebServer,
 		CDNName:       a.CDNName,
+		Cdncheck:      a.Cdncheck,
+		CdncheckName:  a.CdncheckName,
 		Technologies:  techs,
 		ResponseTime:  a.ResponseTimeMs,
 		RawHttpx:      rawHttpx,

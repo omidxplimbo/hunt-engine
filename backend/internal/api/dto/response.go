@@ -39,6 +39,8 @@ type AssetResponse struct {
 	DnsxIP        string      `json:"dnsx_ip"`
 	WebServer     string      `json:"web_server"`
 	CDNName       string      `json:"cdn_name"`
+	Cdncheck      bool        `json:"cdncheck"`
+	CdncheckName  string      `json:"cdncheck_name"`
 	Technologies  interface{} `json:"technologies"`
 	ResponseTime  int64       `json:"response_time_ms"`
 	RawHttpx      interface{} `json:"raw_httpx,omitempty"`
