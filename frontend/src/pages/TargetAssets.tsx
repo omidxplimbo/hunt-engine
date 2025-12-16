@@ -264,7 +264,17 @@ const TargetAssets = () => {
                         <td className="px-6 py-3 align-top">
                         <div className="flex items-start gap-3">
                             <Globe size={14} className={asset.is_live ? "text-hack-primary mt-1 flex-shrink-0" : "text-hack-dim mt-1 flex-shrink-0"} />
-                            <div className="min-w-0"><a href={`http://${asset.value}`} target="_blank" rel="noreferrer" className="text-gray-300 hover:text-hack-primary transition-colors break-all group-hover:underline underline-offset-4">{asset.value}</a></div>
+                            <div className="min-w-0 flex-1">
+                              <a
+                                href={`http://${asset.value}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                title={asset.value}
+                                className="text-gray-300 hover:text-hack-primary transition-colors group-hover:underline underline-offset-4 truncate whitespace-nowrap block"
+                              >
+                                {asset.value}
+                              </a>
+                            </div>
                         </div>
                         </td>
                         <td className="px-6 py-3 align-top"><div className="flex flex-col gap-1">{dnsxIps.length > 0 ? dnsxIps.map((ip, idx) => <span key={idx} className="text-[10px] text-hack-secondary">{ip}</span>) : <span className="text-hack-dim">-</span>}</div></td>
