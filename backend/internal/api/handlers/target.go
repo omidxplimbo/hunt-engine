@@ -924,9 +924,16 @@ func ExportTargetIPs(c *fiber.Ctx) error {
 		})
 	}
 
-	// دریافت تمام assets این تارگت
+	// دریافت assets این تارگت (فقط اونهایی که پشت CDN نیستند)
 	var assets []models.Asset
-	if err := database.DB.Where("target_id = ?", targetID).Find(&assets).Error; err != nil {
+	// معیار "پشت CDN بودن":
+	// - اگر cdn_name مقدار داشته باشد (به‌جز '' و 'null') یعنی httpx CDN را تشخیص داده
+	// - یا اگر cdncheck=true / cdncheck_name پر باشد یعنی ابزار cdncheck CDN را تشخیص داده
+	if err := database.DB.
+		Where("target_id = ?", targetID).
+		Where("(cdn_name IS NULL OR cdn_name = '' OR cdn_name = 'null')").
+		Where("cdncheck = ?", false).
+		Find(&assets).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status":  "error",
 			"message": "Failed to fetch assets",
@@ -938,6 +945,12 @@ func ExportTargetIPs(c *fiber.Ctx) error {
 	ipSet := make(map[string]bool)
 
 	for _, asset := range assets {
+		// فیلتر ایمن اضافه: اگر به هر دلیلی asset پشت CDN بود، IPهاش رو اکسپورت نکن
+		cdnName := strings.TrimSpace(strings.ToLower(asset.CDNName))
+		if (cdnName != "" && cdnName != "null") || asset.Cdncheck || strings.TrimSpace(asset.CdncheckName) != "" {
+			continue
+		}
+
 		// IPهای DNSX
 		if asset.DnsxIP != "" && asset.DnsxIP != "[]" {
 			var dnsxIPs []string
