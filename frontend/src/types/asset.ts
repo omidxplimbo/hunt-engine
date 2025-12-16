@@ -15,6 +15,8 @@ export interface Asset {
   dnsx_ip?: string;
   web_server?: string;
   cdn_name?: string;
+  cdncheck?: boolean;
+  cdncheck_name?: string;
   technologies?: string[] | string; // 👈 اصلاح تایپ برای هندل کردن آرایه یا رشته
   response_time_ms?: number;
   

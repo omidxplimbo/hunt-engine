@@ -213,13 +213,13 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	database.DB.First(&target, targetID)
 	saveDiscoveryResultsToDB(target, masterList, dnsxResults)
 
-	// 6. CDN Check for IPs that haven't been probed by httpx yet
+	// 6. CDN Check for all live IPs from DNS validation
 	if checkStopRequest(targetID) {
 		return
 	}
 	updateTargetPhase(targetID, "PHASE 1: CDN CHECK")
-	log.Printf("🔍 Starting CDN check for assets without httpx data...\n")
-	runCdnCheckForUnprobedAssets(targetID, dnsxResults)
+	log.Printf("🔍 Starting CDN check for all live IPs from DNS validation...\n")
+	runCdnCheckForLiveAssets(targetID, dnsxResults)
 
 	log.Printf("🏁 PHASE 1 finished for %s in %s.\n", rootDomain, time.Since(startTime))
 	triggerNextModule(targetID, rootDomain, "DISCOVERY")
@@ -1006,32 +1006,24 @@ type CdnCheckResult struct {
 	CDN interface{} `json:"cdn,omitempty"` // ممکن است boolean یا string باشد
 }
 
-// runCdnCheckForUnprobedAssets چک کردن CDN برای IPهایی که dnsx resolve کرده ولی httpx هنوز handle نکرده
-func runCdnCheckForUnprobedAssets(targetID uint, dnsxResults map[string][]string) {
-	// پیدا کردن assets که dnsx_ip دارند ولی httpx نداشته‌اند
-	var unprobedAssets []models.Asset
-	database.DB.Where("target_id = ? AND dnsx_ip != '[]' AND dnsx_ip != '' AND (raw_httpx = '' OR raw_httpx = '{}' OR raw_httpx IS NULL)", targetID).
-		Find(&unprobedAssets)
-
-	if len(unprobedAssets) == 0 {
-		log.Printf("ℹ️ No unprobed assets found for CDN check.\n")
+// runCdnCheckForLiveAssets چک کردن CDN برای همه IPهای لایو که dnsx resolve کرده
+func runCdnCheckForLiveAssets(targetID uint, dnsxResults map[string][]string) {
+	if len(dnsxResults) == 0 {
+		log.Printf("ℹ️ No live assets found for CDN check.\n")
 		return
 	}
 
-	log.Printf("🔍 Checking CDN for %d unprobed assets...\n", len(unprobedAssets))
+	log.Printf("🔍 Starting CDN check for all live IPs from DNS validation...\n")
 
-	// جمع‌آوری تمام IPهای منحصر به فرد
+	// جمع‌آوری تمام IPهای منحصر به فرد از dnsxResults
 	ipSet := make(map[string]bool)
-	ipToAssets := make(map[string][]uint) // IP -> []AssetID
+	ipToAssets := make(map[string][]string) // IP -> []AssetValue (subdomain)
 
-	for _, asset := range unprobedAssets {
-		var ips []string
-		if err := json.Unmarshal([]byte(asset.DnsxIP), &ips); err == nil {
-			for _, ip := range ips {
-				if ip != "" {
-					ipSet[ip] = true
-					ipToAssets[ip] = append(ipToAssets[ip], asset.ID)
-				}
+	for subdomain, ips := range dnsxResults {
+		for _, ip := range ips {
+			if ip != "" {
+				ipSet[ip] = true
+				ipToAssets[ip] = append(ipToAssets[ip], subdomain)
 			}
 		}
 	}
@@ -1047,6 +1039,8 @@ func runCdnCheckForUnprobedAssets(targetID uint, dnsxResults map[string][]string
 		ipList = append(ipList, ip)
 	}
 
+	log.Printf("🔍 Running cdncheck on %d unique IPs from %d live subdomains...\n", len(ipList), len(dnsxResults))
+
 	// اجرای cdncheck
 	cdnResults := runCdnCheck(targetID, ipList)
 	if len(cdnResults) == 0 {
@@ -1054,60 +1048,56 @@ func runCdnCheckForUnprobedAssets(targetID uint, dnsxResults map[string][]string
 		return
 	}
 
-	// به‌روزرسانی assets با اطلاعات CDN
-	// برای هر asset، اگر حداقل یکی از IPهایش پشت CDN باشد، CDN name را ذخیره می‌کنیم
-	assetCDNMap := make(map[uint]string) // AssetID -> CDNName (اولین CDN پیدا شده)
+	// پیدا کردن assets از دیتابیس بر اساس subdomain
+	var allAssets []models.Asset
+	database.DB.Where("target_id = ? AND is_live = ?", targetID, true).Find(&allAssets)
 	
-	for ip, cdnInfo := range cdnResults {
-		if assetIDs, exists := ipToAssets[ip]; exists {
-			for _, assetID := range assetIDs {
-				// اگر این asset قبلاً CDN نداشته و این IP پشت CDN است، ذخیره می‌کنیم
-				// فقط اگر cdn_name موجود باشد آن را ذخیره می‌کنیم
-				if cdnInfo.IsCDN && cdnInfo.CDNName != "" {
-					if _, alreadySet := assetCDNMap[assetID]; !alreadySet {
-						assetCDNMap[assetID] = cdnInfo.CDNName
-					}
-				} else if cdnInfo.IsCDN && cdnInfo.CDNName == "" {
-					// CDN detected اما نام مشخص نیست - لاگ برای دیباگ
-					log.Printf("  ⚠️ IP %s: CDN detected but cdn_name is empty\n", ip)
-				}
-			}
-		}
+	assetMap := make(map[string]*models.Asset) // subdomain -> Asset
+	for i := range allAssets {
+		assetMap[allAssets[i].Value] = &allAssets[i]
 	}
 
-	// به‌روزرسانی assets
+	// به‌روزرسانی assets با اطلاعات CDN
+	// برای هر asset، اگر حداقل یکی از IPهایش پشت CDN باشد، cdncheck و cdncheck_name را ذخیره می‌کنیم
 	updatedCount := 0
-	for assetID, cdnName := range assetCDNMap {
-		var asset models.Asset
-		if err := database.DB.First(&asset, assetID).Error; err == nil {
-			// فقط اگر هنوز httpx نداشته باشد، CDN info را آپدیت می‌کنیم
-			if asset.RawHttpx == "" || asset.RawHttpx == "{}" {
-				database.DB.Model(&asset).Update("cdn_name", cdnName)
-				updatedCount++
-			}
+	
+	for subdomain, ips := range dnsxResults {
+		asset, exists := assetMap[subdomain]
+		if !exists {
+			continue
 		}
-	}
 
-	// برای assets که هیچ IP آنها پشت CDN نیست، مطمئن شویم cdn_name خالی است
-	allCheckedAssetIDs := make(map[uint]bool)
-	for _, assetIDs := range ipToAssets {
-		for _, assetID := range assetIDs {
-			allCheckedAssetIDs[assetID] = true
-		}
-	}
+		hasCDN := false
+		cdnName := ""
 
-	for assetID := range allCheckedAssetIDs {
-		if _, hasCDN := assetCDNMap[assetID]; !hasCDN {
-			var asset models.Asset
-			if err := database.DB.First(&asset, assetID).Error; err == nil {
-				if (asset.RawHttpx == "" || asset.RawHttpx == "{}") && asset.CDNName != "" {
-					database.DB.Model(&asset).Update("cdn_name", "")
+		// چک کردن همه IPهای این asset
+		for _, ip := range ips {
+			if cdnInfo, found := cdnResults[ip]; found && cdnInfo.IsCDN {
+				hasCDN = true
+				if cdnInfo.CDNName != "" && cdnName == "" {
+					cdnName = cdnInfo.CDNName
 				}
 			}
 		}
+
+		// به‌روزرسانی فیلدهای cdncheck و cdncheck_name
+		updates := make(map[string]interface{})
+		if asset.Cdncheck != hasCDN {
+			updates["cdncheck"] = hasCDN
+		}
+		if hasCDN && asset.CdncheckName != cdnName {
+			updates["cdncheck_name"] = cdnName
+		} else if !hasCDN && asset.CdncheckName != "" {
+			updates["cdncheck_name"] = ""
+		}
+
+		if len(updates) > 0 {
+			database.DB.Model(asset).Updates(updates)
+			updatedCount++
+		}
 	}
 
-	log.Printf("✅ CDN check completed. Updated %d assets with CDN information.\n", updatedCount)
+	log.Printf("✅ CDN check completed. Updated %d assets with cdncheck information.\n", updatedCount)
 }
 
 // runCdnCheck اجرای cdncheck روی لیست IPها

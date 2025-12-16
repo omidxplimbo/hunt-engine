@@ -256,20 +256,36 @@ const TargetAssets = () => {
                         <td className="px-6 py-3 align-top"><div className="flex flex-col gap-1">{httpxIps.length > 0 ? httpxIps.map((ip, idx) => <span key={idx} className="text-[10px] text-hack-dim">{ip}</span>) : <span className="text-hack-dim">-</span>}</div></td>
                         <td className="px-6 py-3 align-top">{asset.is_live ? (statusCode > 0 ? <span className={`px-1.5 py-0.5 text-[10px] font-bold border ${statusCode >= 200 && statusCode < 300 ? 'border-hack-primary text-hack-primary' : statusCode >= 300 && statusCode < 400 ? 'border-hack-warning text-hack-warning' : 'border-hack-danger text-hack-danger'}`}>{statusCode}</span> : <span className="text-hack-dim">-</span>) : <span className="text-[10px] text-hack-dim border border-hack-dim px-1">DEAD</span>}</td>
                         <td className="px-6 py-3 align-top">
-                            {asset.cdn_name && asset.cdn_name.trim() !== '' ? (
-                                <div className="flex flex-col gap-1">
-                                    <div className="flex items-center gap-1">
-                                        <span className="px-1.5 py-0.5 text-[9px] font-bold border border-hack-warning/50 text-hack-warning bg-hack-warning/10 uppercase tracking-wider">CDN</span>
-                                        {/* نشانگر اینکه CDN از cdncheck آمده (قبل از httpx) - اگر dnsx_ip داریم ولی httpx نداشته‌ایم */}
-                                        {(!asset.status_code || asset.status_code === 0) && dnsxIps.length > 0 && httpxIps.length === 0 ? (
-                                            <span className="px-1 py-0.5 text-[8px] border border-hack-secondary/50 text-hack-secondary bg-hack-secondary/10 font-mono" title="Detected by cdncheck (before httpx)">CDN✓</span>
-                                        ) : null}
+                            <div className="flex flex-col gap-1">
+                                {/* نمایش CDN از httpx */}
+                                {asset.cdn_name && asset.cdn_name.trim() !== '' ? (
+                                    <div className="flex flex-col gap-1">
+                                        <div className="flex items-center gap-1">
+                                            <span className="px-1.5 py-0.5 text-[9px] font-bold border border-hack-warning/50 text-hack-warning bg-hack-warning/10 uppercase tracking-wider">CDN</span>
+                                        </div>
+                                        <span className="text-[10px] text-hack-warning/80 font-mono">{asset.cdn_name}</span>
                                     </div>
-                                    <span className="text-[10px] text-hack-warning/80 font-mono">{asset.cdn_name}</span>
-                                </div>
-                            ) : (
-                                <span className="text-hack-dim text-[10px]">-</span>
-                            )}
+                                ) : null}
+                                
+                                {/* نمایش CDN از cdncheck */}
+                                {asset.cdncheck && asset.cdncheck_name && asset.cdncheck_name.trim() !== '' ? (
+                                    <div className="flex flex-col gap-1">
+                                        <div className="flex items-center gap-1">
+                                            <span className="px-1.5 py-0.5 text-[9px] font-bold border border-hack-secondary/50 text-hack-secondary bg-hack-secondary/10 uppercase tracking-wider">CDN✓</span>
+                                        </div>
+                                        <span className="text-[10px] text-hack-secondary/80 font-mono">{asset.cdncheck_name}</span>
+                                    </div>
+                                ) : asset.cdncheck ? (
+                                    <div className="flex items-center gap-1">
+                                        <span className="px-1.5 py-0.5 text-[9px] font-bold border border-hack-secondary/50 text-hack-secondary bg-hack-secondary/10 uppercase tracking-wider">CDN✓</span>
+                                    </div>
+                                ) : null}
+                                
+                                {/* اگر هیچ CDN وجود نداشت */}
+                                {(!asset.cdn_name || asset.cdn_name.trim() === '') && !asset.cdncheck ? (
+                                    <span className="text-hack-dim text-[10px]">-</span>
+                                ) : null}
+                            </div>
                         </td>
                         <td className="px-6 py-3 align-top"><span className="text-xs text-hack-text block line-clamp-2 opacity-80 min-w-[200px]" title={asset.title}>{asset.title || '-'}</span></td>
                         <td className="px-6 py-3 align-top"><div className="flex flex-wrap gap-1 max-h-[60px] overflow-y-auto min-w-[150px]">{asset.web_server && <span className="px-1 py-0.5 bg-white/5 text-[9px] border border-white/10 text-hack-text whitespace-nowrap">{asset.web_server}</span>}{techs.map((tech, i) => <span key={i} className="px-1 py-0.5 bg-hack-primary/5 text-[9px] border border-hack-primary/20 text-hack-primary whitespace-nowrap">{tech}</span>)}</div></td>

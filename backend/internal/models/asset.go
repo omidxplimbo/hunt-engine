@@ -64,6 +64,8 @@ type Asset struct {
 	DnsxIP         string `gorm:"type:jsonb;default:'[]'" json:"dnsx_ip"`
 	WebServer      string `gorm:"size:255" json:"web_server"`
 	CDNName        string `gorm:"size:100;index" json:"cdn_name"`
+	Cdncheck       bool   `gorm:"default:false;index" json:"cdncheck"`
+	CdncheckName   string `gorm:"size:100" json:"cdncheck_name"`
 	Technologies   string `gorm:"type:jsonb;default:'[]'" json:"technologies"`
 	BodyHash       string `gorm:"size:64" json:"body_hash"`
 	HeaderHash     string `gorm:"size:64" json:"header_hash"`
