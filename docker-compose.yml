@@ -25,8 +25,6 @@ services:
     volumes:
       # 👇 این خط برای وردلیست‌های سفارشی اضافه شد (برای آینده)
       - ./custom_wordlists:/wordlists/custom
-      # 👇 Mount debug logs into container so worker instrumentation can write NDJSON
-      - ./.cursor:/root/hunt-engine/.cursor
     depends_on:
       - postgres
       - redis

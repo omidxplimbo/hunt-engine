@@ -1002,8 +1002,6 @@ type CdnCheckResult struct {
 	IP      string `json:"ip"`
 	IsCDN   bool   `json:"cdn"`
 	CDNName string `json:"cdn_name"`
-	// برای سازگاری با فرمت‌های مختلف
-	CDN interface{} `json:"cdn,omitempty"` // ممکن است boolean یا string باشد
 }
 
 // runCdnCheckForLiveAssets چک کردن CDN برای همه IPهای لایو که dnsx resolve کرده
@@ -1051,7 +1049,7 @@ func runCdnCheckForLiveAssets(targetID uint, dnsxResults map[string][]string) {
 	// پیدا کردن assets از دیتابیس بر اساس subdomain
 	var allAssets []models.Asset
 	database.DB.Where("target_id = ? AND is_live = ?", targetID, true).Find(&allAssets)
-	
+
 	assetMap := make(map[string]*models.Asset) // subdomain -> Asset
 	for i := range allAssets {
 		assetMap[allAssets[i].Value] = &allAssets[i]
@@ -1127,7 +1125,7 @@ func runCdnCheck(targetID uint, ips []string) map[string]CdnCheckResult {
 		}
 		return make(map[string]CdnCheckResult)
 	}
-	
+
 	if len(output) == 0 {
 		log.Printf("⚠️ Cdncheck returned empty output.\n")
 		return make(map[string]CdnCheckResult)
@@ -1137,13 +1135,13 @@ func runCdnCheck(targetID uint, ips []string) map[string]CdnCheckResult {
 	results := make(map[string]CdnCheckResult)
 	lines := strings.Split(string(output), "\n")
 	parsedCount := 0
-	
+
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		
+
 		// فقط خطوطی که با { شروع می‌شوند JSON هستند (خطوط info/error معمولاً این فرمت را ندارند)
 		if !strings.HasPrefix(line, "{") {
 			continue
