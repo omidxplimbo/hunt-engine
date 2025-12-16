@@ -33,6 +33,9 @@ type Target struct {
 	// 👇 فیلد جدید برای Waymore (پیش‌فرض غیرفعال)
 	UseWaymore bool `gorm:"default:false" json:"use_waymore"`
 
+	// 👇 Port scan (nmap) in PHASE 1 (optional)
+	UsePortscan bool `gorm:"default:false" json:"use_portscan"`
+
 	ScanModules string `gorm:"type:jsonb;default:'[\"DISCOVERY\", \"PROBING\"]'" json:"scan_modules"`
 
 	Assets []Asset `json:"-"`
@@ -74,6 +77,9 @@ type Asset struct {
 	BodyHash       string `gorm:"size:64" json:"body_hash"`
 	HeaderHash     string `gorm:"size:64" json:"header_hash"`
 	ResponseTimeMs int64  `json:"response_time_ms"`
+
+	// 👇 Port scan results (per IP) e.g. {"1.2.3.4":[80,443]}
+	OpenPorts string `gorm:"type:jsonb;default:'{}'" json:"open_ports"`
 
 	RawHttpx string `gorm:"type:jsonb" json:"raw_httpx"`
 

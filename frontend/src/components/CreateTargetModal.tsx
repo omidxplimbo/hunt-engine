@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { createTarget, type CreateTargetPayload } from '../api/targets';
-import { X, Loader2, Target, Zap, Globe } from 'lucide-react';
+import { X, Loader2, Target, Zap, Globe, Network } from 'lucide-react';
 import clsx from 'clsx';
 
 interface Props {
@@ -25,6 +25,7 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
     modules: ['DISCOVERY', 'PROBING', 'CRAWLING'],
     use_alterx: true,
     use_waymore: false, // پیش‌فرض
+    use_portscan: false, // پیش‌فرض
   });
 
   const mutation = useMutation({
@@ -32,7 +33,7 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['targets'] });
       onClose();
-      setFormData({ name: '', root_domain: '', description: '', frequency: 720, modules: ['DISCOVERY', 'PROBING', 'CRAWLING'], use_alterx: true, use_waymore: false });
+      setFormData({ name: '', root_domain: '', description: '', frequency: 720, modules: ['DISCOVERY', 'PROBING', 'CRAWLING'], use_alterx: true, use_waymore: false, use_portscan: false });
     },
   });
 
@@ -90,6 +91,22 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
                 </div>
                 <p className="text-[8px] text-hack-dim leading-tight">Deep historical crawl.</p>
             </div>
+          </div>
+
+          <div className="p-3 border border-hack-border bg-black/30 flex flex-col justify-center gap-2">
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="use_portscan"
+                checked={formData.use_portscan}
+                onChange={e => setFormData({ ...formData, use_portscan: e.target.checked })}
+                className="accent-hack-primary h-4 w-4"
+              />
+              <label htmlFor="use_portscan" className="text-xs font-bold text-hack-text tracking-wide cursor-pointer flex items-center gap-1">
+                <Network size={12} className="text-hack-primary" /> PORTSCAN (NMAP)
+              </label>
+            </div>
+            <p className="text-[8px] text-hack-dim leading-tight">Scan open ports for non-CDN DNSx IPs during PHASE 1.</p>
           </div>
 
           <div className="space-y-2">

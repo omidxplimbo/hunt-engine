@@ -13,6 +13,8 @@ export interface Target {
   use_alterx: boolean;
   // 👇 اضافه شد
   use_waymore: boolean;
+  // 👇 optional port scan during discovery
+  use_portscan: boolean;
   scan_modules: string;
 }
 

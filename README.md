@@ -45,6 +45,7 @@ The platform integrates industry-standard security tools within its isolated env
 * **Validation/Resolution:** `dnsx` (w/ fixed resolvers)
 * **Probing:** `httpx` (Rich JSON output, WAF/CDN detection)
 * **Edge Tech Detection:** `cdncheck` (Early detection from DNS results: **CDN / WAF / CLOUD**, separate from httpx)
+* **Port Scanning:** `nmap` (**Optional per target**, runs in Phase 1 on **non-CDN** DNS-resolved IPs)
 * **Crawling & Content Discovery:** `gau`, `waybackurls`, `katana` (Active & Passive), `waymore` (Deep Archival Crawl)
 * **Deep Scan:** `amass` (Integrated via Docker)
 * **Future Integration:** `ffuf`, `nuclei` (Ready in Dockerfile)
@@ -239,7 +240,7 @@ cat QUICK-STEPS.txt
    * **Target Root:** The root domain (e.g., `example.com`)
    * **Recon Frequency:** Minutes between scans (default: 720 = 12 hours)
    * **Modules:** Select scan phases (DISCOVERY, PROBING, CRAWLING)
-   * **Options:** Toggle Alterx (permutation) and Waymore (deep crawl)
+   * **Options:** Toggle Alterx (permutation), Waymore (deep crawl) and **Portscan (nmap)** (optional)
 
 #### Exporting Targets
 1. Click **Export** button on Targets page
@@ -268,6 +269,17 @@ cat QUICK-STEPS.txt
 * **CLOUD:** Show only assets with CLOUD provider detected (cdncheck)
 * **Search:** Filter by domain name
 * **CDN/WAF/CLOUD Badges:** Visual indicators per asset (separate fields)
+* **Ports Column:** If Portscan is enabled, open ports (from `nmap`) are shown per asset.
+
+#### Port Scanning (Optional / Phase 1)
+When enabled per target (`use_portscan=true`), the engine runs `nmap` in **PHASE 1 (DISCOVERY)** **after** `cdncheck` and scans **only**:
+- assets that are **live** (resolved by `dnsx`, have `dnsx_ip`)
+- IPs that are **not behind CDN** (based on `cdn_name` + `cdncheck`)
+
+Results are stored in `assets.open_ports` as JSON:
+```json
+{"1.2.3.4":[80,443]}
+```
 
 #### URL Management
 * Switch to **URLs** tab to view crawled endpoints
@@ -333,6 +345,7 @@ You can combine these query params on `GET /api/targets/:id/assets`:
       "modules": ["DISCOVERY", "PROBING", "CRAWLING"],
       "use_alterx": true,
       "use_waymore": false,
+      "use_portscan": false,
       "assets": [...],
       "urls": [...]
     }

@@ -19,35 +19,38 @@ type TargetResponse struct {
 	UseAlterx bool `json:"use_alterx"`
 	// 👇 اضافه شد
 	UseWaymore bool `json:"use_waymore"`
+	// 👇 optional port scan during discovery
+	UsePortscan bool `json:"use_portscan"`
 
 	ScanModules string `json:"scan_modules"`
 }
 
 // ... (بقیه DTOها بدون تغییر)
 type AssetResponse struct {
-	ID            uint        `json:"id"`
-	Value         string      `json:"value"`
-	Type          string      `json:"type"`
-	IsNew         bool        `json:"is_new"`
-	IsLive        bool        `json:"is_live"`
-	CreatedAt     time.Time   `json:"created_at"`
-	FinalURL      string      `json:"final_url"`
-	StatusCode    int         `json:"status_code"`
-	Title         string      `json:"title"`
-	ContentLength int64       `json:"content_length"`
-	HostIP        string      `json:"host_ip"`
-	DnsxIP        string      `json:"dnsx_ip"`
-	WebServer     string      `json:"web_server"`
-	CDNName       string      `json:"cdn_name"`
-	Cdncheck      bool        `json:"cdncheck"`
-	CdncheckName  string      `json:"cdncheck_name"`
-	Wafcheck      bool        `json:"wafcheck"`
-	WafcheckName  string      `json:"wafcheck_name"`
-	Cloudcheck    bool        `json:"cloudcheck"`
-	CloudcheckName string     `json:"cloudcheck_name"`
-	Technologies  interface{} `json:"technologies"`
-	ResponseTime  int64       `json:"response_time_ms"`
-	RawHttpx      interface{} `json:"raw_httpx,omitempty"`
+	ID             uint        `json:"id"`
+	Value          string      `json:"value"`
+	Type           string      `json:"type"`
+	IsNew          bool        `json:"is_new"`
+	IsLive         bool        `json:"is_live"`
+	CreatedAt      time.Time   `json:"created_at"`
+	FinalURL       string      `json:"final_url"`
+	StatusCode     int         `json:"status_code"`
+	Title          string      `json:"title"`
+	ContentLength  int64       `json:"content_length"`
+	HostIP         string      `json:"host_ip"`
+	DnsxIP         string      `json:"dnsx_ip"`
+	WebServer      string      `json:"web_server"`
+	CDNName        string      `json:"cdn_name"`
+	Cdncheck       bool        `json:"cdncheck"`
+	CdncheckName   string      `json:"cdncheck_name"`
+	Wafcheck       bool        `json:"wafcheck"`
+	WafcheckName   string      `json:"wafcheck_name"`
+	Cloudcheck     bool        `json:"cloudcheck"`
+	CloudcheckName string      `json:"cloudcheck_name"`
+	Technologies   interface{} `json:"technologies"`
+	ResponseTime   int64       `json:"response_time_ms"`
+	OpenPorts      interface{} `json:"open_ports"`
+	RawHttpx       interface{} `json:"raw_httpx,omitempty"`
 }
 
 type FoundURLResponse struct {

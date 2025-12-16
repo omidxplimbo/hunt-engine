@@ -23,6 +23,9 @@ export interface Asset {
   cloudcheck_name?: string;
   technologies?: string[] | string; // 👈 اصلاح تایپ برای هندل کردن آرایه یا رشته
   response_time_ms?: number;
+
+  // 👇 Port scan results (per IP) e.g. { "1.2.3.4": [80, 443] }
+  open_ports?: Record<string, number[]> | string;
   
   // داده خام
   raw_httpx?: any;

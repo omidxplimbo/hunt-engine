@@ -221,6 +221,18 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	log.Printf("🔍 Starting CDN check for all live IPs from DNS validation...\n")
 	runCdnCheckForLiveAssets(targetID, dnsxResults)
 
+	// 7. Optional Port Scan (Nmap) - ONLY: live assets resolved by dnsx AND no CDN
+	if targetConf.UsePortscan {
+		if checkStopRequest(targetID) {
+			return
+		}
+		updateTargetPhase(targetID, "PHASE 1: PORT SCAN (NMAP)")
+		log.Printf("🔎 Starting optional port scan (nmap) for target %d...\n", targetID)
+		runPortScanForLiveNoCDNAssets(targetID)
+	} else {
+		log.Printf("⏩ Skipping Nmap Port Scan (Disabled in settings)\n")
+	}
+
 	log.Printf("🏁 PHASE 1 finished for %s in %s.\n", rootDomain, time.Since(startTime))
 	triggerNextModule(targetID, rootDomain, "DISCOVERY")
 }
@@ -780,6 +792,35 @@ func runCommandWithKillSwitch(targetID uint, name string, args ...string) ([]byt
 	}
 }
 
+// runCommandWithKillSwitchCombined مثل runCommandWithKillSwitch ولی stdout/stderr را با هم برمی‌گرداند (برای ابزارهایی مثل nmap)
+func runCommandWithKillSwitchCombined(targetID uint, name string, args ...string) ([]byte, error) {
+	cmd := exec.Command(name, args...)
+	var outBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &outBuf
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start command %s: %w", name, err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-done:
+			return outBuf.Bytes(), err
+		case <-ticker.C:
+			if checkStopRequest(targetID) {
+				log.Printf("🛑 Kill switch activated for target %d. Killing process %s...", targetID, name)
+				if err := cmd.Process.Kill(); err != nil {
+					log.Printf("⚠️ Failed to kill process: %v", err)
+				}
+				return nil, fmt.Errorf("process killed by user request")
+			}
+		}
+	}
+}
+
 func checkStopRequest(targetID uint) bool {
 	var t models.Target
 	if err := database.DB.Select("stop_requested").First(&t, targetID).Error; err != nil {
@@ -1253,5 +1294,217 @@ func runCdnCheck(targetID uint, ips []string) map[string]CdnCheckResult {
 		log.Printf("✅ Parsed %d technology results from cdncheck output.\n", parsedCount)
 	}
 
+	return results
+}
+
+// =================================================================
+// Optional Port Scan (Nmap) - PHASE 1
+// =================================================================
+
+// runPortScanForLiveNoCDNAssets فقط روی IPهای DNSX برای assetهای لایو و بدون CDN پورت‌اسکن انجام می‌دهد
+// و نتیجه را روی فیلد open_ports هر Asset (به صورت map[ip][]ports) ذخیره می‌کند.
+func runPortScanForLiveNoCDNAssets(targetID uint) {
+	// معیار بدون CDN (همان منطق no_cdn در API)
+	var assets []models.Asset
+	if err := database.DB.Model(&models.Asset{}).
+		Where("target_id = ?", targetID).
+		Where("is_live = ?", true).
+		Where("jsonb_array_length(dnsx_ip) > 0").
+		Where("(cdn_name IS NULL OR cdn_name = '' OR cdn_name = 'null')").
+		Where("cdncheck = ?", false).
+		Where("(cdncheck_name IS NULL OR cdncheck_name = '' OR cdncheck_name = 'null')").
+		Find(&assets).Error; err != nil {
+		log.Printf("❌ Port scan: failed to fetch eligible assets: %v\n", err)
+		return
+	}
+
+	if len(assets) == 0 {
+		log.Printf("ℹ️ Port scan: no eligible assets (live + dnsx + no CDN).\n")
+		return
+	}
+
+	// collect unique IPs from dnsx_ip
+	ipSet := make(map[string]struct{})
+	for _, a := range assets {
+		if a.DnsxIP == "" || a.DnsxIP == "[]" || a.DnsxIP == "null" {
+			continue
+		}
+		var ips []string
+		if err := json.Unmarshal([]byte(a.DnsxIP), &ips); err != nil {
+			continue
+		}
+		for _, ip := range ips {
+			ip = strings.TrimSpace(ip)
+			if ip == "" {
+				continue
+			}
+			// فعلاً فقط IPv4
+			if strings.Contains(ip, ":") {
+				continue
+			}
+			ipSet[ip] = struct{}{}
+		}
+	}
+
+	if len(ipSet) == 0 {
+		log.Printf("ℹ️ Port scan: no IPv4 IPs extracted from dnsx.\n")
+		return
+	}
+
+	ipList := make([]string, 0, len(ipSet))
+	for ip := range ipSet {
+		ipList = append(ipList, ip)
+	}
+	sort.Strings(ipList)
+
+	results, err := runNmapTopPorts(targetID, ipList)
+	if err != nil {
+		if err.Error() == "process killed by user request" {
+			return
+		}
+		log.Printf("⚠️ Port scan: nmap finished with error: %v\n", err)
+	}
+
+	updated := 0
+	// update assets with per-ip ports mapping
+	for i := range assets {
+		a := &assets[i]
+		var ips []string
+		_ = json.Unmarshal([]byte(a.DnsxIP), &ips)
+		m := make(map[string][]int)
+		for _, ip := range ips {
+			ip = strings.TrimSpace(ip)
+			if ip == "" || strings.Contains(ip, ":") {
+				continue
+			}
+			if ports, ok := results[ip]; ok && len(ports) > 0 {
+				m[ip] = ports
+			}
+		}
+
+		// store {} if nothing found
+		b, _ := json.Marshal(m)
+		openPortsJSON := string(b)
+		if openPortsJSON == "" || openPortsJSON == "null" {
+			openPortsJSON = "{}"
+		}
+
+		if a.OpenPorts != openPortsJSON {
+			if err := database.DB.Model(&models.Asset{}).Where("id = ?", a.ID).Update("open_ports", openPortsJSON).Error; err == nil {
+				updated++
+			}
+		}
+	}
+
+	if updated > 0 {
+		cache.IncrementTargetVersion(targetID)
+	}
+
+	log.Printf("✅ Port scan completed. Updated %d assets with open ports.\n", updated)
+}
+
+// runNmapTopPorts یک اسکن سریع و بهینه برای top ports انجام می‌دهد و فقط پورت‌های open را برمی‌گرداند.
+func runNmapTopPorts(targetID uint, ips []string) (map[string][]int, error) {
+	results := make(map[string][]int)
+	if len(ips) == 0 {
+		return results, nil
+	}
+
+	inputFile := fmt.Sprintf("/tmp/nmap_input_%d.txt", targetID)
+	if err := writeSliceToFile(inputFile, ips); err != nil {
+		return results, err
+	}
+
+	// Nmap command (optimized):
+	// -n: no DNS, -Pn: skip host discovery, --open: only open ports
+	// --top-ports 1000: fast/common ports, -T4: speed
+	// --max-retries 2, --host-timeout 45s: bound runtime, --min-rate 300: push packets
+	// -oG -: greppable output to stdout for easy parsing
+	out, err := runCommandWithKillSwitchCombined(targetID, "nmap",
+		"-n", "-Pn",
+		"-sT",
+		"--open",
+		"--top-ports", "1000",
+		"-T4",
+		"--max-retries", "2",
+		"--host-timeout", "45s",
+		"--min-rate", "300",
+		"-iL", inputFile,
+		"-oG", "-",
+	)
+	if len(out) > 0 {
+		results = parseNmapGreppable(out)
+	}
+	// nmap may return non-zero if some hosts down; we still keep parsed results
+	return results, err
+}
+
+func parseNmapGreppable(out []byte) map[string][]int {
+	results := make(map[string][]int)
+	scanner := bufio.NewScanner(bytes.NewReader(out))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if !strings.HasPrefix(line, "Host:") {
+			continue
+		}
+		// Example:
+		// Host: 1.2.3.4 ()	Ports: 80/open/tcp//http///, 443/open/tcp//https///
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		ip := parts[1]
+		if ip == "" {
+			continue
+		}
+		portsIdx := strings.Index(line, "Ports:")
+		if portsIdx == -1 {
+			continue
+		}
+		portsPart := strings.TrimSpace(line[portsIdx+len("Ports:"):])
+		if portsPart == "" {
+			continue
+		}
+		// cut off trailing metadata
+		if i := strings.Index(portsPart, "Ignored"); i != -1 {
+			portsPart = strings.TrimSpace(portsPart[:i])
+		}
+		if i := strings.Index(portsPart, "OS:"); i != -1 {
+			portsPart = strings.TrimSpace(portsPart[:i])
+		}
+		portItems := strings.Split(portsPart, ",")
+		portSet := make(map[int]struct{})
+		for _, item := range portItems {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			// "80/open/tcp//http///"
+			s := strings.Split(item, "/")
+			if len(s) < 2 {
+				continue
+			}
+			if s[1] != "open" {
+				continue
+			}
+			p, err := strconv.Atoi(s[0])
+			if err != nil || p <= 0 {
+				continue
+			}
+			portSet[p] = struct{}{}
+		}
+		if len(portSet) == 0 {
+			continue
+		}
+		ports := make([]int, 0, len(portSet))
+		for p := range portSet {
+			ports = append(ports, p)
+		}
+		sort.Ints(ports)
+		results[ip] = ports
+	}
 	return results
 }

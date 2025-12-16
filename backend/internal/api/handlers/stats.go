@@ -42,6 +42,19 @@ func GetDashboardStats(c *fiber.Ctx) error {
 		LIMIT 10
 	`).Scan(&stats.TopTechnologies)
 
+	// 4. پورت‌های باز برتر (از open_ports) - شمارش بر اساس تعداد assetهای منحصر به فرد
+	// open_ports ساختار: {"ip":[80,443]} => باید آرایه‌ها را باز کنیم و روی port group کنیم
+	database.DB.Raw(`
+		SELECT p.port as name, count(DISTINCT assets.id) as count
+		FROM assets
+		CROSS JOIN LATERAL jsonb_each(open_ports) e(ip, ports)
+		CROSS JOIN LATERAL jsonb_array_elements_text(e.ports) p(port)
+		WHERE open_ports IS NOT NULL AND open_ports <> '{}'::jsonb
+		GROUP BY p.port
+		ORDER BY count DESC
+		LIMIT 10
+	`).Scan(&stats.TopOpenPorts)
+
 	return c.JSON(fiber.Map{
 		"status": "success",
 		"data":   stats,

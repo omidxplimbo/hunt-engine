@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { getDashboardStats } from '../api/stats';
-import { Target, Activity, Zap, Database, Cpu } from 'lucide-react';
+import { Target, Activity, Zap, Database, Cpu, Network } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
 const Dashboard = () => {
@@ -25,6 +25,7 @@ const Dashboard = () => {
 
   const pieData = stats.assets_by_status || [];
   const barData = stats.top_technologies || [];
+  const portsData = stats.top_open_ports || [];
 
   return (
     <div className="space-y-6 md:space-y-8">
@@ -43,7 +44,7 @@ const Dashboard = () => {
       </div>
 
       {/* Charts Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-8">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-8">
         {/* Pie Chart */}
         <div className="hack-box p-4 md:p-6 relative">
           <div className="absolute top-0 right-0 p-2 text-[8px] md:text-[10px] text-hack-dim">SYS.MON.01</div>
@@ -109,6 +110,50 @@ const Dashboard = () => {
                 <Bar dataKey="count" fill="#00ff41" radius={[0, 2, 2, 0]} barSize={15} />
               </BarChart>
             </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* Top Open Ports */}
+        <div className="hack-box p-4 md:p-6 relative">
+          <div className="absolute top-0 right-0 p-2 text-[8px] md:text-[10px] text-hack-dim">SYS.MON.03</div>
+          <h3 className="text-xs md:text-sm font-bold text-hack-primary tracking-widest uppercase mb-6 flex items-center gap-2">
+            <span className="w-1 h-4 bg-hack-primary"></span>
+            <span className="flex items-center gap-2">
+              <Network size={14} className="text-hack-primary" />
+              Top Open Ports
+            </span>
+          </h3>
+
+          <div className="h-[250px] md:h-[300px] w-full">
+            {portsData.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-hack-dim font-mono text-xs border border-hack-border bg-black/30">
+                No portscan telemetry yet.
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={portsData as any[]}
+                  layout="vertical"
+                  margin={{ left: 0, right: 10 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1f1f1f" horizontal={false} />
+                  <XAxis type="number" stroke="#666" tick={{ fill: '#666', fontSize: 10, fontFamily: 'monospace' }} />
+                  <YAxis
+                    dataKey="name"
+                    type="category"
+                    stroke="#666"
+                    width={50}
+                    tick={{ fill: '#e0e0e0', fontSize: 10, fontFamily: 'monospace' }}
+                  />
+                  <Tooltip
+                    cursor={{ fill: 'rgba(0, 255, 65, 0.05)' }}
+                    contentStyle={{ backgroundColor: '#050505', borderColor: '#00ff41', color: '#e0e0e0', fontFamily: 'monospace', fontSize: '12px' }}
+                    formatter={(value: any, _name: any, props: any) => [value, `port ${props?.payload?.name}`]}
+                  />
+                  <Bar dataKey="count" fill="#fcee0a" radius={[0, 2, 2, 0]} barSize={15} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </div>
       </div>

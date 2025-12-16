@@ -10,6 +10,8 @@ type CreateTargetRequest struct {
 	UseAlterx   *bool    `json:"use_alterx"`
 	// 👇 اضافه شد
 	UseWaymore *bool `json:"use_waymore"`
+	// 👇 PHASE 1 optional port scan (nmap)
+	UsePortscan *bool `json:"use_portscan"`
 }
 
 // UpdateTargetRequest برای ویرایش تنظیمات تارگت
@@ -22,14 +24,16 @@ type UpdateTargetRequest struct {
 	UseAlterx   *bool    `json:"use_alterx"`
 	// 👇 اضافه شد
 	UseWaymore *bool `json:"use_waymore"`
+	// 👇 PHASE 1 optional port scan (nmap)
+	UsePortscan *bool `json:"use_portscan"`
 }
 
 // TargetExportData ساختار استاندارد برای Export/Import تارگت‌ها
 // این ساختار شامل تمام اطلاعات لازم برای بازسازی تارگت است
 type TargetExportData struct {
-	Version     string                 `json:"version"`      // نسخه فرمت Export (برای سازگاری آینده)
-	ExportDate  string                 `json:"export_date"`  // تاریخ Export
-	Targets     []TargetExportItem     `json:"targets"`      // لیست تارگت‌ها
+	Version    string             `json:"version"`     // نسخه فرمت Export (برای سازگاری آینده)
+	ExportDate string             `json:"export_date"` // تاریخ Export
+	Targets    []TargetExportItem `json:"targets"`     // لیست تارگت‌ها
 }
 
 // TargetExportItem اطلاعات یک تارگت برای Export/Import (شامل تمام داده‌های مرتبط)
@@ -43,32 +47,34 @@ type TargetExportItem struct {
 	Modules     []string `json:"modules"`
 	UseAlterx   bool     `json:"use_alterx"`
 	UseWaymore  bool     `json:"use_waymore"`
-	
+	UsePortscan bool     `json:"use_portscan"`
+
 	// داده‌های مرتبط
-	Assets []AssetExportItem  `json:"assets"`  // لیست ساب‌دامین‌ها و دارایی‌ها
-	URLs   []URLExportItem    `json:"urls"`    // لیست URLهای پیدا شده
+	Assets []AssetExportItem `json:"assets"` // لیست ساب‌دامین‌ها و دارایی‌ها
+	URLs   []URLExportItem   `json:"urls"`   // لیست URLهای پیدا شده
 }
 
 // AssetExportItem اطلاعات یک Asset برای Export/Import
 type AssetExportItem struct {
-	Value         string `json:"value"`
-	Type          string `json:"type"`
-	IsNew         bool   `json:"is_new"`
-	IsLive        bool   `json:"is_live"`
-	FinalURL      string `json:"final_url"`
-	StatusCode    int    `json:"status_code"`
-	Title         string `json:"title"`
-	ContentLength int64  `json:"content_length"`
-	HostIP        string `json:"host_ip"`
-	DnsxIP        string `json:"dnsx_ip"`
-	WebServer     string `json:"web_server"`
-	CDNName       string `json:"cdn_name"`
-	Technologies  string `json:"technologies"`
-	BodyHash      string `json:"body_hash"`
-	HeaderHash    string `json:"header_hash"`
-	ResponseTimeMs int64 `json:"response_time_ms"`
-	RawHttpx      string `json:"raw_httpx"`
-	CreatedAt     string `json:"created_at"`
+	Value          string `json:"value"`
+	Type           string `json:"type"`
+	IsNew          bool   `json:"is_new"`
+	IsLive         bool   `json:"is_live"`
+	FinalURL       string `json:"final_url"`
+	StatusCode     int    `json:"status_code"`
+	Title          string `json:"title"`
+	ContentLength  int64  `json:"content_length"`
+	HostIP         string `json:"host_ip"`
+	DnsxIP         string `json:"dnsx_ip"`
+	WebServer      string `json:"web_server"`
+	CDNName        string `json:"cdn_name"`
+	Technologies   string `json:"technologies"`
+	BodyHash       string `json:"body_hash"`
+	HeaderHash     string `json:"header_hash"`
+	ResponseTimeMs int64  `json:"response_time_ms"`
+	RawHttpx       string `json:"raw_httpx"`
+	OpenPorts      string `json:"open_ports"`
+	CreatedAt      string `json:"created_at"`
 }
 
 // URLExportItem اطلاعات یک FoundURL برای Export/Import

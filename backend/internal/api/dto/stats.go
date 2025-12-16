@@ -11,6 +11,9 @@ type DashboardStats struct {
 
 	// برای نمودار میله‌ای (Bar Chart)
 	TopTechnologies []CountItem `json:"top_technologies"`
+
+	// Top open ports from assets.open_ports (nmap)
+	TopOpenPorts []CountItem `json:"top_open_ports"`
 }
 
 type CountItem struct {

@@ -90,6 +90,43 @@ const TargetAssets = () => {
     </th>
   );
 
+  const renderPortsCell = (openPorts: any) => {
+    let obj: Record<string, number[]> = {};
+    try {
+      if (typeof openPorts === 'string') obj = JSON.parse(openPorts || '{}');
+      else if (openPorts && typeof openPorts === 'object') obj = openPorts;
+    } catch {
+      obj = {};
+    }
+
+    const union = new Set<number>();
+    Object.values(obj || {}).forEach((ports) => {
+      (ports || []).forEach((p) => union.add(Number(p)));
+    });
+    const portsSorted = Array.from(union).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
+
+    if (portsSorted.length === 0) return <span className="text-hack-dim">-</span>;
+
+    const tooltip = Object.entries(obj)
+      .map(([ip, ports]) => `${ip}: ${(ports || []).join(', ')}`)
+      .join(' | ');
+
+    return (
+      <div className="flex flex-wrap gap-1" title={tooltip}>
+        {portsSorted.slice(0, 12).map((p) => (
+          <span key={p} className="px-1 py-0.5 bg-hack-primary/5 text-[9px] border border-hack-primary/20 text-hack-primary whitespace-nowrap">
+            {p}
+          </span>
+        ))}
+        {portsSorted.length > 12 && (
+          <span className="text-[9px] text-hack-dim border border-hack-border px-1 py-0.5 whitespace-nowrap">
+            +{portsSorted.length - 12}
+          </span>
+        )}
+      </div>
+    );
+  };
+
   const targetQuery = useQuery({ queryKey: ['target', targetId], queryFn: () => getTargetDetails(targetId), enabled: !!targetId });
   
   const assetsQuery = useQuery({ queryKey: ['assets', targetId, page, filterLive, filterHttpx, filterDnsOnly, filterNoCdn, filterHasCdn, filterHasWaf, filterHasCloud, debouncedSearch, sortBy, sortOrder], queryFn: () => getTargetAssets(targetId, page, 50, { is_live: filterLive, search: debouncedSearch, has_httpx: filterHttpx, dns_only: filterDnsOnly, no_cdn: filterNoCdn, has_cdn: filterHasCdn, has_waf: filterHasWaf, has_cloud: filterHasCloud }, sortBy, sortOrder), enabled: !!targetId && activeTab === 'assets' });
@@ -217,6 +254,7 @@ const TargetAssets = () => {
                     <SortableHeader field="value" label="Asset" className="w-[300px]" />
                     <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">DNS IP</th>
                     <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">HTTP IP</th>
+                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">Ports</th>
                     <SortableHeader field="status_code" label="Stat" className="w-[80px]" />
                     <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">CDN</th>
                     <SortableHeader field="title" label="Title" className="w-[250px]" />
@@ -279,6 +317,7 @@ const TargetAssets = () => {
                         </td>
                         <td className="px-6 py-3 align-top"><div className="flex flex-col gap-1">{dnsxIps.length > 0 ? dnsxIps.map((ip, idx) => <span key={idx} className="text-[10px] text-hack-secondary">{ip}</span>) : <span className="text-hack-dim">-</span>}</div></td>
                         <td className="px-6 py-3 align-top"><div className="flex flex-col gap-1">{httpxIps.length > 0 ? httpxIps.map((ip, idx) => <span key={idx} className="text-[10px] text-hack-dim">{ip}</span>) : <span className="text-hack-dim">-</span>}</div></td>
+                        <td className="px-6 py-3 align-top">{renderPortsCell((asset as any).open_ports)}</td>
                         <td className="px-6 py-3 align-top">{asset.is_live ? (statusCode > 0 ? <span className={`px-1.5 py-0.5 text-[10px] font-bold border ${statusCode >= 200 && statusCode < 300 ? 'border-hack-primary text-hack-primary' : statusCode >= 300 && statusCode < 400 ? 'border-hack-warning text-hack-warning' : 'border-hack-danger text-hack-danger'}`}>{statusCode}</span> : <span className="text-hack-dim">-</span>) : <span className="text-[10px] text-hack-dim border border-hack-dim px-1">DEAD</span>}</td>
                         <td className="px-6 py-3 align-top">
                             <div className="flex flex-col gap-1">

@@ -73,6 +73,7 @@ func CreateTarget(c *fiber.Ctx) error {
 		CurrentPhase: "QUEUED: STARTING...",
 		UseAlterx:    true,
 		UseWaymore:   false,
+		UsePortscan:  false,
 	}
 
 	if req.UseAlterx != nil {
@@ -80,6 +81,9 @@ func CreateTarget(c *fiber.Ctx) error {
 	}
 	if req.UseWaymore != nil {
 		target.UseWaymore = *req.UseWaymore
+	}
+	if req.UsePortscan != nil {
+		target.UsePortscan = *req.UsePortscan
 	}
 
 	if err := database.DB.Create(&target).Error; err != nil {
@@ -129,6 +133,9 @@ func UpdateTarget(c *fiber.Ctx) error {
 	}
 	if req.UseWaymore != nil {
 		target.UseWaymore = *req.UseWaymore
+	}
+	if req.UsePortscan != nil {
+		target.UsePortscan = *req.UsePortscan
 	}
 
 	// 👇👇👇 فیکس اصلی اینجاست: مرتب‌سازی لیست ماژول‌ها قبل از آپدیت دیتابیس
@@ -564,6 +571,7 @@ func toTargetResponse(t models.Target, assetCount int64) dto.TargetResponse {
 		CurrentPhase: t.CurrentPhase,
 		UseAlterx:    t.UseAlterx,
 		UseWaymore:   t.UseWaymore,
+		UsePortscan:  t.UsePortscan,
 		ScanModules:  t.ScanModules,
 	}
 }
@@ -577,31 +585,36 @@ func toAssetResponse(a models.Asset) dto.AssetResponse {
 	if a.RawHttpx != "" && a.RawHttpx != "{}" && a.RawHttpx != "null" {
 		_ = json.Unmarshal([]byte(a.RawHttpx), &rawHttpx)
 	}
+	var openPorts interface{}
+	if a.OpenPorts != "" && a.OpenPorts != "{}" && a.OpenPorts != "null" {
+		_ = json.Unmarshal([]byte(a.OpenPorts), &openPorts)
+	}
 
 	return dto.AssetResponse{
-		ID:            a.ID,
-		Value:         a.Value,
-		Type:          a.Type,
-		IsNew:         a.IsNew,
-		IsLive:        a.IsLive,
-		CreatedAt:     a.CreatedAt,
-		FinalURL:      a.FinalURL,
-		StatusCode:    a.StatusCode,
-		Title:         a.Title,
-		ContentLength: a.ContentLength,
-		HostIP:        a.HostIP,
-		DnsxIP:        a.DnsxIP,
-		WebServer:     a.WebServer,
-		CDNName:       a.CDNName,
-		Cdncheck:      a.Cdncheck,
-		CdncheckName:  a.CdncheckName,
-		Wafcheck:      a.Wafcheck,
-		WafcheckName:  a.WafcheckName,
-		Cloudcheck:    a.Cloudcheck,
+		ID:             a.ID,
+		Value:          a.Value,
+		Type:           a.Type,
+		IsNew:          a.IsNew,
+		IsLive:         a.IsLive,
+		CreatedAt:      a.CreatedAt,
+		FinalURL:       a.FinalURL,
+		StatusCode:     a.StatusCode,
+		Title:          a.Title,
+		ContentLength:  a.ContentLength,
+		HostIP:         a.HostIP,
+		DnsxIP:         a.DnsxIP,
+		WebServer:      a.WebServer,
+		CDNName:        a.CDNName,
+		Cdncheck:       a.Cdncheck,
+		CdncheckName:   a.CdncheckName,
+		Wafcheck:       a.Wafcheck,
+		WafcheckName:   a.WafcheckName,
+		Cloudcheck:     a.Cloudcheck,
 		CloudcheckName: a.CloudcheckName,
-		Technologies:  techs,
-		ResponseTime:  a.ResponseTimeMs,
-		RawHttpx:      rawHttpx,
+		Technologies:   techs,
+		ResponseTime:   a.ResponseTimeMs,
+		OpenPorts:      openPorts,
+		RawHttpx:       rawHttpx,
 	}
 }
 
@@ -613,12 +626,12 @@ type ExportTargetRequest struct {
 // ExportTarget هندلر Export یک یا چند تارگت به فرمت JSON استاندارد (شامل تمام داده‌های مرتبط)
 func ExportTarget(c *fiber.Ctx) error {
 	var req ExportTargetRequest
-	
+
 	// اگر method POST بود، body را parse می‌کنیم
 	if c.Method() == "POST" {
 		_ = c.BodyParser(&req) // خطا را ignore می‌کنیم
 	}
-	
+
 	// اگر method GET بود یا body خالی بود، از query param استفاده می‌کنیم
 	if len(req.TargetIDs) == 0 {
 		if id := c.Query("id"); id != "" {
@@ -628,10 +641,10 @@ func ExportTarget(c *fiber.Ctx) error {
 			}
 		}
 	}
-	
+
 	var targets []models.Target
 	var err error
-	
+
 	if len(req.TargetIDs) > 0 {
 		// Export تارگت‌های انتخاب شده
 		err = database.DB.Where("id IN ?", req.TargetIDs).Find(&targets).Error
@@ -694,6 +707,7 @@ func ExportTarget(c *fiber.Ctx) error {
 				HeaderHash:     a.HeaderHash,
 				ResponseTimeMs: a.ResponseTimeMs,
 				RawHttpx:       a.RawHttpx,
+				OpenPorts:      a.OpenPorts,
 				CreatedAt:      a.CreatedAt.Format(time.RFC3339),
 			}
 		}
@@ -719,6 +733,7 @@ func ExportTarget(c *fiber.Ctx) error {
 			Modules:     modules,
 			UseAlterx:   t.UseAlterx,
 			UseWaymore:  t.UseWaymore,
+			UsePortscan: t.UsePortscan,
 			Assets:      assetItems,
 			URLs:        urlItems,
 		}
@@ -799,6 +814,7 @@ func ImportTarget(c *fiber.Ctx) error {
 			CurrentPhase: "IDLE",
 			UseAlterx:    item.UseAlterx,
 			UseWaymore:   item.UseWaymore,
+			UsePortscan:  item.UsePortscan,
 		}
 
 		if err := database.DB.Create(&target).Error; err != nil {
@@ -814,14 +830,14 @@ func ImportTarget(c *fiber.Ctx) error {
 				if aItem.Value == "" {
 					continue
 				}
-				
+
 				createdAt := time.Now()
 				if aItem.CreatedAt != "" {
 					if parsed, err := time.Parse(time.RFC3339, aItem.CreatedAt); err == nil {
 						createdAt = parsed
 					}
 				}
-				
+
 				assets = append(assets, models.Asset{
 					TargetID:       target.ID,
 					Value:          aItem.Value,
@@ -841,6 +857,7 @@ func ImportTarget(c *fiber.Ctx) error {
 					HeaderHash:     aItem.HeaderHash,
 					ResponseTimeMs: aItem.ResponseTimeMs,
 					RawHttpx:       aItem.RawHttpx,
+					OpenPorts:      aItem.OpenPorts,
 					CreatedAt:      createdAt,
 				})
 			}
@@ -867,14 +884,14 @@ func ImportTarget(c *fiber.Ctx) error {
 				if uItem.Value == "" {
 					continue
 				}
-				
+
 				createdAt := time.Now()
 				if uItem.CreatedAt != "" {
 					if parsed, err := time.Parse(time.RFC3339, uItem.CreatedAt); err == nil {
 						createdAt = parsed
 					}
 				}
-				
+
 				urls = append(urls, models.FoundURL{
 					TargetID:  target.ID,
 					Value:     uItem.Value,
@@ -893,7 +910,7 @@ func ImportTarget(c *fiber.Ctx) error {
 				for _, u := range existingFoundURLs {
 					existingURLs[u.Value] = true
 				}
-				
+
 				// فیلتر کردن URLs که قبلاً وجود ندارند
 				newURLs := make([]models.FoundURL, 0)
 				for _, u := range urls {
@@ -901,7 +918,7 @@ func ImportTarget(c *fiber.Ctx) error {
 						newURLs = append(newURLs, u)
 					}
 				}
-				
+
 				if len(newURLs) > 0 {
 					if err := database.DB.CreateInBatches(newURLs, 500).Error; err != nil {
 						log.Printf("⚠️ Warning: Failed to import some URLs for target '%s': %v\n", item.RootDomain, err)

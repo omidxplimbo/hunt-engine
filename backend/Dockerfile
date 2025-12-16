@@ -36,8 +36,8 @@ FROM alpine:3.18
 LABEL maintainer="Omid Security Researcher"
 
 # 👇 نصب پایتون و ابزارهای بیلد مورد نیاز برای Waymore (gcc, headers, etc)
-# اضافه شدن: gcc python3-dev musl-dev linux-headers libffi-dev
-RUN apk --no-cache add ca-certificates bind-tools jq curl python3 py3-pip git gcc python3-dev musl-dev linux-headers libffi-dev
+# اضافه شدن: gcc python3-dev musl-dev linux-headers libffi-dev + nmap
+RUN apk --no-cache add ca-certificates bind-tools jq curl python3 py3-pip git gcc python3-dev musl-dev linux-headers libffi-dev nmap
 
 # نصب Waymore
 # نکته: Waymore نیاز به پایتون دارد. ما آن را از طریق pip نصب می‌کنیم.

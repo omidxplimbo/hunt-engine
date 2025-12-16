@@ -23,6 +23,8 @@ export interface CreateTargetPayload {
   use_alterx: boolean;
   // 👇 اضافه شد
   use_waymore: boolean;
+  // 👇 optional port scan during discovery
+  use_portscan: boolean;
 }
 
 export const createTarget = async (payload: CreateTargetPayload) => {
@@ -43,6 +45,8 @@ export interface UpdateTargetPayload {
   use_alterx?: boolean;
   // 👇 اضافه شد
   use_waymore?: boolean;
+  // 👇 optional port scan during discovery
+  use_portscan?: boolean;
 }
 
 export const updateTarget = async (id: number, payload: UpdateTargetPayload) => {
@@ -164,6 +168,7 @@ export interface TargetExportItem {
   modules: string[];
   use_alterx: boolean;
   use_waymore: boolean;
+  use_portscan: boolean;
   assets: AssetExportItem[];
   urls: URLExportItem[];
 }
@@ -186,6 +191,7 @@ export interface AssetExportItem {
   header_hash: string;
   response_time_ms: number;
   raw_httpx: string;
+  open_ports: string;
   created_at: string;
 }
 

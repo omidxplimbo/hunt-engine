@@ -12,6 +12,7 @@ export interface DashboardStats {
   fresh_assets: number;
   assets_by_status: CountItem[];
   top_technologies: CountItem[];
+  top_open_ports: CountItem[];
 }
 
 export const getDashboardStats = async () => {
