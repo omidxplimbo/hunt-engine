@@ -61,6 +61,7 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      - "4000:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/templates/default.conf.template:ro
       - ./nginx/nginx-init.conf:/etc/nginx/templates/init.conf.template:ro
@@ -69,11 +70,16 @@ services:
       - nginx_logs:/var/log/nginx
     environment:
       - DOMAIN_NAME=${DOMAIN_NAME:-localhost}
+      - SERVER_IP=${SERVER_IP:-109.248.160.151}
     command: >
-      sh -c "if [ -f /etc/letsencrypt/live/$${DOMAIN_NAME:-localhost}/fullchain.pem ]; then
-        envsubst '$$DOMAIN_NAME' < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf && echo 'Using SSL configuration';
+      sh -c "
+      if [ -z \"$$SERVER_IP\" ]; then
+        export SERVER_IP=109.248.160.151;
+      fi;
+      if [ -f /etc/letsencrypt/live/$${DOMAIN_NAME:-localhost}/fullchain.pem ]; then
+        envsubst '$$DOMAIN_NAME $$SERVER_IP' < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf && echo 'Using SSL configuration';
       else
-        envsubst '$$DOMAIN_NAME' < /etc/nginx/templates/init.conf.template > /etc/nginx/conf.d/default.conf && echo 'Using initial configuration (SSL not yet set up)';
+        envsubst '$$DOMAIN_NAME $$SERVER_IP' < /etc/nginx/templates/init.conf.template > /etc/nginx/conf.d/default.conf && echo 'Using initial configuration (SSL not yet set up)';
       fi && nginx -g 'daemon off;'"
     depends_on:
       - frontend
@@ -98,7 +104,7 @@ services:
       - dns_cache:/var/cache/bind
     environment:
       - DOMAIN_NAME=${DOMAIN_NAME:-localhost}
-      - SERVER_IP=${SERVER_IP:-}
+      - SERVER_IP=${SERVER_IP:-109.248.160.151}
     restart: unless-stopped
     # Note: When using host network mode, we can't use docker networks
     # but DNS server will be directly accessible on host IP

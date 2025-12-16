@@ -133,9 +133,48 @@ docker compose up -d
 ```
 
 4. **Access the dashboard:**
-* Frontend: `http://localhost:4000`
-* Backend API: `http://localhost:8080/api`
+* Frontend: `http://localhost:4000` or `http://localhost:80`
+* Backend API: `http://localhost:4000/api` or `http://localhost:80/api`
 * Default credentials: `admin` / `admin123` (⚠️ Change in production!)
+
+**Note:** In production, IP access is restricted to the server's own IP. External users must access via domain name.
+
+## 🔒 IP-Based Access Control
+
+The platform implements strict IP-based access control for security:
+
+### Access Rules
+
+1. **Server IP Access:**
+   - If you access from the server's own IP (`SERVER_IP`), you can use either:
+     - IP address: `http://YOUR_SERVER_IP:4000/` or `http://YOUR_SERVER_IP/`
+     - Domain name: `https://yourdomain.com`
+
+2. **External IP Access:**
+   - If you access from any other IP address:
+     - ❌ IP address access is **blocked** (403 Forbidden)
+     - ✅ Domain name access is **allowed** (HTTPS only)
+
+### Configuration
+
+Set `SERVER_IP` in your `.env` file:
+```env
+SERVER_IP=109.248.160.151  # Your server's public IP
+```
+
+### Security Benefits
+
+* **Prevents unauthorized IP access:** Only server administrators can access via IP
+* **Forces domain usage:** External users must use the domain name (better for SSL/security)
+* **Reduces attack surface:** IP-based attacks are blocked for non-server IPs
+
+### Error Messages
+
+When accessing from an external IP via IP address, you'll see:
+```
+شما دسترسی ندارید. لطفاً از طریق دامنه وارد شوید.
+Access Denied. Please use the domain name to access the site.
+```
 
 ## 🌐 Production Deployment with Domain & SSL
 
@@ -153,8 +192,10 @@ Add your domain configuration:
 ```env
 DOMAIN_NAME=yourdomain.com
 SSL_EMAIL=admin@yourdomain.com
-SERVER_IP=YOUR_SERVER_PUBLIC_IP
+SERVER_IP=YOUR_SERVER_PUBLIC_IP  # Required for IP-based access control
 ```
+
+**Important:** `SERVER_IP` is required for IP-based access control. Only requests from this IP can access the site via IP address. All other IPs must use the domain name.
 
 2. **Follow the complete setup guide:**
 ```bash
@@ -170,9 +211,14 @@ cat QUICK-STEPS.txt
 
 * **Self-Hosted DNS:** BIND9 DNS server for complete domain control
 * **SSL/TLS:** Automated Let's Encrypt certificates with auto-renewal
-* **HTTPS Only:** Automatic HTTP to HTTPS redirect
-* **Security:** IP blocking, security headers, rate limiting
+* **HTTPS Only:** Automatic HTTP to HTTPS redirect for domain access
+* **IP Access Control:** 
+  * Server IP can access via IP address (HTTP/HTTPS)
+  * External IPs are blocked from IP access (must use domain)
+  * Domain access is always allowed (HTTPS)
+* **Security:** IP-based access control, security headers, rate limiting
 * **Dynamic Configuration:** Easy domain changes via environment variables
+* **Port Configuration:** Access via port 80, 443, or custom port (e.g., 4000)
 
 ### Documentation
 
@@ -299,7 +345,11 @@ This order is enforced automatically, even if modules are specified in a differe
 * HTTP to HTTPS redirect
 * Security headers (HSTS, XSS Protection, etc.)
 * Rate limiting
-* IP-based access control (domain-only access)
+* **IP-based access control:** 
+  * Access via IP address is **only allowed from the server's own IP**
+  * External IP access attempts are blocked with 403 error
+  * Domain access is always allowed (HTTPS)
+  * Configure `SERVER_IP` in `.env` to set the allowed server IP
 
 ### SSL Management
 * Automated certificate generation with Let's Encrypt

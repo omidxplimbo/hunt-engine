@@ -1,7 +1,17 @@
 import axios from 'axios';
 
-// آدرس سرور از متغیر محیطی یا پیش‌فرض
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080/api';
+// آدرس سرور: همیشه از مسیر نسبی استفاده می‌کنیم تا با IP و دامنه کار کند
+// این باعث می‌شود که درخواست‌ها همیشه به همان host (IP یا دامنه) که از آن وارد شده‌ایم ارسال شوند
+const getApiBaseUrl = () => {
+  // در browser از window.location استفاده می‌کنیم
+  if (typeof window !== 'undefined') {
+    return `${window.location.origin}/api`;
+  }
+  // در server-side یا development از متغیر محیطی استفاده می‌کنیم
+  return import.meta.env.VITE_API_URL || 'http://localhost:8080/api';
+};
+
+const API_BASE_URL = getApiBaseUrl();
 
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
