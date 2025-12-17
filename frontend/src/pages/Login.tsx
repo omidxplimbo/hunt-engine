@@ -14,7 +14,7 @@ const Login = () => {
   const mutation = useMutation({
     mutationFn: loginUser,
     onSuccess: (data) => {
-      login(data.token, data.username);
+      login(data.token, data.username, data.role);
       navigate('/');
     },
     onError: () => {

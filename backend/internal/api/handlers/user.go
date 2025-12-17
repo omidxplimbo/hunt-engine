@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/api/dto"
@@ -9,6 +10,16 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/utils"
 )
+
+func normalizeRole(role string) (string, bool) {
+	r := strings.ToLower(strings.TrimSpace(role))
+	switch r {
+	case "admin", "viewer":
+		return r, true
+	default:
+		return "", false
+	}
+}
 
 // GetUsers لیست تمام کاربران را برمی‌گرداند
 func GetUsers(c *fiber.Ctx) error {
@@ -46,6 +57,11 @@ func AddUser(c *fiber.Ctx) error {
 	if user.Role == "" {
 		user.Role = "viewer"
 	}
+	if role, ok := normalizeRole(user.Role); ok {
+		user.Role = role
+	} else {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid role (allowed: admin, viewer)"})
+	}
 
 	if err := database.DB.Create(&user).Error; err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "User already exists or invalid data"})
@@ -71,14 +87,30 @@ func UpdateUser(c *fiber.Ctx) error {
 		user.Username = *req.Username
 	}
 	if req.Role != nil {
-		user.Role = *req.Role
+		newRole, ok := normalizeRole(*req.Role)
+		if !ok {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid role (allowed: admin, viewer)"})
+		}
+		// جلوگیری از حذف آخرین ادمین (demote)
+		if strings.ToLower(strings.TrimSpace(user.Role)) == "admin" && newRole != "admin" {
+			var otherAdmins int64
+			database.DB.Model(&models.User{}).
+				Where("role = ? AND id <> ?", "admin", user.ID).
+				Count(&otherAdmins)
+			if otherAdmins == 0 {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Cannot change role of the last admin user"})
+			}
+		}
+		user.Role = newRole
 	}
 	if req.Password != nil && *req.Password != "" {
 		hash, _ := utils.HashPassword(*req.Password)
 		user.Password = hash
 	}
 
-	database.DB.Save(&user)
+	if err := database.DB.Save(&user).Error; err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Failed to update user"})
+	}
 	return c.JSON(fiber.Map{"status": "success", "message": "User updated"})
 }
 
@@ -87,9 +119,27 @@ func DeleteUser(c *fiber.Ctx) error {
 	id, _ := strconv.Atoi(c.Params("id"))
 
 	// جلوگیری از حذف خود کاربر لاگین شده (اختیاری ولی توصیه میشه)
-	currentUserID := c.Locals("user_id").(float64)
-	if uint(currentUserID) == uint(id) {
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot delete yourself"})
+	currentUserID, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+	if currentUserID == uint(id) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot delete yourself via /users. Use /me"})
+	}
+
+	// جلوگیری از حذف آخرین ادمین
+	var user models.User
+	if err := database.DB.First(&user, id).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
+	}
+	if strings.ToLower(strings.TrimSpace(user.Role)) == "admin" {
+		var otherAdmins int64
+		database.DB.Model(&models.User{}).
+			Where("role = ? AND id <> ?", "admin", user.ID).
+			Count(&otherAdmins)
+		if otherAdmins == 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Cannot delete the last admin user"})
+		}
 	}
 
 	if err := database.DB.Delete(&models.User{}, id).Error; err != nil {

@@ -39,9 +39,20 @@ apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // اگر توکن منقضی شده بود، کاربر رو بنداز بیرون
-      localStorage.removeItem('token');
-      // window.location.href = '/login'; // فعلا کامنت می‌کنیم تا ریدایرکت دستی انجام بشه
+      // فقط در صورتی توکن را حذف می‌کنیم که واقعاً مشکل از توکن باشد.
+      // برای خطاهای منطقی مثل "Current password is incorrect" نباید کاربر از سیستم خارج شود.
+      const apiErrorMsg = (error.response?.data?.error || '').toString();
+      const shouldLogout =
+        apiErrorMsg === 'Invalid or expired token' ||
+        apiErrorMsg === 'Missing authorization token' ||
+        apiErrorMsg === 'Invalid token format';
+
+      if (shouldLogout) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('username');
+        localStorage.removeItem('role');
+        // window.location.href = '/login'; // فعلا کامنت می‌کنیم تا ریدایرکت دستی انجام بشه
+      }
     }
     return Promise.reject(error);
   }

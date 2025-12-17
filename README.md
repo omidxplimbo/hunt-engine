@@ -34,7 +34,29 @@ The system is built on a modern, containerized microservice-like architecture:
     * **Asset Explorer:** Advanced data grid with Filtering, Search, **Tabs for Assets vs URLs**.
     * **Intel Filtering:** Specific **JS Filtering** and **Multi-Source Filtering** (Wayback, Gau, Katana, Waymore) with **Sorting** capabilities.
     * **Data Import/Export:** Export targets with all related data (Assets, URLs) and import them back with duplicate handling.
-    * **User Management:** Admin panel to manage team access.
+    * **User Management:** Admin-only panel to manage team access.
+    * **Account:** Self-service account page (view profile + change password).
+
+---
+
+## 🔐 Access Control (RBAC) & Data Isolation
+
+The platform enforces **Role-Based Access Control** across the API and UI.
+
+### Roles
+- **admin**
+  - Full access to all targets and operations.
+  - **Only role allowed** to manage users (`/api/users/*`).
+- **viewer** (default)
+  - Can only see and operate on targets **created by the same user**.
+  - Can manage their own account via `/api/me` (view profile, change password, delete account).
+
+### Target Ownership
+Each `Target` has a `created_by_user_id` owner.
+- **admin**: can access all targets
+- **viewer**: can access only targets where `created_by_user_id == current_user_id`
+
+> Note: targets created before this feature may have `created_by_user_id = 0`. Those targets are only visible to **admin** until you backfill ownership.
 
 ## 🛠️ Arsenal (Toolchain)
 
@@ -301,6 +323,12 @@ This order is enforced automatically, even if modules are specified in a differe
 ### Authentication
 * `POST /api/auth/login` - Login and receive JWT token
 
+### Account (Self-Service)
+* `GET /api/me` - Get current user profile
+* `PATCH /api/me` - Update current user profile (e.g., username)
+* `POST /api/me/change-password` - Change password (requires current password)
+* `DELETE /api/me` - Delete own account (requires current password)
+
 ### Targets
 * `GET /api/targets` - List all targets (paginated)
 * `POST /api/targets` - Create new target
@@ -319,6 +347,15 @@ This order is enforced automatically, even if modules are specified in a differe
 * `GET /api/targets/:id/assets` - Get target assets (with filters)
 * `GET /api/targets/:id/urls` - Get target URLs (with filters)
 * `GET /api/targets/:id/ips` - Export unique target IPs as TXT (**non-CDN only**)
+
+### Dashboard
+* `GET /api/dashboard/stats` - Dashboard statistics (**scoped to current user** unless admin)
+
+### Users (Admin Only)
+* `GET /api/users` - List users
+* `POST /api/users` - Create user
+* `PATCH /api/users/:id` - Update user
+* `DELETE /api/users/:id` - Delete user
 
 #### Assets Filters (Query Params)
 You can combine these query params on `GET /api/targets/:id/assets`:

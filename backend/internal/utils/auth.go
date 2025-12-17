@@ -24,10 +24,11 @@ func CheckPasswordHash(password, hash string) bool {
 }
 
 // GenerateJWT یک توکن برای کاربر می‌سازد
-func GenerateJWT(userID uint, username string) (string, error) {
+func GenerateJWT(userID uint, username, role string) (string, error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"user_id":  userID,
 		"username": username,
+		"role":     role,
 		"exp":      time.Now().Add(time.Hour * 72).Unix(), // اعتبار: ۳ روز
 	})
 

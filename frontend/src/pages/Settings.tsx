@@ -3,8 +3,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getUsers, deleteUser } from '../api/users';
 import { UserModal } from '../components/UserModal';
 import { User, Plus, Edit2, Trash2, Shield } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { Navigate } from 'react-router-dom';
 
 const Settings = () => {
+  const { role } = useAuth();
+  if (role !== 'admin') return <Navigate to="/" replace />;
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
   const queryClient = useQueryClient();

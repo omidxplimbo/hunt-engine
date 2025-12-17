@@ -3,11 +3,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MainLayout } from './layouts/MainLayout';
 import { AuthProvider } from './context/AuthContext'; // 👈
 import { ProtectedRoute } from './components/ProtectedRoute'; // 👈
+import { AdminRoute } from './components/AdminRoute';
 import Login from './pages/Login'; // 👈
 import TargetsPage from './pages/TargetsPages';
 import TargetAssets from './pages/TargetAssets';
 import Settings from './pages/Settings';
 import Dashboard from './pages/Dashboard'; // 👈 ایمپورت از فایل جدید
+import Account from './pages/Account';
 
 
 const queryClient = new QueryClient({
@@ -33,9 +35,12 @@ function App() {
             <Route element={<ProtectedRoute />}>
               <Route path="/" element={<MainLayout />}>
                 <Route index element={<Dashboard />} />
+                <Route path="account" element={<Account />} />
                 <Route path="targets" element={<TargetsPage />} />
                 <Route path="targets/:id" element={<TargetAssets />} />
-                <Route path="settings" element={<Settings />} />
+                <Route element={<AdminRoute />}>
+                  <Route path="settings" element={<Settings />} />
+                </Route>
               </Route>
             </Route>
           </Routes>

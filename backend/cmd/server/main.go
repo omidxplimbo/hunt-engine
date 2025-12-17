@@ -82,11 +82,18 @@ func main() {
 	api.Get("/targets/:id/urls", handlers.GetTargetURLs) // 👈 این خط جدید است
 	api.Get("/targets/:id/ips", handlers.ExportTargetIPs) // Export IPs به صورت txt
 
-	// 👇👇👇 روت‌های مدیریت کاربران (User Management)
-	api.Get("/users", handlers.GetUsers)
-	api.Post("/users", handlers.AddUser)
-	api.Patch("/users/:id", handlers.UpdateUser)
-	api.Delete("/users/:id", handlers.DeleteUser)
+	// 👇 Self-service (کاربر روی اکانت خودش)
+	api.Get("/me", handlers.GetMe)
+	api.Patch("/me", handlers.UpdateMe)
+	api.Post("/me/change-password", handlers.ChangeMyPassword)
+	api.Delete("/me", handlers.DeleteMe)
+
+	// 👇👇👇 روت‌های مدیریت کاربران (فقط ادمین)
+	adminUsers := api.Group("/users", middleware.AdminOnly())
+	adminUsers.Get("/", handlers.GetUsers)
+	adminUsers.Post("/", handlers.AddUser)
+	adminUsers.Patch("/:id", handlers.UpdateUser)
+	adminUsers.Delete("/:id", handlers.DeleteUser)
 
 	api.Get("/dashboard/stats", handlers.GetDashboardStats)
 

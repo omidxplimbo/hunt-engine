@@ -15,6 +15,9 @@ type Target struct {
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 
+	// مالک تارگت (برای جداسازی دسترسی‌ها)
+	CreatedByUserID uint `gorm:"index;not null;default:0" json:"created_by_user_id"`
+
 	Name        string `gorm:"size:100;not null" json:"name"`
 	RootDomain  string `gorm:"size:255;not null;uniqueIndex" json:"root_domain"`
 	Description string `json:"description"`

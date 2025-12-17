@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
-import { Target, Settings, LayoutDashboard, LogOut, Menu, X } from 'lucide-react';
+import { Target, Settings, LayoutDashboard, LogOut, Menu, X, User2 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../context/AuthContext';
 import MustacheLogo from '../components/MustacheLogo';
 
 export const MainLayout = () => {
-  const { logout } = useAuth();
+  const { logout, role } = useAuth();
   const navigate = useNavigate();
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -72,11 +72,16 @@ export const MainLayout = () => {
             <NavItem to="/" icon={LayoutDashboard}>Dashboard</NavItem>
           </div>
           <div onClick={handleNavClick}>
-            <NavItem to="/targets" icon={Target}>Targets</NavItem>
+            <NavItem to="/account" icon={User2}>Account</NavItem>
           </div>
           <div onClick={handleNavClick}>
-            <NavItem to="/settings" icon={Settings}>System Config</NavItem>
+            <NavItem to="/targets" icon={Target}>Targets</NavItem>
           </div>
+          {role === 'admin' && (
+            <div onClick={handleNavClick}>
+              <NavItem to="/settings" icon={Settings}>System Config</NavItem>
+            </div>
+          )}
         </nav>
 
         <div className="p-4 border-t border-hack-border/50">

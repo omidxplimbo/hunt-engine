@@ -53,6 +53,11 @@ func CreateTarget(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "Invalid request body", "error": err.Error()})
 	}
 
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+
 	// 👇 مرتب‌سازی ماژول‌ها قبل از ذخیره
 	if len(req.Modules) > 0 {
 		req.Modules = sortScanModules(req.Modules)
@@ -63,6 +68,7 @@ func CreateTarget(c *fiber.Ctx) error {
 	modulesJSON, _ := json.Marshal(req.Modules)
 
 	target := models.Target{
+		CreatedByUserID: uid,
 		Name:         req.Name,
 		RootDomain:   req.RootDomain,
 		Description:  req.Description,
@@ -105,9 +111,11 @@ func CreateTarget(c *fiber.Ctx) error {
 // UpdateTarget ویرایش تارگت (جایی که باگ اصلی بود)
 func UpdateTarget(c *fiber.Ctx) error {
 	id := c.Params("id")
-	var target models.Target
-	if err := database.DB.First(&target, id).Error; err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Target not found"})
+	targetID := uint(0)
+	_, _ = fmt.Sscanf(id, "%d", &targetID)
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
 	}
 
 	req := new(dto.UpdateTargetRequest)
@@ -145,7 +153,7 @@ func UpdateTarget(c *fiber.Ctx) error {
 		target.ScanModules = string(bytes)
 	}
 
-	if err := database.DB.Save(&target).Error; err != nil {
+	if err := database.DB.Save(target).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to update target"})
 	}
 
@@ -162,9 +170,11 @@ func UpdateTarget(c *fiber.Ctx) error {
 // StartDiscovery هندلر شروع مجدد اسکن (هوشمند)
 func StartDiscovery(c *fiber.Ctx) error {
 	id := c.Params("id")
-	var target models.Target
-	if err := database.DB.First(&target, id).Error; err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Target not found"})
+	targetID := uint(0)
+	_, _ = fmt.Sscanf(id, "%d", &targetID)
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
 	}
 
 	if target.Status == "SCANNING" {
@@ -182,12 +192,12 @@ func StartDiscovery(c *fiber.Ctx) error {
 	// آپدیت کردن ترتیب درست در دیتابیس (برای اینکه ورکر در مراحل بعد گیج نشود)
 	sortedJSON, _ := json.Marshal(modules)
 	if string(sortedJSON) != target.ScanModules {
-		database.DB.Model(&target).Update("scan_modules", string(sortedJSON))
+		database.DB.Model(target).Update("scan_modules", string(sortedJSON))
 	}
 
 	firstModule := modules[0]
 
-	database.DB.Model(&target).Updates(map[string]interface{}{
+	database.DB.Model(target).Updates(map[string]interface{}{
 		"status":        "SCANNING",
 		"current_phase": fmt.Sprintf("QUEUED: STARTING %s...", firstModule),
 	})
@@ -226,7 +236,12 @@ func GetTargets(c *fiber.Ctx) error {
 	// Optional filter: only targets that have at least one asset with open ports
 	withPortsOnly := c.Query("with_ports") == "true"
 
-	cacheKey := fmt.Sprintf("targets:list:o:%d:l:%d:with_ports:%t", offset, limit, withPortsOnly)
+	scopedDB, uid, err := scopedTargetsDB(c)
+	if err != nil {
+		return err
+	}
+
+	cacheKey := fmt.Sprintf("targets:list:u:%d:r:%s:o:%d:l:%d:with_ports:%t", uid, currentUserRole(c), offset, limit, withPortsOnly)
 
 	var cachedResponse fiber.Map
 	if cache.GetCache(cacheKey, &cachedResponse) {
@@ -235,7 +250,7 @@ func GetTargets(c *fiber.Ctx) error {
 	}
 
 	var targets []models.Target
-	db := database.DB.Model(&models.Target{}).Order("created_at desc")
+	db := scopedDB.Order("created_at desc")
 	if withPortsOnly {
 		// open_ports is jsonb (default '{}'); we consider "has ports" when it's a non-empty JSON object
 		db = db.Where(`
@@ -263,7 +278,7 @@ func GetTargets(c *fiber.Ctx) error {
 	}
 
 	var totalTargets int64
-	countDB := database.DB.Model(&models.Target{})
+	countDB := scopedDB
 	if withPortsOnly {
 		countDB = countDB.Where(`
 			EXISTS (
@@ -293,9 +308,11 @@ func GetTargets(c *fiber.Ctx) error {
 // GetTargetDetails جزئیات یک تارگت خاص را برمی‌گرداند
 func GetTargetDetails(c *fiber.Ctx) error {
 	id := c.Params("id")
-	var target models.Target
-	if err := database.DB.First(&target, id).Error; err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Target not found"})
+	targetID := uint(0)
+	_, _ = fmt.Sscanf(id, "%d", &targetID)
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
 	}
 
 	var count int64
@@ -303,7 +320,7 @@ func GetTargetDetails(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{
 		"status": "success",
-		"data":   toTargetResponse(target, count),
+		"data":   toTargetResponse(*target, count),
 	})
 }
 
@@ -312,6 +329,11 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	id := c.Params("id")
 	targetID := uint(0)
 	fmt.Sscanf(id, "%d", &targetID)
+
+	// Access control: target باید متعلق به کاربر باشد (مگر admin)
+	if _, err := getAccessibleTarget(c, targetID); err != nil {
+		return err
+	}
 
 	limit := utils.DefaultLimit
 	if l, err := strconv.Atoi(c.Query("limit")); err == nil && l > 0 {
@@ -446,23 +468,25 @@ func GetTargetAssets(c *fiber.Ctx) error {
 // StartProbing هندلر شروع دستی فاز ۲
 func StartProbing(c *fiber.Ctx) error {
 	id := c.Params("id")
-	var target models.Target
-	if err := database.DB.First(&target, id).Error; err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Target not found"})
+	targetID := uint(0)
+	_, _ = fmt.Sscanf(id, "%d", &targetID)
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
 	}
 
 	if target.Status == "SCANNING" {
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"status": "error", "message": "Target is already being scanned."})
 	}
 
-	database.DB.Model(&target).Updates(map[string]interface{}{
+	database.DB.Model(target).Updates(map[string]interface{}{
 		"status":        "SCANNING",
 		"current_phase": "QUEUED: STARTING PHASE 2...",
 	})
 
 	taskPayload := fmt.Sprintf("PROBING:%d:%s", target.ID, target.RootDomain)
 	if err := redisq.Client.RPush(redisq.Ctx, redisq.QueueName, taskPayload).Err(); err != nil {
-		database.DB.Model(&target).Update("status", "READY")
+		database.DB.Model(target).Update("status", "READY")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to enqueue job"})
 	}
 
@@ -475,10 +499,21 @@ func StartProbing(c *fiber.Ctx) error {
 // DeleteTarget حذف کامل تارگت
 func DeleteTarget(c *fiber.Ctx) error {
 	id := c.Params("id")
+	targetID := uint(0)
+	_, _ = fmt.Sscanf(id, "%d", &targetID)
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+	admin := isAdmin(c)
 
-	err := database.DB.Transaction(func(tx *gorm.DB) error {
+	err = database.DB.Transaction(func(tx *gorm.DB) error {
 		var target models.Target
-		if err := tx.First(&target, id).Error; err != nil {
+		q := tx.Model(&models.Target{})
+		if !admin {
+			q = q.Where("created_by_user_id = ?", uid)
+		}
+		if err := q.First(&target, targetID).Error; err != nil {
 			return err
 		}
 
@@ -515,7 +550,13 @@ func DeleteTarget(c *fiber.Ctx) error {
 // StopScan درخواست توقف اسکن
 func StopScan(c *fiber.Ctx) error {
 	id := c.Params("id")
-	if err := database.DB.Model(&models.Target{}).Where("id = ?", id).Update("stop_requested", true).Error; err != nil {
+	targetID := uint(0)
+	_, _ = fmt.Sscanf(id, "%d", &targetID)
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
+	}
+	if err := database.DB.Model(target).Update("stop_requested", true).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to stop scan"})
 	}
 	return c.JSON(fiber.Map{"status": "success", "message": "Stop signal sent. Scan will halt shortly."})
@@ -526,6 +567,11 @@ func GetTargetURLs(c *fiber.Ctx) error {
 	id := c.Params("id")
 	targetID := uint(0)
 	fmt.Sscanf(id, "%d", &targetID)
+
+	// Access control: target باید متعلق به کاربر باشد (مگر admin)
+	if _, err := getAccessibleTarget(c, targetID); err != nil {
+		return err
+	}
 
 	limit := utils.DefaultLimit
 	if l, err := strconv.Atoi(c.Query("limit")); err == nil && l > 0 {
@@ -689,11 +735,14 @@ func ExportTarget(c *fiber.Ctx) error {
 	}
 
 	var targets []models.Target
-	var err error
+	scopedDB, _, err := scopedTargetsDB(c)
+	if err != nil {
+		return err
+	}
 
 	if len(req.TargetIDs) > 0 {
 		// Export تارگت‌های انتخاب شده
-		err = database.DB.Where("id IN ?", req.TargetIDs).Find(&targets).Error
+		err = scopedDB.Where("id IN ?", req.TargetIDs).Find(&targets).Error
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 				"status":  "error",
@@ -707,9 +756,16 @@ func ExportTarget(c *fiber.Ctx) error {
 				"message": "No targets found",
 			})
 		}
+		// اگر بخشی از IDها قابل دسترسی نبودند، به صورت 404 برگردون
+		if len(targets) != len(req.TargetIDs) {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+				"status":  "error",
+				"message": "Some targets not found",
+			})
+		}
 	} else {
 		// Export همه تارگت‌ها
-		err = database.DB.Find(&targets).Error
+		err = scopedDB.Find(&targets).Error
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 				"status":  "error",
@@ -800,6 +856,11 @@ func ExportTarget(c *fiber.Ctx) error {
 
 // ImportTarget هندلر Import تارگت‌ها از فایل JSON
 func ImportTarget(c *fiber.Ctx) error {
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+
 	req := new(dto.ImportTargetRequest)
 	if err := c.BodyParser(req); err != nil {
 		log.Printf("❌ Import error - BodyParser failed: %v\n", err)
@@ -850,6 +911,7 @@ func ImportTarget(c *fiber.Ctx) error {
 
 		// ایجاد تارگت جدید
 		target := models.Target{
+			CreatedByUserID: uid,
 			Name:         item.Name,
 			RootDomain:   item.RootDomain,
 			Description:  item.Description,
@@ -1002,12 +1064,9 @@ func ExportTargetIPs(c *fiber.Ctx) error {
 	fmt.Sscanf(id, "%d", &targetID)
 
 	// دریافت اطلاعات تارگت برای root_domain
-	var target models.Target
-	if err := database.DB.First(&target, targetID).Error; err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
-			"status":  "error",
-			"message": "Target not found",
-		})
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
 	}
 
 	// دریافت assets این تارگت (فقط اونهایی که پشت CDN نیستند)

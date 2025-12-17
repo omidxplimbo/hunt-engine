@@ -19,5 +19,5 @@ type User struct {
 	// json:"-" باعث می‌شود پسورد هرگز در خروجی API ارسال نشود
 	Password string `gorm:"not null" json:"-"`
 
-	Role string `gorm:"default:'admin'" json:"role"` // admin, viewer
+	Role string `gorm:"default:'viewer'" json:"role"` // admin, viewer
 }

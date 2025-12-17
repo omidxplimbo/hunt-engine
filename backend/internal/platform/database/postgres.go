@@ -51,6 +51,10 @@ func Connect() {
 		log.Fatal("❌ Auto-migration failed! \n", err)
 	}
 
+	// Hardening defaults (idempotent best-effort)
+	_ = DB.Exec("ALTER TABLE users ALTER COLUMN role SET DEFAULT 'viewer'").Error
+	_ = DB.Exec("UPDATE users SET role = 'viewer' WHERE role IS NULL OR role = ''").Error
+
 	log.Println("✅ Auto-migration completed successfully! Tables are ready.")
 }
 
