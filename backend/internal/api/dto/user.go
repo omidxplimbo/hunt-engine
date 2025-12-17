@@ -7,6 +7,7 @@ type UserResponse struct {
 	ID        uint      `json:"id"`
 	Username  string    `json:"username"`
 	Role      string    `json:"role"`
+	IsActive  bool      `json:"is_active"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -18,4 +19,5 @@ type UpdateUserRequest struct {
 	Username *string `json:"username"`
 	Password *string `json:"password"` // اختیاری (اگر خالی بود تغییر نکند)
 	Role     *string `json:"role"`
+	IsActive *bool   `json:"is_active"`
 }

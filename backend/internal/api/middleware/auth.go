@@ -32,33 +32,35 @@ func Protected() fiber.Handler {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid or expired token"})
 		}
 
-		// ذخیره اطلاعات کاربر در کانتکست برای استفاده در هندلرها
-		c.Locals("user_id", claims["user_id"])
-		c.Locals("username", claims["username"])
-		// role ممکن است در توکن‌های قدیمی وجود نداشته باشد، پس fallback می‌زنیم
-		if roleVal, ok := claims["role"]; ok {
-			if roleStr, ok2 := roleVal.(string); ok2 {
-				c.Locals("role", roleStr)
-			}
+		// همیشه اطلاعات کاربر را از DB می‌خوانیم تا:
+		// - اگر user دی‌اکتیو شد حتی با توکن قبلی هم دسترسی نداشته باشد
+		// - اگر role تغییر کرد سریع اعمال شود
+		var uid uint
+		switch v := claims["user_id"].(type) {
+		case float64:
+			uid = uint(v)
+		case int:
+			uid = uint(v)
+		case uint:
+			uid = v
 		}
-		if c.Locals("role") == nil {
-			// Fallback: role را از دیتابیس می‌خوانیم (برای سازگاری با توکن‌های قدیمی)
-			var uid uint
-			switch v := claims["user_id"].(type) {
-			case float64:
-				uid = uint(v)
-			case int:
-				uid = uint(v)
-			case uint:
-				uid = v
-			}
-			if uid > 0 {
-				var user models.User
-				if err := database.DB.Select("id", "role").First(&user, uid).Error; err == nil {
-					c.Locals("role", user.Role)
-				}
-			}
+		if uid == 0 {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid or expired token"})
 		}
+
+		var user models.User
+		if err := database.DB.Select("id", "username", "role", "is_active").First(&user, uid).Error; err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid or expired token"})
+		}
+		if !user.IsActive {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+				"error": "Account is deactivated. Please contact an administrator.",
+			})
+		}
+
+		c.Locals("user_id", user.ID)
+		c.Locals("username", user.Username)
+		c.Locals("role", user.Role)
 
 		return c.Next()
 	}

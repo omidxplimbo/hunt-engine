@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getUsers, deleteUser } from '../api/users';
+import { getUsers, deleteUser, updateUser } from '../api/users';
 import { UserModal } from '../components/UserModal';
-import { User, Plus, Edit2, Trash2, Shield } from 'lucide-react';
+import { User, Plus, Edit2, Trash2, Shield, Power } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Navigate } from 'react-router-dom';
 
@@ -17,6 +17,10 @@ const Settings = () => {
   const { data, isLoading } = useQuery({ queryKey: ['users'], queryFn: getUsers });
   const deleteMutation = useMutation({
     mutationFn: deleteUser,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] })
+  });
+  const toggleActiveMutation = useMutation({
+    mutationFn: ({ id, is_active }: { id: number; is_active: boolean }) => updateUser(id, { is_active }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] })
   });
 
@@ -52,13 +56,14 @@ const Settings = () => {
                 <tr className="bg-hack-bg/50 text-hack-dim text-[10px] uppercase tracking-[0.2em] border-b border-hack-border">
                 <th className="px-6 py-4 font-normal">Identity</th>
                 <th className="px-6 py-4 font-normal">Clearance Level</th>
+                <th className="px-6 py-4 font-normal">Status</th>
                 <th className="px-6 py-4 font-normal">Registration Date</th>
                 <th className="px-6 py-4 font-normal text-right">Override</th>
                 </tr>
             </thead>
             <tbody className="divide-y divide-hack-border/30">
                 {isLoading ? 
-                <tr><td className="p-8 text-center font-mono text-hack-dim animate-pulse" colSpan={4}> DECRYPTING USER DATA...</td></tr> : 
+                <tr><td className="p-8 text-center font-mono text-hack-dim animate-pulse" colSpan={5}> DECRYPTING USER DATA...</td></tr> : 
                 data?.data.map((user) => (
                 <tr key={user.id} className="hover:bg-hack-primary/5 transition-colors group font-mono text-sm">
                     <td className="px-6 py-4 text-white">
@@ -74,11 +79,23 @@ const Settings = () => {
                             {user.role}
                         </span>
                     </td>
+                    <td className="px-6 py-4">
+                      <span className={`hack-badge ${user.is_active ? 'border-hack-primary/60 text-hack-primary bg-hack-primary/5' : 'border-hack-danger/60 text-hack-danger bg-hack-danger/5'}`}>
+                        {user.is_active ? 'active' : 'deactive'}
+                      </span>
+                    </td>
                     <td className="px-6 py-4 text-hack-dim text-xs tracking-wider">
                         {new Date(user.created_at).toLocaleDateString()}
                     </td>
                     <td className="px-6 py-4 text-right">
                     <div className="flex justify-end gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={() => toggleActiveMutation.mutate({ id: user.id, is_active: !user.is_active })}
+                          className={`p-2 transition-colors ${user.is_active ? 'hover:text-hack-warning' : 'hover:text-hack-primary'}`}
+                          title={user.is_active ? 'DEACTIVATE' : 'ACTIVATE'}
+                        >
+                          <Power size={16} />
+                        </button>
                         <button onClick={() => { setEditingUser(user); setIsModalOpen(true); }} className="p-2 hover:text-hack-primary transition-colors" title="MODIFY">
                             <Edit2 size={16} />
                         </button>

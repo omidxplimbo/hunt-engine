@@ -20,4 +20,7 @@ type User struct {
 	Password string `gorm:"not null" json:"-"`
 
 	Role string `gorm:"default:'viewer'" json:"role"` // admin, viewer
+
+	// Active / Deactive: اگر false باشد کاربر نمی‌تواند وارد سیستم شود و به API دسترسی ندارد
+	IsActive bool `gorm:"default:true" json:"is_active"`
 }

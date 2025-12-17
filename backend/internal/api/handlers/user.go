@@ -7,8 +7,10 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/api/dto"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/cache"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/utils"
+	"gorm.io/gorm"
 )
 
 func normalizeRole(role string) (string, bool) {
@@ -34,6 +36,7 @@ func GetUsers(c *fiber.Ctx) error {
 			ID:        u.ID,
 			Username:  u.Username,
 			Role:      u.Role,
+			IsActive:  u.IsActive,
 			CreatedAt: u.CreatedAt,
 		})
 	}
@@ -53,6 +56,7 @@ func AddUser(c *fiber.Ctx) error {
 		Username: req.Username,
 		Password: hashedPassword,
 		Role:     req.Role,
+		IsActive: true,
 	}
 	if user.Role == "" {
 		user.Role = "viewer"
@@ -107,11 +111,39 @@ func UpdateUser(c *fiber.Ctx) error {
 		hash, _ := utils.HashPassword(*req.Password)
 		user.Password = hash
 	}
+	if req.IsActive != nil {
+		// جلوگیری از دی‌اکتیو کردن خود ادمین لاگین شده (برای جلوگیری از قفل شدن)
+		currentUserID, err := currentUserID(c)
+		if err != nil {
+			return err
+		}
+		if currentUserID == user.ID && !*req.IsActive {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Cannot deactivate yourself"})
+		}
+		user.IsActive = *req.IsActive
+	}
 
 	if err := database.DB.Save(&user).Error; err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Failed to update user"})
 	}
 	return c.JSON(fiber.Map{"status": "success", "message": "User updated"})
+}
+
+func deleteTargetDeep(tx *gorm.DB, targetID uint) error {
+	// حذف کامل دیتای مرتبط
+	if err := tx.Exec("DELETE FROM asset_histories WHERE asset_id IN (SELECT id FROM assets WHERE target_id = ?)", targetID).Error; err != nil {
+		return err
+	}
+	if err := tx.Exec("DELETE FROM assets WHERE target_id = ?", targetID).Error; err != nil {
+		return err
+	}
+	if err := tx.Exec("DELETE FROM found_urls WHERE target_id = ?", targetID).Error; err != nil {
+		return err
+	}
+	if err := tx.Unscoped().Delete(&models.Target{}, targetID).Error; err != nil {
+		return err
+	}
+	return nil
 }
 
 // DeleteUser حذف کاربر
@@ -142,8 +174,30 @@ func DeleteUser(c *fiber.Ctx) error {
 		}
 	}
 
-	if err := database.DB.Delete(&models.User{}, id).Error; err != nil {
+	// حذف کامل کاربر + تمام تارگت‌ها و دیتای مرتبط
+	err = database.DB.Transaction(func(tx *gorm.DB) error {
+		// گرفتن تارگت‌های کاربر
+		var targets []models.Target
+		if err := tx.Select("id").Where("created_by_user_id = ?", uint(id)).Find(&targets).Error; err != nil {
+			return err
+		}
+		for _, t := range targets {
+			if err := deleteTargetDeep(tx, t.ID); err != nil {
+				return err
+			}
+		}
+		// حذف کامل خود کاربر
+		if err := tx.Unscoped().Delete(&models.User{}, uint(id)).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete user"})
 	}
-	return c.JSON(fiber.Map{"status": "success", "message": "User deleted"})
+
+	// پاک کردن کش‌های لیست تارگت‌ها
+	cache.ClearCache()
+
+	return c.JSON(fiber.Map{"status": "success", "message": "User deleted permanently"})
 }

@@ -17,8 +17,9 @@ const Login = () => {
       login(data.token, data.username, data.role);
       navigate('/');
     },
-    onError: () => {
-      setErrorMsg('>> ACCESS DENIED: Invalid credentials provided.');
+    onError: (err: any) => {
+      const apiErr = err?.response?.data?.error;
+      setErrorMsg(apiErr || '>> ACCESS DENIED: Invalid credentials provided.');
     }
   });
 

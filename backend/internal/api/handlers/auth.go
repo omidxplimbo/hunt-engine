@@ -26,6 +26,13 @@ func Login(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid username or password"})
 	}
 
+	// اگر کاربر دی‌اکتیو باشد اجازه ورود ندارد
+	if !user.IsActive {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Account is deactivated. Please contact an administrator.",
+		})
+	}
+
 	// تولید توکن
 	token, err := utils.GenerateJWT(user.ID, user.Username, user.Role)
 	if err != nil {

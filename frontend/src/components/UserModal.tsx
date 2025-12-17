@@ -11,21 +11,30 @@ interface Props {
 
 export const UserModal = ({ isOpen, onClose, user }: Props) => {
   const queryClient = useQueryClient();
-  const [formData, setFormData] = useState({ username: '', password: '', role: 'admin' });
+  const [formData, setFormData] = useState({ username: '', password: '', role: 'admin', is_active: true });
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (user) {
-      setFormData({ username: user.username, password: '', role: user.role });
+      setFormData({ username: user.username, password: '', role: user.role, is_active: user.is_active ?? true });
     } else {
-      setFormData({ username: '', password: '', role: 'admin' });
+      setFormData({ username: '', password: '', role: 'admin', is_active: true });
     }
+    setErrorMsg(null);
   }, [user, isOpen]);
 
   const mutation = useMutation({
     mutationFn: (data: any) => user ? updateUser(user.id, data) : createUser(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['users'] });
+    onSuccess: async () => {
+      setErrorMsg(null);
+      // هم invalidate و هم refetch تا لیست بلافاصله آپدیت شود
+      await queryClient.invalidateQueries({ queryKey: ['users'] });
+      await queryClient.refetchQueries({ queryKey: ['users'] });
       onClose();
+    },
+    onError: (err: any) => {
+      const apiErr = err?.response?.data?.error;
+      setErrorMsg(apiErr || 'Failed to save user');
     },
   });
 
@@ -45,7 +54,21 @@ export const UserModal = ({ isOpen, onClose, user }: Props) => {
           </button>
         </div>
 
-        <form onSubmit={(e) => { e.preventDefault(); mutation.mutate(formData); }} className="p-6 space-y-5">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            setErrorMsg(null);
+            mutation.mutate(formData);
+          }}
+          className="p-6 space-y-5"
+        >
+
+          {errorMsg && (
+            <div className="bg-hack-danger/10 border-l-2 border-hack-danger text-hack-danger text-xs font-mono p-3 flex items-center gap-2">
+              <ShieldAlert size={14} />
+              <span className="font-bold">{errorMsg}</span>
+            </div>
+          )}
           
           <div className="space-y-1 group">
             <label className="text-[10px] uppercase text-hack-dim tracking-widest group-focus-within:text-hack-primary transition-colors">Username ID</label>
@@ -69,6 +92,8 @@ export const UserModal = ({ isOpen, onClose, user }: Props) => {
             <div className="relative">
                 <input 
                     type="password" 
+                    required={!user}
+                    minLength={user ? undefined : 6}
                     className="hack-input w-full pl-8"
                     placeholder="••••••••"
                     value={formData.password} 
@@ -87,6 +112,18 @@ export const UserModal = ({ isOpen, onClose, user }: Props) => {
             >
               <option value="admin">LEVEL 5 (ADMIN)</option>
               <option value="viewer">LEVEL 1 (VIEWER)</option>
+            </select>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase text-hack-dim tracking-widest">Account Status</label>
+            <select
+              className="hack-input w-full appearance-none cursor-pointer"
+              value={formData.is_active ? 'active' : 'deactive'}
+              onChange={(e) => setFormData({ ...formData, is_active: e.target.value === 'active' })}
+            >
+              <option value="active">ACTIVE</option>
+              <option value="deactive">DEACTIVE</option>
             </select>
           </div>
 
