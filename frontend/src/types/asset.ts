@@ -44,6 +44,7 @@ export interface AssetFilters {
   search?: string;
   has_httpx?: boolean;
   dns_only?: boolean;
+  has_ports?: boolean; // 👈 فقط آیتم‌هایی که برایشان پورت ثبت شده
   no_cdn?: boolean; // 👈 فیلتر برای نمایش فقط ساب‌دامین‌های بدون CDN
   has_cdn?: boolean; // 👈 فقط آیتم‌هایی که CDN دارند
   has_waf?: boolean; // 👈 فقط آیتم‌هایی که WAF دارند

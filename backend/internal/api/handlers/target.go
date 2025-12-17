@@ -223,7 +223,10 @@ func GetTargets(c *fiber.Ctx) error {
 		offset = (page - 1) * limit
 	}
 
-	cacheKey := fmt.Sprintf("targets:list:o:%d:l:%d", offset, limit)
+	// Optional filter: only targets that have at least one asset with open ports
+	withPortsOnly := c.Query("with_ports") == "true"
+
+	cacheKey := fmt.Sprintf("targets:list:o:%d:l:%d:with_ports:%t", offset, limit, withPortsOnly)
 
 	var cachedResponse fiber.Map
 	if cache.GetCache(cacheKey, &cachedResponse) {
@@ -232,7 +235,22 @@ func GetTargets(c *fiber.Ctx) error {
 	}
 
 	var targets []models.Target
-	result := database.DB.Order("created_at desc").Limit(limit).Offset(offset).Find(&targets)
+	db := database.DB.Model(&models.Target{}).Order("created_at desc")
+	if withPortsOnly {
+		// open_ports is jsonb (default '{}'); we consider "has ports" when it's a non-empty JSON object
+		db = db.Where(`
+			EXISTS (
+				SELECT 1
+				FROM assets a
+				WHERE a.target_id = targets.id
+				  AND a.open_ports IS NOT NULL
+				  AND a.open_ports <> '{}'::jsonb
+				  AND a.open_ports <> 'null'::jsonb
+			)
+		`)
+	}
+
+	result := db.Limit(limit).Offset(offset).Find(&targets)
 	if result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": result.Error.Error()})
 	}
@@ -245,7 +263,20 @@ func GetTargets(c *fiber.Ctx) error {
 	}
 
 	var totalTargets int64
-	database.DB.Model(&models.Target{}).Count(&totalTargets)
+	countDB := database.DB.Model(&models.Target{})
+	if withPortsOnly {
+		countDB = countDB.Where(`
+			EXISTS (
+				SELECT 1
+				FROM assets a
+				WHERE a.target_id = targets.id
+				  AND a.open_ports IS NOT NULL
+				  AND a.open_ports <> '{}'::jsonb
+				  AND a.open_ports <> 'null'::jsonb
+			)
+		`)
+	}
+	countDB.Count(&totalTargets)
 
 	response := fiber.Map{
 		"status": "success",
@@ -301,6 +332,7 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	search := c.Query("search")
 	hasHttpx := c.Query("has_httpx")
 	dnsOnly := c.Query("dns_only")
+	hasPorts := c.Query("has_ports")
 	noCdn := c.Query("no_cdn")
 	hasCdn := c.Query("has_cdn")
 	hasWaf := c.Query("has_waf")
@@ -321,7 +353,7 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	}
 	orderClause := fmt.Sprintf("%s %s", sortBy, order)
 
-	filtersKey := fmt.Sprintf("l:%s|n:%s|s:%s|h:%s|d:%s|no_cdn:%s|cdn:%s|waf:%s|cloud:%s|sb:%s|o:%s", isLive, isNew, search, hasHttpx, dnsOnly, noCdn, hasCdn, hasWaf, hasCloud, sortBy, order)
+	filtersKey := fmt.Sprintf("l:%s|n:%s|s:%s|h:%s|d:%s|p:%s|no_cdn:%s|cdn:%s|waf:%s|cloud:%s|sb:%s|o:%s", isLive, isNew, search, hasHttpx, dnsOnly, hasPorts, noCdn, hasCdn, hasWaf, hasCloud, sortBy, order)
 	cacheKey := cache.GenerateAssetKey(targetID, offset, limit, filtersKey)
 
 	var cachedResponse fiber.Map
@@ -348,6 +380,20 @@ func GetTargetAssets(c *fiber.Ctx) error {
 
 	if dnsOnly == "true" {
 		db = db.Where("jsonb_array_length(dnsx_ip) > 0 AND jsonb_array_length(host_ip) = 0")
+	}
+
+	if hasPorts == "true" {
+		// open_ports: jsonb object per IP, default '{}'.
+		// "Has ports" یعنی حداقل برای یکی از IPها آرایه پورت‌ها خالی نباشه.
+		db = db.Where(`
+			jsonb_typeof(open_ports) = 'object'
+			AND EXISTS (
+				SELECT 1
+				FROM jsonb_each(open_ports) e
+				WHERE jsonb_typeof(e.value) = 'array'
+				  AND jsonb_array_length(e.value) > 0
+			)
+		`)
 	}
 
 	if hasCdn == "true" {

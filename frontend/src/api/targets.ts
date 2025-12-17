@@ -5,10 +5,18 @@ import type { AssetResponse, AssetFilters } from '../types/asset';
 // --- بخش مدیریت تارگت‌ها (Targets) ---
 
 // دریافت لیست تارگت‌ها (با صفحه‌بندی)
-export const getTargets = async (page = 1, limit = 50) => {
+export const getTargets = async (
+  page = 1,
+  limit = 50,
+  options?: { withPorts?: boolean }
+) => {
   const offset = (page - 1) * limit;
   const response = await apiClient.get<TargetResponse>('/targets', {
-    params: { limit, offset },
+    params: {
+      limit,
+      offset,
+      ...(options?.withPorts ? { with_ports: true } : {}),
+    },
   });
   return response.data;
 };
@@ -78,6 +86,7 @@ export const getTargetAssets = async (
   if (filters?.search) params.search = filters.search;
   if (filters?.has_httpx !== undefined) params.has_httpx = filters.has_httpx;
   if (filters?.dns_only !== undefined) params.dns_only = filters.dns_only;
+  if (filters?.has_ports !== undefined) params.has_ports = filters.has_ports;
   if (filters?.no_cdn !== undefined) params.no_cdn = filters.no_cdn;
   if (filters?.has_cdn !== undefined) params.has_cdn = filters.has_cdn;
   if (filters?.has_waf !== undefined) params.has_waf = filters.has_waf;

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { getTargetAssets, getTargetDetails, getTargetURLs, exportTargetIPs } from '../api/targets';
-import { ArrowLeft, Globe, CheckCircle, XCircle, Search, Monitor, Loader2, Network, ArrowUp, ArrowDown, Link2, FileText, Database, FileCode, Shield, Download, Cloud } from 'lucide-react';
+import { ArrowLeft, Globe, CheckCircle, XCircle, Search, Monitor, Loader2, Network, ArrowUp, ArrowDown, Link2, FileText, Database, FileCode, Shield, Download, Cloud, Terminal } from 'lucide-react';
 import clsx from 'clsx';
 
 const KNOWN_SOURCES = [
@@ -24,6 +24,7 @@ const TargetAssets = () => {
   const [filterLive, setFilterLive] = useState<boolean | undefined>(undefined);
   const [filterHttpx, setFilterHttpx] = useState<boolean | undefined>(undefined);
   const [filterDnsOnly, setFilterDnsOnly] = useState<boolean | undefined>(undefined);
+  const [filterHasPorts, setFilterHasPorts] = useState<boolean | undefined>(undefined);
   const [filterNoCdn, setFilterNoCdn] = useState<boolean | undefined>(undefined);
   const [filterHasCdn, setFilterHasCdn] = useState<boolean | undefined>(undefined);
   const [filterHasWaf, setFilterHasWaf] = useState<boolean | undefined>(undefined);
@@ -47,13 +48,16 @@ const TargetAssets = () => {
   useEffect(() => { 
       setPage(1); 
       setSearchTerm(""); 
-  }, [filterLive, filterHttpx, filterDnsOnly, filterNoCdn, filterHasCdn, filterHasWaf, filterHasCloud, filterJsOnly, filterSources, activeTab]);
+  }, [filterLive, filterHttpx, filterDnsOnly, filterHasPorts, filterNoCdn, filterHasCdn, filterHasWaf, filterHasCloud, filterJsOnly, filterSources, activeTab]);
 
   const toggleHttpx = () => {
       if (!filterHttpx) { setFilterDnsOnly(undefined); setFilterHttpx(true); } else { setFilterHttpx(undefined); }
   };
   const toggleDnsOnly = () => {
       if (!filterDnsOnly) { setFilterHttpx(undefined); setFilterDnsOnly(true); } else { setFilterDnsOnly(undefined); }
+  };
+  const toggleHasPorts = () => {
+      setFilterHasPorts(prev => !prev ? true : undefined);
   };
   const toggleNoCdn = () => {
       setFilterNoCdn(prev => !prev ? true : undefined);
@@ -129,7 +133,7 @@ const TargetAssets = () => {
 
   const targetQuery = useQuery({ queryKey: ['target', targetId], queryFn: () => getTargetDetails(targetId), enabled: !!targetId });
   
-  const assetsQuery = useQuery({ queryKey: ['assets', targetId, page, filterLive, filterHttpx, filterDnsOnly, filterNoCdn, filterHasCdn, filterHasWaf, filterHasCloud, debouncedSearch, sortBy, sortOrder], queryFn: () => getTargetAssets(targetId, page, 50, { is_live: filterLive, search: debouncedSearch, has_httpx: filterHttpx, dns_only: filterDnsOnly, no_cdn: filterNoCdn, has_cdn: filterHasCdn, has_waf: filterHasWaf, has_cloud: filterHasCloud }, sortBy, sortOrder), enabled: !!targetId && activeTab === 'assets' });
+  const assetsQuery = useQuery({ queryKey: ['assets', targetId, page, filterLive, filterHttpx, filterDnsOnly, filterHasPorts, filterNoCdn, filterHasCdn, filterHasWaf, filterHasCloud, debouncedSearch, sortBy, sortOrder], queryFn: () => getTargetAssets(targetId, page, 50, { is_live: filterLive, search: debouncedSearch, has_httpx: filterHttpx, dns_only: filterDnsOnly, has_ports: filterHasPorts, no_cdn: filterNoCdn, has_cdn: filterHasCdn, has_waf: filterHasWaf, has_cloud: filterHasCloud }, sortBy, sortOrder), enabled: !!targetId && activeTab === 'assets' });
   
   // آپدیت کوئری URLها با پارامترهای جدید
   const urlsQuery = useQuery({ 
@@ -208,6 +212,7 @@ const TargetAssets = () => {
                 <div className="flex gap-2 w-full md:w-auto">
                     <button onClick={toggleHttpx} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterHttpx ? "border-hack-primary text-hack-primary" : "border-hack-border")}><Monitor size={12} /> Web</button>
                     <button onClick={toggleDnsOnly} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterDnsOnly ? "border-hack-warning text-hack-warning" : "border-hack-border")}><Network size={12} /> DNS</button>
+                    <button onClick={toggleHasPorts} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterHasPorts ? "border-hack-primary text-hack-primary bg-hack-primary/10" : "border-hack-border")}><Terminal size={12} /> Ports</button>
                     <button onClick={toggleNoCdn} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterNoCdn ? "border-hack-danger text-hack-danger bg-hack-danger/5" : "border-hack-border")}><Shield size={12} /> No CDN</button>
                     <button onClick={toggleHasCdn} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterHasCdn ? "border-hack-warning text-hack-warning bg-hack-warning/5" : "border-hack-border")}><Shield size={12} /> CDN</button>
                     <button onClick={toggleHasWaf} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterHasWaf ? "border-hack-secondary text-hack-secondary bg-hack-secondary/5" : "border-hack-border")}><Shield size={12} /> WAF</button>
