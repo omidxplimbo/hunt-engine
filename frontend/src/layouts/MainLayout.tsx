@@ -78,9 +78,9 @@ export const MainLayout = () => {
             <NavItem to="/targets" icon={Target}>Targets</NavItem>
           </div>
           {role === 'admin' && (
-            <div onClick={handleNavClick}>
-              <NavItem to="/settings" icon={Settings}>System Config</NavItem>
-            </div>
+          <div onClick={handleNavClick}>
+            <NavItem to="/settings" icon={Settings}>System Config</NavItem>
+          </div>
           )}
         </nav>
 

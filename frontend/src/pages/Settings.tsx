@@ -82,7 +82,7 @@ const Settings = () => {
                     <td className="px-6 py-4">
                       <span className={`hack-badge ${user.is_active ? 'border-hack-primary/60 text-hack-primary bg-hack-primary/5' : 'border-hack-danger/60 text-hack-danger bg-hack-danger/5'}`}>
                         {user.is_active ? 'active' : 'deactive'}
-                      </span>
+                        </span>
                     </td>
                     <td className="px-6 py-4 text-hack-dim text-xs tracking-wider">
                         {new Date(user.created_at).toLocaleDateString()}

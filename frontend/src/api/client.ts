@@ -48,10 +48,10 @@ apiClient.interceptors.response.use(
         apiErrorMsg === 'Invalid token format';
 
       if (shouldLogout) {
-        localStorage.removeItem('token');
+      localStorage.removeItem('token');
         localStorage.removeItem('username');
         localStorage.removeItem('role');
-        // window.location.href = '/login'; // فعلا کامنت می‌کنیم تا ریدایرکت دستی انجام بشه
+      // window.location.href = '/login'; // فعلا کامنت می‌کنیم تا ریدایرکت دستی انجام بشه
       }
     }
     return Promise.reject(error);

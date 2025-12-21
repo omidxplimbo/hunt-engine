@@ -39,7 +39,7 @@ function App() {
                 <Route path="targets" element={<TargetsPage />} />
                 <Route path="targets/:id" element={<TargetAssets />} />
                 <Route element={<AdminRoute />}>
-                  <Route path="settings" element={<Settings />} />
+                <Route path="settings" element={<Settings />} />
                 </Route>
               </Route>
             </Route>

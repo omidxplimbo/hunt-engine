@@ -51,14 +51,14 @@ func GetDashboardStats(c *fiber.Ctx) error {
 	// 3. تکنولوژی‌های برتر (برای Bar Chart)
 	// استفاده از تابع jsonb_array_elements_text برای باز کردن آرایه تکنولوژی‌ها
 	if admin {
-		database.DB.Raw(`
-			SELECT t.name, count(*) as count 
-			FROM assets, jsonb_array_elements_text(technologies) as t(name) 
-			WHERE is_live = true 
-			GROUP BY t.name 
-			ORDER BY count DESC 
-			LIMIT 10
-		`).Scan(&stats.TopTechnologies)
+	database.DB.Raw(`
+		SELECT t.name, count(*) as count 
+		FROM assets, jsonb_array_elements_text(technologies) as t(name) 
+		WHERE is_live = true 
+		GROUP BY t.name 
+		ORDER BY count DESC 
+		LIMIT 10
+	`).Scan(&stats.TopTechnologies)
 	} else {
 		database.DB.Raw(`
 			SELECT t.name, count(*) as count
@@ -75,16 +75,16 @@ func GetDashboardStats(c *fiber.Ctx) error {
 	// 4. پورت‌های باز برتر (از open_ports) - شمارش بر اساس تعداد assetهای منحصر به فرد
 	// open_ports ساختار: {"ip":[80,443]} => باید آرایه‌ها را باز کنیم و روی port group کنیم
 	if admin {
-		database.DB.Raw(`
-			SELECT p.port as name, count(DISTINCT assets.id) as count
-			FROM assets
-			CROSS JOIN LATERAL jsonb_each(open_ports) e(ip, ports)
-			CROSS JOIN LATERAL jsonb_array_elements_text(e.ports) p(port)
-			WHERE open_ports IS NOT NULL AND open_ports <> '{}'::jsonb
-			GROUP BY p.port
-			ORDER BY count DESC
-			LIMIT 10
-		`).Scan(&stats.TopOpenPorts)
+	database.DB.Raw(`
+		SELECT p.port as name, count(DISTINCT assets.id) as count
+		FROM assets
+		CROSS JOIN LATERAL jsonb_each(open_ports) e(ip, ports)
+		CROSS JOIN LATERAL jsonb_array_elements_text(e.ports) p(port)
+		WHERE open_ports IS NOT NULL AND open_ports <> '{}'::jsonb
+		GROUP BY p.port
+		ORDER BY count DESC
+		LIMIT 10
+	`).Scan(&stats.TopOpenPorts)
 	} else {
 		database.DB.Raw(`
 			SELECT p.port as name, count(DISTINCT assets.id) as count

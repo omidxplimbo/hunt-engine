@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -25,15 +26,101 @@ import (
 	"gorm.io/gorm"
 )
 
-// مسیرهای فایل‌های موقت (بهتر است داینامیک باشند، اما فعلا برای سازگاری نگه داشته شده‌اند)
-// نکته: در توابع جدید از نام‌های داینامیک استفاده کردیم
-const (
-	allFoundFile      = "/tmp/all_found.txt"
-	probingInputFile  = "/tmp/probing_input.txt"
-	probingOutputFile = "/tmp/probing_output.json"
-)
+const workerTempRoot = "/tmp/hunt-engine"
 
 const DefaultBatchSize = 500
+
+func sanitizePathComponent(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "unknown"
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-' || r == '_' || r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	out := strings.Trim(b.String(), "._-")
+	if out == "" {
+		return "unknown"
+	}
+	return out
+}
+
+func targetFolderName(rootDomain string, targetID uint) string {
+	rootDomain = strings.TrimSpace(rootDomain)
+	if rootDomain == "" {
+		return fmt.Sprintf("target_%d", targetID)
+	}
+	// مطابق مثال: test.com => test
+	label := strings.Split(rootDomain, ".")[0]
+	label = strings.TrimSpace(label)
+	if label == "" {
+		label = rootDomain
+	}
+	return sanitizePathComponent(label)
+}
+
+func getTargetTempDir(targetID uint) (string, string, error) {
+	var t models.Target
+	if err := database.DB.Select("id", "root_domain", "created_by_user_id").First(&t, targetID).Error; err != nil {
+		return "", "", err
+	}
+
+	username := "admin"
+	isAdminOwner := true
+	if t.CreatedByUserID != 0 {
+		var u models.User
+		if err := database.DB.Select("id", "username", "role").First(&u, t.CreatedByUserID).Error; err == nil {
+			username = u.Username
+			isAdminOwner = strings.ToLower(strings.TrimSpace(u.Role)) == "admin"
+		}
+	}
+
+	baseDir := filepath.Join(workerTempRoot, "admin")
+	if !isAdminOwner {
+		baseDir = filepath.Join(workerTempRoot, sanitizePathComponent(username))
+	}
+
+	td := filepath.Join(baseDir, targetFolderName(t.RootDomain, targetID))
+	if err := os.MkdirAll(td, 0o755); err != nil {
+		return "", "", err
+	}
+	return td, username, nil
+}
+
+func cleanupTargetTempDir(targetID uint) {
+	td, _, err := getTargetTempDir(targetID)
+	if err != nil {
+		return
+	}
+	// حذف فقط پوشه‌ی همان target (نه فولدر کل user)
+	_ = os.RemoveAll(td)
+}
+
+func acquireTargetLock(targetID uint) (func(), bool) {
+	lockDir := filepath.Join(workerTempRoot, "locks")
+	_ = os.MkdirAll(lockDir, 0o755)
+	lockPath := filepath.Join(lockDir, fmt.Sprintf("target_%d.lock", targetID))
+
+	if err := os.Mkdir(lockPath, 0o755); err != nil {
+		// already locked
+		return func() {}, false
+	}
+
+	return func() { _ = os.RemoveAll(lockPath) }, true
+}
 
 // HttpxResult ساختار برای پارس کردن خروجی JSON
 type HttpxResult struct {
@@ -120,6 +207,20 @@ func processJobDispatcher(payload string) {
 
 	log.Printf("👷 Worker received job type: %s for target ID: %d\n", jobType, targetID)
 
+	// جلوگیری از اجرای همزمان چند job روی یک target (برای جلوگیری از تداخل فایل‌های temp و race در cleanup)
+	releaseLock, ok := acquireTargetLock(targetID)
+	if !ok {
+		log.Printf("⏳ Target %d is already being processed. Waiting for lock...\n", targetID)
+		for {
+			time.Sleep(500 * time.Millisecond)
+			releaseLock, ok = acquireTargetLock(targetID)
+			if ok {
+				break
+			}
+		}
+	}
+	defer releaseLock()
+
 	switch jobType {
 	case "DISCOVERY":
 		runDiscoveryPhase(targetID, rootDomain)
@@ -137,6 +238,18 @@ func processJobDispatcher(payload string) {
 // =================================================================
 func runDiscoveryPhase(targetID uint, rootDomain string) {
 	log.Printf("🚀 Starting PHASE 1 (DISCOVERY) for: %s (ID: %d)\n", rootDomain, targetID)
+
+	tempDir, username, err := getTargetTempDir(targetID)
+	if err != nil {
+		log.Printf("❌ Failed to init temp dir for target %d: %v\n", targetID, err)
+		return
+	}
+	log.Printf("🗂️ Temp workspace: %s (owner: %s)\n", tempDir, username)
+
+	allFoundFile := filepath.Join(tempDir, "dnsx_all_found.txt")
+	dnsxOutputFile := filepath.Join(tempDir, "dnsx_output.json")
+	cdncheckInputFile := filepath.Join(tempDir, "cdncheck_input.txt")
+	nmapInputFile := filepath.Join(tempDir, "nmap_input.txt")
 
 	var targetConf models.Target
 	if err := database.DB.First(&targetConf, targetID).Error; err != nil {
@@ -194,7 +307,7 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	}
 	updateTargetPhase(targetID, "PHASE 1: DNSX VALIDATION")
 
-	dnsxResults, err := runDnsx(targetID, allFoundFile)
+	dnsxResults, err := runDnsx(targetID, allFoundFile, dnsxOutputFile)
 	if err != nil {
 		if err.Error() == "process killed by user request" {
 			return
@@ -202,6 +315,7 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		log.Printf("❌ Dnsx failed: %v\n", err)
 		return
 	}
+	_ = os.Remove(dnsxOutputFile)
 	log.Printf("✅ [Stage 3] Confirmed %d LIVE subdomains with IPs.\n", len(dnsxResults))
 
 	// 5. Saving
@@ -219,7 +333,8 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	}
 	updateTargetPhase(targetID, "PHASE 1: CDN CHECK")
 	log.Printf("🔍 Starting CDN check for all live IPs from DNS validation...\n")
-	runCdnCheckForLiveAssets(targetID, dnsxResults)
+	runCdnCheckForLiveAssets(targetID, dnsxResults, cdncheckInputFile)
+	_ = os.Remove(cdncheckInputFile)
 
 	// 7. Optional Port Scan (Nmap) - ONLY: live assets resolved by dnsx AND no CDN
 	if targetConf.UsePortscan {
@@ -228,13 +343,17 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		}
 		updateTargetPhase(targetID, "PHASE 1: PORT SCAN (NMAP)")
 		log.Printf("🔎 Starting optional port scan (nmap) for target %d...\n", targetID)
-		runPortScanForLiveNoCDNAssets(targetID)
+		runPortScanForLiveNoCDNAssets(targetID, nmapInputFile)
+		_ = os.Remove(nmapInputFile)
 	} else {
 		log.Printf("⏩ Skipping Nmap Port Scan (Disabled in settings)\n")
 	}
 
 	log.Printf("🏁 PHASE 1 finished for %s in %s.\n", rootDomain, time.Since(startTime))
 	triggerNextModule(targetID, rootDomain, "DISCOVERY")
+
+	// cleanup big temp file at end of discovery phase
+	_ = os.Remove(allFoundFile)
 }
 
 // =================================================================
@@ -244,6 +363,16 @@ func runProbingPhase(targetID uint, rootDomain string) {
 	if checkStopRequest(targetID) {
 		return
 	}
+
+	tempDir, username, err := getTargetTempDir(targetID)
+	if err != nil {
+		log.Printf("❌ Failed to init temp dir for target %d: %v\n", targetID, err)
+		return
+	}
+	log.Printf("🗂️ Temp workspace: %s (owner: %s)\n", tempDir, username)
+
+	probingInputFile := filepath.Join(tempDir, "httpx_input.txt")
+	probingOutputFile := filepath.Join(tempDir, "httpx_output.json")
 
 	batchSize := getBatchSize()
 	log.Printf("🚀 Starting PHASE 2 (PROBING) for target ID: %d (Batch Size: %d)\n", targetID, batchSize)
@@ -317,6 +446,9 @@ func runProbingPhase(targetID uint, rootDomain string) {
 			UpdateAssetsWithDiff(targetID, httpxResults)
 			processedCount += len(batchAssets)
 		}
+		// پاکسازی فایل‌های موقت هر batch
+		_ = os.Remove(probingOutputFile)
+		_ = os.Remove(probingInputFile)
 
 		offset += batchSize
 		currentBatch++
@@ -334,6 +466,13 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 		return
 	}
 
+	tempDir, username, err := getTargetTempDir(targetID)
+	if err != nil {
+		log.Printf("❌ Failed to init temp dir for target %d: %v\n", targetID, err)
+		return
+	}
+	log.Printf("🗂️ Temp workspace: %s (owner: %s)\n", tempDir, username)
+
 	// 👇 1. دریافت تنظیمات تارگت (برای چک کردن UseWaymore)
 	var target models.Target
 	if err := database.DB.First(&target, targetID).Error; err != nil {
@@ -349,7 +488,7 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 		Where("target_id = ? AND is_live = true", targetID).
 		Pluck("value", &liveAssets)
 
-	crawlingAssetsFile := fmt.Sprintf("/tmp/crawling_assets_%d.txt", targetID)
+	crawlingAssetsFile := filepath.Join(tempDir, "crawling_assets.txt")
 	if len(liveAssets) > 0 {
 		if err := writeSliceToFile(crawlingAssetsFile, liveAssets); err != nil {
 			log.Printf("❌ Failed to write crawling assets input: %v\n", err)
@@ -357,7 +496,7 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 		}
 	}
 
-	crawlingRootFile := fmt.Sprintf("/tmp/crawling_root_%d.txt", targetID)
+	crawlingRootFile := filepath.Join(tempDir, "crawling_root.txt")
 	if err := writeSliceToFile(crawlingRootFile, []string{rootDomain}); err != nil {
 		log.Printf("❌ Failed to write crawling root input: %v\n", err)
 		return
@@ -390,7 +529,7 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 		log.Printf("🔥 Running Waymore for %s...\n", rootDomain)
 
 		// فایل خروجی موقت برای Waymore
-		waymoreOutputFile := fmt.Sprintf("/tmp/waymore_%d.txt", targetID)
+		waymoreOutputFile := filepath.Join(tempDir, "waymore.txt")
 
 		// دستور Waymore:
 		// -i: دامنه ورودی
@@ -866,6 +1005,8 @@ func triggerNextModule(targetID uint, rootDomain, currentModule string) {
 		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{
 			"last_scan_at": &now, "status": "READY", "scan_count": gorm.Expr("scan_count + 1"), "current_phase": "IDLE",
 		})
+		// پاکسازی workspace موقت این target بعد از پایان کامل chain
+		cleanupTargetTempDir(targetID)
 	}
 }
 
@@ -877,8 +1018,7 @@ func logChange(tx *gorm.DB, assetID uint, field, oldVal, newVal string) error {
 	return tx.Create(&history).Error
 }
 
-func runDnsx(targetID uint, inputFile string) (map[string][]string, error) {
-	const outputFile = "/tmp/dnsx_output.json"
+func runDnsx(targetID uint, inputFile, outputFile string) (map[string][]string, error) {
 	_, err := runCommandWithKillSwitch(targetID, "dnsx", "-l", inputFile, "-json", "-o", outputFile, "-silent", "-a", "-resp", "-threads", "50")
 	if err != nil {
 		return nil, err
@@ -1050,7 +1190,7 @@ type CdnCheckResult struct {
 }
 
 // runCdnCheckForLiveAssets چک کردن CDN برای همه IPهای لایو که dnsx resolve کرده
-func runCdnCheckForLiveAssets(targetID uint, dnsxResults map[string][]string) {
+func runCdnCheckForLiveAssets(targetID uint, dnsxResults map[string][]string, inputFile string) {
 	if len(dnsxResults) == 0 {
 		log.Printf("ℹ️ No live assets found for CDN check.\n")
 		return
@@ -1085,7 +1225,7 @@ func runCdnCheckForLiveAssets(targetID uint, dnsxResults map[string][]string) {
 	log.Printf("🔍 Running cdncheck on %d unique IPs from %d live subdomains...\n", len(ipList), len(dnsxResults))
 
 	// اجرای cdncheck
-	cdnResults := runCdnCheck(targetID, ipList)
+	cdnResults := runCdnCheck(targetID, ipList, inputFile)
 	if len(cdnResults) == 0 {
 		log.Printf("⚠️ No CDN check results returned.\n")
 		return
@@ -1180,12 +1320,10 @@ func runCdnCheckForLiveAssets(targetID uint, dnsxResults map[string][]string) {
 }
 
 // runCdnCheck اجرای cdncheck روی لیست IPها
-func runCdnCheck(targetID uint, ips []string) map[string]CdnCheckResult {
+func runCdnCheck(targetID uint, ips []string, inputFile string) map[string]CdnCheckResult {
 	if len(ips) == 0 {
 		return make(map[string]CdnCheckResult)
 	}
-
-	const inputFile = "/tmp/cdncheck_input.txt"
 
 	// نوشتن IPها در فایل
 	if err := writeSliceToFile(inputFile, ips); err != nil {
@@ -1303,7 +1441,7 @@ func runCdnCheck(targetID uint, ips []string) map[string]CdnCheckResult {
 
 // runPortScanForLiveNoCDNAssets فقط روی IPهای DNSX برای assetهای لایو و بدون CDN پورت‌اسکن انجام می‌دهد
 // و نتیجه را روی فیلد open_ports هر Asset (به صورت map[ip][]ports) ذخیره می‌کند.
-func runPortScanForLiveNoCDNAssets(targetID uint) {
+func runPortScanForLiveNoCDNAssets(targetID uint, inputFile string) {
 	// معیار بدون CDN (همان منطق no_cdn در API)
 	var assets []models.Asset
 	if err := database.DB.Model(&models.Asset{}).
@@ -1357,7 +1495,7 @@ func runPortScanForLiveNoCDNAssets(targetID uint) {
 	}
 	sort.Strings(ipList)
 
-	results, err := runNmapTopPorts(targetID, ipList)
+	results, err := runNmapTopPorts(targetID, ipList, inputFile)
 	if err != nil {
 		if err.Error() == "process killed by user request" {
 			return
@@ -1404,13 +1542,11 @@ func runPortScanForLiveNoCDNAssets(targetID uint) {
 }
 
 // runNmapTopPorts یک اسکن سریع و بهینه برای top ports انجام می‌دهد و فقط پورت‌های open را برمی‌گرداند.
-func runNmapTopPorts(targetID uint, ips []string) (map[string][]int, error) {
+func runNmapTopPorts(targetID uint, ips []string, inputFile string) (map[string][]int, error) {
 	results := make(map[string][]int)
 	if len(ips) == 0 {
 		return results, nil
 	}
-
-	inputFile := fmt.Sprintf("/tmp/nmap_input_%d.txt", targetID)
 	if err := writeSliceToFile(inputFile, ips); err != nil {
 		return results, err
 	}
