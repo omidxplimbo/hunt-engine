@@ -52,6 +52,8 @@ node_modules/
 *.dll
 *.so
 *.dylib
+backend/server
+backend/*/server
 
 # Test files
 *.test
