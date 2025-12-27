@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { createTarget, type CreateTargetPayload } from '../api/targets';
-import { X, Loader2, Target, Zap, Globe, Network } from 'lucide-react';
+import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
+import { createTarget, type CreateTargetPayload, getWordlists, type Wordlist } from '../api/targets';
+import { X, Loader2, Target, Zap, Globe, Network, FileText } from 'lucide-react';
 import clsx from 'clsx';
 
 interface Props {
@@ -28,6 +28,13 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
     use_portscan: false, // پیش‌فرض
     use_cero: false, // پیش‌فرض
     use_crtsh: false, // پیش‌فرض
+    use_puredns: false, // پیش‌فرض
+    puredns_wordlists: [], // پیش‌فرض
+  });
+
+  const { data: wordlists = [] } = useQuery({
+    queryKey: ['wordlists'],
+    queryFn: getWordlists,
   });
 
   const mutation = useMutation({
@@ -35,7 +42,7 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['targets'] });
       onClose();
-      setFormData({ name: '', root_domain: '', description: '', frequency: 720, modules: ['DISCOVERY', 'PROBING', 'CRAWLING'], use_alterx: true, use_waymore: false, use_portscan: false, use_cero: false, use_crtsh: false });
+      setFormData({ name: '', root_domain: '', description: '', frequency: 720, modules: ['DISCOVERY', 'PROBING', 'CRAWLING'], use_alterx: true, use_waymore: false, use_portscan: false, use_cero: false, use_crtsh: false, use_puredns: false, puredns_wordlists: [] });
     },
   });
 
@@ -49,8 +56,8 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-      <div className="hack-box w-full max-w-md relative animate-in fade-in zoom-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 bg-black/80 backdrop-blur-sm overflow-y-auto">
+      <div className="hack-box w-full max-w-md relative animate-in fade-in zoom-in duration-200 flex flex-col max-h-[90vh] min-h-0 my-6">
         <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-hack-primary to-transparent opacity-50"></div>
         
         <div className="flex justify-between items-center p-4 border-b border-hack-border">
@@ -61,7 +68,7 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
           <button onClick={onClose} className="text-hack-dim hover:text-hack-danger transition-colors"><X size={18} /></button>
         </div>
 
-        <form onSubmit={(e) => { e.preventDefault(); mutation.mutate(formData); }} className="p-6 space-y-5">
+        <form onSubmit={(e) => { e.preventDefault(); mutation.mutate(formData); }} className="p-6 space-y-5 overflow-y-auto flex-1 min-h-0">
           <div className="space-y-1">
             <label className="text-[10px] uppercase text-hack-dim tracking-widest">Operation Codename</label>
             <input type="text" required className="hack-input w-full" placeholder="PROJECT_ALPHA" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} />
@@ -143,6 +150,55 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
               </label>
             </div>
             <p className="text-[8px] text-hack-dim leading-tight">Query crt.sh API for subdomains.</p>
+          </div>
+
+          <div className="p-3 border border-hack-border bg-black/30 flex flex-col gap-3">
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="use_puredns"
+                checked={formData.use_puredns || false}
+                onChange={e => setFormData({ ...formData, use_puredns: e.target.checked, puredns_wordlists: e.target.checked ? formData.puredns_wordlists : [] })}
+                className="accent-hack-primary h-4 w-4"
+              />
+              <label htmlFor="use_puredns" className="text-xs font-bold text-hack-text tracking-wide cursor-pointer flex items-center gap-1">
+                <FileText size={12} className="text-orange-400" /> PUREDNS
+              </label>
+            </div>
+            <p className="text-[8px] text-hack-dim leading-tight">Bruteforce subdomain discovery (only live subdomains).</p>
+            
+            {formData.use_puredns && (
+              <div className="mt-2 space-y-2 max-h-40 overflow-y-auto">
+                <label className="text-[9px] uppercase text-hack-dim tracking-widest">Select Wordlists:</label>
+                <div className="space-y-1">
+                  {wordlists.map((wl: Wordlist) => (
+                    <div key={wl.path} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id={`wl-${wl.path}`}
+                        checked={formData.puredns_wordlists?.includes(wl.path) || false}
+                        onChange={(e) => {
+                          const current = formData.puredns_wordlists || [];
+                          if (e.target.checked) {
+                            setFormData({ ...formData, puredns_wordlists: [...current, wl.path] });
+                          } else {
+                            setFormData({ ...formData, puredns_wordlists: current.filter(p => p !== wl.path) });
+                          }
+                        }}
+                        className="accent-hack-primary h-3 w-3"
+                      />
+                      <label htmlFor={`wl-${wl.path}`} className="text-[9px] text-hack-text cursor-pointer flex items-center gap-1">
+                        <span className={wl.type === 'custom' ? 'text-orange-400' : 'text-blue-400'}>[{wl.type}]</span>
+                        {wl.name}
+                      </label>
+                    </div>
+                  ))}
+                  {wordlists.length === 0 && (
+                    <p className="text-[8px] text-hack-dim">No wordlists available. Add wordlists to /wordlists/custom directory.</p>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="space-y-2">

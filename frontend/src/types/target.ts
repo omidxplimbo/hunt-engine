@@ -18,6 +18,8 @@ export interface Target {
   // 👇 ابزارهای جدید برای فاز اول (Discovery)
   use_cero?: boolean;  // Scrape domain names from SSL certificates
   use_crtsh?: boolean; // Use crt.sh API for subdomain discovery
+  use_puredns?: boolean; // Use puredns for bruteforce subdomain discovery
+  puredns_wordlists?: string[]; // Selected wordlists for puredns
   scan_modules: string;
 }
 

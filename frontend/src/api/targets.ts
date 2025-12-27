@@ -36,6 +36,8 @@ export interface CreateTargetPayload {
   // 👇 ابزارهای جدید برای فاز اول (Discovery)
   use_cero?: boolean;  // Scrape domain names from SSL certificates
   use_crtsh?: boolean; // Use crt.sh API for subdomain discovery
+  use_puredns?: boolean; // Use puredns for bruteforce subdomain discovery
+  puredns_wordlists?: string[]; // Selected wordlists for puredns
 }
 
 export const createTarget = async (payload: CreateTargetPayload) => {
@@ -61,6 +63,8 @@ export interface UpdateTargetPayload {
   // 👇 ابزارهای جدید برای فاز اول (Discovery)
   use_cero?: boolean;  // Scrape domain names from SSL certificates
   use_crtsh?: boolean; // Use crt.sh API for subdomain discovery
+  use_puredns?: boolean; // Use puredns for bruteforce subdomain discovery
+  puredns_wordlists?: string[]; // Selected wordlists for puredns
 }
 
 export const updateTarget = async (id: number, payload: UpdateTargetPayload) => {
@@ -97,6 +101,7 @@ export const getTargetAssets = async (
   if (filters?.has_cdn !== undefined) params.has_cdn = filters.has_cdn;
   if (filters?.has_waf !== undefined) params.has_waf = filters.has_waf;
   if (filters?.has_cloud !== undefined) params.has_cloud = filters.has_cloud;
+  if (filters?.sources && filters.sources.length > 0) params.sources = filters.sources.join(',');
 
   const response = await apiClient.get<AssetResponse>(`/targets/${targetId}/assets`, {
     params,
@@ -186,6 +191,8 @@ export interface TargetExportItem {
   use_portscan: boolean;
   use_cero: boolean;
   use_crtsh: boolean;
+  use_puredns: boolean;
+  puredns_wordlists: string[];
   assets: AssetExportItem[];
   urls: URLExportItem[];
 }
@@ -285,4 +292,16 @@ export const exportTargetIPs = async (targetId: number, rootDomain: string): Pro
   link.click();
   document.body.removeChild(link);
   window.URL.revokeObjectURL(url);
+};
+
+// Wordlists API
+export interface Wordlist {
+  path: string;
+  name: string;
+  type: 'default' | 'custom';
+}
+
+export const getWordlists = async (): Promise<Wordlist[]> => {
+  const response = await apiClient.get<{ status: string; data: Wordlist[] }>('/wordlists');
+  return response.data.data;
 };

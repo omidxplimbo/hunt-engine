@@ -22,8 +22,10 @@ type TargetResponse struct {
 	// 👇 optional port scan during discovery
 	UsePortscan bool `json:"use_portscan"`
 	// 👇 ابزارهای جدید برای فاز اول (Discovery)
-	UseCero  bool `json:"use_cero"`  // Scrape domain names from SSL certificates
-	UseCrtsh bool `json:"use_crtsh"` // Use crt.sh API for subdomain discovery
+	UseCero  bool     `json:"use_cero"`  // Scrape domain names from SSL certificates
+	UseCrtsh bool     `json:"use_crtsh"` // Use crt.sh API for subdomain discovery
+	UsePuredns bool   `json:"use_puredns"` // Use puredns for bruteforce subdomain discovery
+	PurednsWordlists interface{} `json:"puredns_wordlists"` // Selected wordlists for puredns
 
 	ScanModules string `json:"scan_modules"`
 }

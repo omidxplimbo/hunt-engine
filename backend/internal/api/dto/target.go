@@ -13,8 +13,10 @@ type CreateTargetRequest struct {
 	// 👇 PHASE 1 optional port scan (nmap)
 	UsePortscan *bool `json:"use_portscan"`
 	// 👇 ابزارهای جدید برای فاز اول (Discovery)
-	UseCero  *bool `json:"use_cero"`  // Scrape domain names from SSL certificates
-	UseCrtsh *bool `json:"use_crtsh"` // Use crt.sh API for subdomain discovery
+	UseCero  *bool    `json:"use_cero"`  // Scrape domain names from SSL certificates
+	UseCrtsh *bool    `json:"use_crtsh"` // Use crt.sh API for subdomain discovery
+	UsePuredns *bool   `json:"use_puredns"` // Use puredns for bruteforce subdomain discovery
+	PurednsWordlists []string `json:"puredns_wordlists"` // Selected wordlists for puredns
 }
 
 // UpdateTargetRequest برای ویرایش تنظیمات تارگت
@@ -30,8 +32,10 @@ type UpdateTargetRequest struct {
 	// 👇 PHASE 1 optional port scan (nmap)
 	UsePortscan *bool `json:"use_portscan"`
 	// 👇 ابزارهای جدید برای فاز اول (Discovery)
-	UseCero  *bool `json:"use_cero"`  // Scrape domain names from SSL certificates
-	UseCrtsh *bool `json:"use_crtsh"` // Use crt.sh API for subdomain discovery
+	UseCero  *bool    `json:"use_cero"`  // Scrape domain names from SSL certificates
+	UseCrtsh *bool    `json:"use_crtsh"` // Use crt.sh API for subdomain discovery
+	UsePuredns *bool   `json:"use_puredns"` // Use puredns for bruteforce subdomain discovery
+	PurednsWordlists []string `json:"puredns_wordlists"` // Selected wordlists for puredns
 }
 
 // TargetExportData ساختار استاندارد برای Export/Import تارگت‌ها
@@ -56,6 +60,8 @@ type TargetExportItem struct {
 	UsePortscan bool     `json:"use_portscan"`
 	UseCero     bool     `json:"use_cero"`
 	UseCrtsh    bool     `json:"use_crtsh"`
+	UsePuredns  bool     `json:"use_puredns"`
+	PurednsWordlists []string `json:"puredns_wordlists"`
 
 	// داده‌های مرتبط
 	Assets []AssetExportItem `json:"assets"` // لیست ساب‌دامین‌ها و دارایی‌ها

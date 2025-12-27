@@ -52,4 +52,5 @@ export interface AssetFilters {
   has_cdn?: boolean; // 👈 فقط آیتم‌هایی که CDN دارند
   has_waf?: boolean; // 👈 فقط آیتم‌هایی که WAF دارند
   has_cloud?: boolean; // 👈 فقط آیتم‌هایی که CLOUD دارند
+  sources?: string[]; // 👈 فیلتر بر اساس providers (مثلاً ["subfinder","crtsh"])
 }

@@ -97,6 +97,9 @@ func main() {
 
 	api.Get("/dashboard/stats", handlers.GetDashboardStats)
 
+	// Wordlists endpoint
+	api.Get("/wordlists", handlers.GetWordlists)
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"

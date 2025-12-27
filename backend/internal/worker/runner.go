@@ -299,19 +299,86 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		log.Printf("⏩ Skipping Alterx (Mutation) for %s based on target config.\n", rootDomain)
 	}
 
+	// 2.5. Puredns Bruteforce (فقط subdomain‌های لایو)
+	var purednsResults map[string][]string
+	purednsSources := make(map[string][]string)
+	if targetConf.UsePuredns {
+		if checkStopRequest(targetID) {
+			return
+		}
+		updateTargetPhase(targetID, "PHASE 1: PUREDNS BRUTEFORCE")
+
+		// پارس کردن وردلیست‌های انتخابی
+		var wordlists []string
+		if targetConf.PurednsWordlists != "" && targetConf.PurednsWordlists != "[]" {
+			if err := json.Unmarshal([]byte(targetConf.PurednsWordlists), &wordlists); err != nil {
+				log.Printf("⚠️ Failed to parse puredns wordlists: %v\n", err)
+				wordlists = []string{}
+			}
+		}
+
+		if len(wordlists) > 0 {
+			var err error
+			purednsResults, err = runPuredns(targetID, rootDomain, wordlists)
+			if err != nil {
+				if err.Error() == "process killed by user request" {
+					return
+				}
+				log.Printf("❌ Puredns failed: %v. Proceeding without bruteforce results.\n", err)
+				purednsResults = map[string][]string{}
+			} else {
+				// برای puredns، source را "puredns" تنظیم می‌کنیم
+				for subdomain := range purednsResults {
+					purednsSources[subdomain] = []string{"puredns"}
+				}
+				log.Printf("✅ Puredns found %d live subdomains for %s\n", len(purednsResults), rootDomain)
+			}
+		} else {
+			log.Printf("⏩ Skipping Puredns for %s (no wordlists selected)\n", rootDomain)
+		}
+	} else {
+		log.Printf("⏩ Skipping Puredns for %s (disabled in target config)\n", rootDomain)
+	}
+
 	// 3. Merge & History
 	var existingAssets []string
 	database.DB.Model(&models.Asset{}).Where("target_id = ?", targetID).Pluck("value", &existingAssets)
 
 	masterList := mergeUnique(passiveResults, mutatedResults)
+	// اضافه کردن subdomain‌های puredns به masterList
+	var purednsSubdomains []string
+	for subdomain := range purednsResults {
+		purednsSubdomains = append(purednsSubdomains, subdomain)
+	}
+	masterList = mergeUnique(masterList, purednsSubdomains) // puredns results are already live, so we add them directly
 	masterList = mergeUnique(masterList, existingAssets)
 
-	// Merge sources: passive + mutated
+	// Merge sources: passive + mutated + puredns
 	allSources := make(map[string][]string)
 	for subdomain, sources := range passiveSources {
 		allSources[subdomain] = sources
 	}
 	for subdomain, sources := range mutatedSources {
+		if existing, ok := allSources[subdomain]; ok {
+			// Merge sources (unique)
+			sourceMap := make(map[string]bool)
+			for _, s := range existing {
+				sourceMap[s] = true
+			}
+			for _, s := range sources {
+				sourceMap[s] = true
+			}
+			var merged []string
+			for s := range sourceMap {
+				merged = append(merged, s)
+			}
+			sort.Strings(merged)
+			allSources[subdomain] = merged
+		} else {
+			allSources[subdomain] = sources
+		}
+	}
+	for subdomain, sources := range purednsSources {
 		if existing, ok := allSources[subdomain]; ok {
 			// Merge sources (unique)
 			sourceMap := make(map[string]bool)
@@ -350,7 +417,29 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		return
 	}
 	_ = os.Remove(dnsxOutputFile)
-	log.Printf("✅ [Stage 3] Confirmed %d LIVE subdomains with IPs.\n", len(dnsxResults))
+
+	// Merge puredns results (که قبلاً لایو هستند) با dnsxResults
+	for subdomain, ips := range purednsResults {
+		if existingIPs, exists := dnsxResults[subdomain]; exists {
+			// Merge IPs (unique)
+			ipMap := make(map[string]bool)
+			for _, ip := range existingIPs {
+				ipMap[ip] = true
+			}
+			for _, ip := range ips {
+				ipMap[ip] = true
+			}
+			var mergedIPs []string
+			for ip := range ipMap {
+				mergedIPs = append(mergedIPs, ip)
+			}
+			dnsxResults[subdomain] = mergedIPs
+		} else {
+			dnsxResults[subdomain] = ips
+		}
+	}
+
+	log.Printf("✅ [Stage 3] Confirmed %d LIVE subdomains with IPs (including %d from puredns).\n", len(dnsxResults), len(purednsResults))
 
 	// 5. Saving
 	if checkStopRequest(targetID) {
@@ -1156,17 +1245,151 @@ func normalizeSubdomain(subdomain, rootDomain string) string {
 	// حذف www. از ابتدای subdomain (case-insensitive)
 	subdomainLower = strings.TrimPrefix(subdomainLower, "www.")
 
-	// اطمینان از اینکه subdomain با rootDomain تمام می‌شود
-	if !strings.HasSuffix(subdomainLower, rootDomainLower) {
-		return ""
-	}
-
 	// اگر subdomain برابر rootDomain باشد، رد می‌کنیم (فقط subdomain می‌خواهیم)
 	if subdomainLower == rootDomainLower {
 		return ""
 	}
 
+	// اطمینان از اینکه subdomain واقعا زیرمجموعه‌ی rootDomain است (مرز نقطه)
+	// مثال valid: api.example.com
+	// مثال invalid: api.notexample.com (صرفا به خاطر suffix نباید قبول شود)
+	if !strings.HasSuffix(subdomainLower, "."+rootDomainLower) {
+		return ""
+	}
+
 	return subdomainLower
+}
+
+// runPuredns اجرای puredns برای bruteforce subdomain discovery
+// این تابع subdomain‌های لایو (resolve شده) با IP‌هایشان را برمی‌گرداند
+// خروجی: map[string][]string که key=subdomain و value=[]IP
+func runPuredns(targetID uint, rootDomain string, wordlists []string) (map[string][]string, error) {
+	if len(wordlists) == 0 {
+		return map[string][]string{}, nil
+	}
+
+	tempDir, _, err := getTargetTempDir(targetID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get temp dir: %v", err)
+	}
+
+	// ساخت فایل resolvers.txt از TRUSTED_RESOLVERS
+	resolversFile := filepath.Join(tempDir, "puredns_resolvers.txt")
+	resolversStr := os.Getenv("TRUSTED_RESOLVERS")
+	if resolversStr == "" {
+		resolversStr = "1.1.1.1,8.8.8.8,1.0.0.1,8.8.4.4" // fallback
+	}
+	resolvers := strings.Split(resolversStr, ",")
+	var cleanResolvers []string
+	for _, r := range resolvers {
+		r = strings.TrimSpace(r)
+		if r != "" {
+			cleanResolvers = append(cleanResolvers, r)
+		}
+	}
+	if err := writeSliceToFile(resolversFile, cleanResolvers); err != nil {
+		return nil, fmt.Errorf("failed to write resolvers file: %v", err)
+	}
+
+	// ساخت یک فایل موقت برای ترکیب همه وردلیست‌ها
+	combinedWordlistFile := filepath.Join(tempDir, "puredns_combined_wordlist.txt")
+	var allWords []string
+	wordSet := make(map[string]bool)
+
+	for _, wlPath := range wordlists {
+		// بررسی وجود فایل
+		if _, err := os.Stat(wlPath); os.IsNotExist(err) {
+			log.Printf("⚠️ Wordlist not found: %s, skipping...\n", wlPath)
+			continue
+		}
+
+		// خواندن وردلیست
+		content, err := os.ReadFile(wlPath)
+		if err != nil {
+			log.Printf("⚠️ Failed to read wordlist %s: %v, skipping...\n", wlPath, err)
+			continue
+		}
+
+		// پارس کردن خطوط
+		for _, line := range strings.Split(string(content), "\n") {
+			word := strings.TrimSpace(line)
+			if word != "" && !strings.HasPrefix(word, "#") && !wordSet[word] {
+				wordSet[word] = true
+				allWords = append(allWords, word)
+			}
+		}
+	}
+
+	if len(allWords) == 0 {
+		log.Printf("⚠️ No words found in wordlists, skipping puredns\n")
+		return map[string][]string{}, nil
+	}
+
+	// نوشتن وردلیست ترکیبی
+	if err := writeSliceToFile(combinedWordlistFile, allWords); err != nil {
+		return nil, fmt.Errorf("failed to write combined wordlist: %v", err)
+	}
+
+	log.Printf("🔨 Running puredns bruteforce with %d words for %s...\n", len(allWords), rootDomain)
+
+	// اجرای puredns
+	// نکته: -r برای public resolvers است. برای اینکه نیاز به فایل default trusted resolvers نداشته باشیم،
+	// از --trusted-only استفاده می‌کنیم تا فقط همین resolvers استفاده شوند.
+	// puredns bruteforce wordlist.txt domain.com -r resolvers.txt --trusted-only --quiet
+	output, err := runCommandWithKillSwitch(targetID, "puredns", "bruteforce", combinedWordlistFile, rootDomain, "-r", resolversFile, "--trusted-only", "--quiet")
+	if err != nil {
+		if err.Error() == "process killed by user request" {
+			return nil, err
+		}
+		log.Printf("⚠️ Puredns error: %v\n", err)
+		return map[string][]string{}, nil // در صورت خطا، map خالی برمی‌گردانیم
+	}
+
+	// پارس کردن خروجی (هر خط یک subdomain لایو است)
+	subdomains := []string{}
+	for _, line := range strings.Split(string(output), "\n") {
+		normalized := normalizeSubdomain(strings.TrimSpace(line), rootDomain)
+		if normalized != "" {
+			subdomains = append(subdomains, normalized)
+		}
+	}
+
+	// حالا باید IP‌های این subdomain‌ها را resolve کنیم
+	// استفاده از dnsx برای resolve کردن IP‌ها
+	results := make(map[string][]string)
+	if len(subdomains) > 0 {
+		// ساخت فایل موقت برای dnsx
+		purednsInputFile := filepath.Join(tempDir, "puredns_dnsx_input.txt")
+		if err := writeSliceToFile(purednsInputFile, subdomains); err != nil {
+			log.Printf("⚠️ Failed to write puredns input for dnsx: %v\n", err)
+			// در صورت خطا، subdomain‌ها را بدون IP برمی‌گردانیم
+			for _, subdomain := range subdomains {
+				results[subdomain] = []string{} // IP خالی، اما subdomain لایو است
+			}
+		} else {
+			// اجرای dnsx برای resolve کردن IP‌ها
+			purednsDnsxOutputFile := filepath.Join(tempDir, "puredns_dnsx_output.json")
+			dnsxResults, dnsxErr := runDnsx(targetID, purednsInputFile, purednsDnsxOutputFile)
+			if dnsxErr == nil {
+				results = dnsxResults
+			} else {
+				// در صورت خطا، subdomain‌ها را بدون IP برمی‌گردانیم
+				for _, subdomain := range subdomains {
+					results[subdomain] = []string{} // IP خالی، اما subdomain لایو است
+				}
+			}
+			_ = os.Remove(purednsInputFile)
+			_ = os.Remove(purednsDnsxOutputFile)
+		}
+	}
+
+	log.Printf("✅ Puredns found %d live subdomains for %s\n", len(results), rootDomain)
+
+	// پاکسازی فایل‌های موقت
+	_ = os.Remove(combinedWordlistFile)
+	_ = os.Remove(resolversFile)
+
+	return results, nil
 }
 
 // SubdomainSource نگه‌داری subdomain و source آن
@@ -1300,9 +1523,6 @@ func runCero(targetID uint, domain string) []string {
 
 // runCrtsh استفاده از crt.sh API برای پیدا کردن subdomain ها
 func runCrtsh(rootDomain string) []string {
-	// Escape کردن نقطه‌ها برای regex
-	re := strings.ReplaceAll(rootDomain, ".", "\\.")
-
 	// ساخت URL برای crt.sh
 	url1 := fmt.Sprintf("https://crt.sh/?q=%%25.%s&output=json", rootDomain)
 	url2 := fmt.Sprintf("https://crt.sh/?q=%s&output=json", rootDomain)
@@ -1312,7 +1532,7 @@ func runCrtsh(rootDomain string) []string {
 	// درخواست اول: با wildcard
 	log.Printf("🔍 Querying crt.sh API (wildcard): %s\n", url1)
 	if data, err := fetchCrtshData(url1); err == nil {
-		parsed := parseCrtshJSON(data, re, rootDomain)
+		parsed := parseCrtshJSON(data, rootDomain)
 		allResults = append(allResults, parsed...)
 		log.Printf("✅ crt.sh wildcard query returned %d domains\n", len(parsed))
 	} else {
@@ -1322,7 +1542,7 @@ func runCrtsh(rootDomain string) []string {
 	// درخواست دوم: بدون wildcard
 	log.Printf("🔍 Querying crt.sh API (exact): %s\n", url2)
 	if data, err := fetchCrtshData(url2); err == nil {
-		parsed := parseCrtshJSON(data, re, rootDomain)
+		parsed := parseCrtshJSON(data, rootDomain)
 		allResults = append(allResults, parsed...)
 		log.Printf("✅ crt.sh exact query returned %d domains\n", len(parsed))
 	} else {
@@ -1369,7 +1589,7 @@ func fetchCrtshData(url string) ([]byte, error) {
 }
 
 // parseCrtshJSON پارس کردن JSON از crt.sh و استخراج domain names
-func parseCrtshJSON(data []byte, regexPattern, rootDomain string) []string {
+func parseCrtshJSON(data []byte, rootDomain string) []string {
 	var results []string
 	var jsonData []map[string]interface{}
 

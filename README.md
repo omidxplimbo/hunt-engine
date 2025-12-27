@@ -66,6 +66,7 @@ The platform integrates industry-standard security tools within its isolated env
   * `subfinder`, `assetfinder` (Always enabled)
   * `cero` (**Optional per target**) - Scrape domain names from SSL certificates
   * `crtsh` (**Optional per target**) - Query crt.sh API for subdomain discovery
+  * `puredns` (**Optional per target**) - Subdomain bruteforce (wordlist-based) using trusted resolvers (**only live/resolved** results are stored)
 * **Permutation/Mutation:** `alterx` (Optional per target)
 * **Validation/Resolution:** `dnsx` (w/ fixed resolvers)
 * **Probing:** `httpx` (Rich JSON output, WAF/CDN detection)
@@ -86,8 +87,8 @@ We are following a multi-phase development roadmap.
 * [x] **Smart Recon Pipeline:** Implemented a full chain (Passive -> Mutation -> Validation).
 * [x] **History Injection:** Re-scans previously dead assets to detect resurrections.
 * [x] **Smart Storage Logic:** "Upsert" logic to track live/dead status.
-* [x] **Enhanced Discovery Tools:** Added `cero` (SSL certificate scraping) and `crtsh` (Certificate Transparency API) as optional tools.
-* [x] **Source Tracking:** Each subdomain tracks which tools discovered it (subfinder, assetfinder, cero, crtsh, alterx).
+* [x] **Enhanced Discovery Tools:** Added `cero` (SSL certificate scraping), `crtsh` (Certificate Transparency API), and `puredns` (bruteforce) as optional tools.
+* [x] **Source Tracking:** Each subdomain tracks which tools discovered it (subfinder, assetfinder, cero, crtsh, alterx, puredns).
 * [x] **Fresh Asset Logic:** Fixed notification spam - only truly new live subdomains trigger alerts.
 
 ### ✅ Phase 2: Probing & Fingerprinting (COMPLETED)
@@ -135,7 +136,7 @@ We are following a multi-phase development roadmap.
 
 ### ✅ Phase 4.7: Enhanced Discovery & Source Tracking (COMPLETED)
 **Goal:** Expand discovery capabilities and track subdomain sources.
-* [x] **New Discovery Tools:** Added `cero` (SSL certificate scraping) and `crtsh` (Certificate Transparency API) as optional discovery tools.
+* [x] **New Discovery Tools:** Added `cero` (SSL certificate scraping), `crtsh` (Certificate Transparency API), and `puredns` (wordlist-based bruteforce) as optional discovery tools.
 * [x] **Source Tracking:** Each subdomain now tracks which tools discovered it, displayed as color-coded provider tags in the UI.
 * [x] **Smart Source Merging:** When a subdomain is found by multiple tools, all sources are tracked and merged automatically.
 * [x] **Fresh Asset Fix:** Improved notification logic to prevent spam - only truly new live subdomains trigger fresh asset alerts.
@@ -281,6 +282,17 @@ cat QUICK-STEPS.txt
      * Toggle **Portscan (nmap)** (optional)
      * Toggle **CERO** (SSL certificate scraping) - Optional
      * Toggle **CRT.SH** (Certificate Transparency API) - Optional
+     * Toggle **PUREDNS** (subdomain bruteforce) - Optional
+       * Select one or more wordlists for this target (multi-select)
+       * Only **live/resolved** subdomains are stored and tagged with provider `puredns`
+
+### 📚 Wordlists (Puredns)
+
+Puredns uses wordlists for bruteforcing. You can use:
+- **Built-in wordlists** inside container: `/wordlists/*`
+- **Custom wordlists** mounted from repo: `./custom_wordlists → /wordlists/custom`
+
+See: **`WORDLISTS-GUIDE.md`** for the full guide (where to put files, format, and examples).
 
 #### Exporting Targets
 1. Click **Export** button on Targets page
@@ -308,6 +320,7 @@ cat QUICK-STEPS.txt
 * **WAF:** Show only assets with WAF detected (cdncheck)
 * **CLOUD:** Show only assets with CLOUD provider detected (cdncheck)
 * **Search:** Filter by domain name
+* **Provider Filter (Dropdown):** Filter assets by the discovery provider (subfinder/assetfinder/crtsh/cero/alterx/puredns)
 * **CDN/WAF/CLOUD Badges:** Visual indicators per asset (separate fields)
 * **Ports Column:** If Portscan is enabled, open ports (from `nmap`) are shown per asset.
 * **Providers Column:** Shows which tools discovered each subdomain with color-coded tags:
@@ -316,6 +329,7 @@ cat QUICK-STEPS.txt
   * `cero` (Purple)
   * `crtsh` (Orange)
   * `alterx` (Yellow)
+  * `puredns` (Tagged when discovered via bruteforce + verified live)
   * Multiple tags indicate the subdomain was found by multiple tools
 
 #### Port Scanning (Optional / Phase 1)
@@ -372,6 +386,7 @@ This order is enforced automatically, even if modules are specified in a differe
 * `GET /api/targets/:id/assets` - Get target assets (with filters)
 * `GET /api/targets/:id/urls` - Get target URLs (with filters)
 * `GET /api/targets/:id/ips` - Export unique target IPs as TXT (**non-CDN only**)
+* `GET /api/wordlists` - List available wordlists from `/wordlists` and `/wordlists/custom` (for Puredns UI)
 
 ### Dashboard
 * `GET /api/dashboard/stats` - Dashboard statistics (**scoped to current user** unless admin)
@@ -410,6 +425,8 @@ You can combine these query params on `GET /api/targets/:id/assets`:
       "use_portscan": false,
       "use_cero": false,
       "use_crtsh": false,
+      "use_puredns": false,
+      "puredns_wordlists": [],
       "assets": [...],
       "urls": [...]
     }

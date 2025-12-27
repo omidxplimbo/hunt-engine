@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"sort" // 👈 اضافه شده برای مرتب‌سازی
 	"strconv"
 	"strings"
@@ -82,6 +84,8 @@ func CreateTarget(c *fiber.Ctx) error {
 		UsePortscan:     false,
 		UseCero:         false,
 		UseCrtsh:        false,
+		UsePuredns:      false,
+		PurednsWordlists: "[]",
 	}
 
 	if req.UseAlterx != nil {
@@ -98,6 +102,13 @@ func CreateTarget(c *fiber.Ctx) error {
 	}
 	if req.UseCrtsh != nil {
 		target.UseCrtsh = *req.UseCrtsh
+	}
+	if req.UsePuredns != nil {
+		target.UsePuredns = *req.UsePuredns
+	}
+	if req.PurednsWordlists != nil && len(req.PurednsWordlists) > 0 {
+		wordlistsJSON, _ := json.Marshal(req.PurednsWordlists)
+		target.PurednsWordlists = string(wordlistsJSON)
 	}
 
 	if err := database.DB.Create(&target).Error; err != nil {
@@ -158,6 +169,16 @@ func UpdateTarget(c *fiber.Ctx) error {
 	}
 	if req.UseCrtsh != nil {
 		target.UseCrtsh = *req.UseCrtsh
+	}
+	if req.UsePuredns != nil {
+		target.UsePuredns = *req.UsePuredns
+	}
+	if req.PurednsWordlists != nil && len(req.PurednsWordlists) > 0 {
+		wordlistsJSON, _ := json.Marshal(req.PurednsWordlists)
+		target.PurednsWordlists = string(wordlistsJSON)
+	} else if req.PurednsWordlists != nil && len(req.PurednsWordlists) == 0 {
+		// اگر لیست خالی باشد، آن را به [] تنظیم می‌کنیم
+		target.PurednsWordlists = "[]"
 	}
 
 	// 👇👇👇 فیکس اصلی اینجاست: مرتب‌سازی لیست ماژول‌ها قبل از آپدیت دیتابیس
@@ -374,6 +395,46 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	hasWaf := c.Query("has_waf")
 	hasCloud := c.Query("has_cloud")
 
+	// 👇 Providers filter (array or comma-separated): sources=subfinder&sources=crtsh OR sources=subfinder,crtsh
+	var sources []string
+	// Try multi query params first
+	if c.Context() != nil && c.Context().QueryArgs() != nil {
+		if multi := c.Context().QueryArgs().PeekMulti("sources"); len(multi) > 0 {
+			for _, v := range multi {
+				s := strings.TrimSpace(string(v))
+				if s != "" {
+					sources = append(sources, s)
+				}
+			}
+		}
+	}
+	// Fallback: comma-separated
+	if len(sources) == 0 {
+		if raw := strings.TrimSpace(c.Query("sources")); raw != "" {
+			for _, part := range strings.Split(raw, ",") {
+				part = strings.TrimSpace(part)
+				if part != "" {
+					sources = append(sources, part)
+				}
+			}
+		}
+	}
+	// normalize + dedupe
+	if len(sources) > 0 {
+		seen := make(map[string]bool)
+		var cleaned []string
+		for _, s := range sources {
+			s = strings.ToLower(strings.TrimSpace(s))
+			if s == "" || seen[s] {
+				continue
+			}
+			seen[s] = true
+			cleaned = append(cleaned, s)
+		}
+		sort.Strings(cleaned)
+		sources = cleaned
+	}
+
 	// Sorting Params
 	sortBy := c.Query("sort_by", "value")
 	order := c.Query("order", "asc")
@@ -389,7 +450,11 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	}
 	orderClause := fmt.Sprintf("%s %s", sortBy, order)
 
-	filtersKey := fmt.Sprintf("l:%s|n:%s|s:%s|h:%s|d:%s|p:%s|no_cdn:%s|cdn:%s|waf:%s|cloud:%s|sb:%s|o:%s", isLive, isNew, search, hasHttpx, dnsOnly, hasPorts, noCdn, hasCdn, hasWaf, hasCloud, sortBy, order)
+	sourcesKey := ""
+	if len(sources) > 0 {
+		sourcesKey = strings.Join(sources, ",")
+	}
+	filtersKey := fmt.Sprintf("l:%s|n:%s|s:%s|h:%s|d:%s|p:%s|no_cdn:%s|cdn:%s|waf:%s|cloud:%s|src:%s|sb:%s|o:%s", isLive, isNew, search, hasHttpx, dnsOnly, hasPorts, noCdn, hasCdn, hasWaf, hasCloud, sourcesKey, sortBy, order)
 	cacheKey := cache.GenerateAssetKey(targetID, offset, limit, filtersKey)
 
 	var cachedResponse fiber.Map
@@ -408,6 +473,19 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	}
 	if search != "" {
 		db = db.Where("value LIKE ?", "%"+search+"%")
+	}
+
+	// Providers (sources) filter: match ANY selected provider (OR)
+	// sources is stored as jsonb array (e.g. ["subfinder","crtsh"])
+	if len(sources) > 0 {
+		var conds []string
+		var args []interface{}
+		for _, s := range sources {
+			b, _ := json.Marshal([]string{s})
+			conds = append(conds, "sources @> ?::jsonb")
+			args = append(args, string(b))
+		}
+		db = db.Where("("+strings.Join(conds, " OR ")+")", args...)
 	}
 
 	if hasHttpx == "true" {
@@ -680,8 +758,22 @@ func toTargetResponse(t models.Target, assetCount int64) dto.TargetResponse {
 		UsePortscan:  t.UsePortscan,
 		UseCero:      t.UseCero,
 		UseCrtsh:     t.UseCrtsh,
+		UsePuredns:   t.UsePuredns,
+		PurednsWordlists: parseJSONToInterface(t.PurednsWordlists),
 		ScanModules:  t.ScanModules,
 	}
+}
+
+// parseJSONToInterface پارس کردن JSON string به interface{}
+func parseJSONToInterface(jsonStr string) interface{} {
+	if jsonStr == "" || jsonStr == "[]" || jsonStr == "null" {
+		return []string{}
+	}
+	var result interface{}
+	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+		return []string{}
+	}
+	return result
 }
 
 func toAssetResponse(a models.Asset) dto.AssetResponse {
@@ -849,6 +941,11 @@ func ExportTarget(c *fiber.Ctx) error {
 			}
 		}
 
+		var wordlists []string
+		if t.PurednsWordlists != "" && t.PurednsWordlists != "[]" {
+			_ = json.Unmarshal([]byte(t.PurednsWordlists), &wordlists)
+		}
+
 		exportItems[i] = dto.TargetExportItem{
 			Name:        t.Name,
 			RootDomain:  t.RootDomain,
@@ -861,6 +958,8 @@ func ExportTarget(c *fiber.Ctx) error {
 			UsePortscan: t.UsePortscan,
 			UseCero:     t.UseCero,
 			UseCrtsh:    t.UseCrtsh,
+			UsePuredns:  t.UsePuredns,
+			PurednsWordlists: wordlists,
 			Assets:      assetItems,
 			URLs:        urlItems,
 		}
@@ -950,6 +1049,14 @@ func ImportTarget(c *fiber.Ctx) error {
 			UsePortscan:     item.UsePortscan,
 			UseCero:         item.UseCero,
 			UseCrtsh:        item.UseCrtsh,
+			UsePuredns:      item.UsePuredns,
+		}
+		// تنظیم PurednsWordlists
+		if len(item.PurednsWordlists) > 0 {
+			wordlistsJSON, _ := json.Marshal(item.PurednsWordlists)
+			target.PurednsWordlists = string(wordlistsJSON)
+		} else {
+			target.PurednsWordlists = "[]"
 		}
 
 		if err := database.DB.Create(&target).Error; err != nil {
@@ -1163,4 +1270,48 @@ func ExportTargetIPs(c *fiber.Ctx) error {
 	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s_ips.txt\"", strings.ReplaceAll(target.RootDomain, ".", "_")))
 
 	return c.SendString(content)
+}
+
+// GetWordlists لیست وردلیست‌های موجود را برمی‌گرداند
+func GetWordlists(c *fiber.Ctx) error {
+	wordlists := []map[string]string{}
+
+	// وردلیست‌های پیش‌فرض در /wordlists
+	defaultWordlists := []string{
+		"/wordlists/common.txt",
+		"/wordlists/params.txt",
+	}
+
+	// وردلیست‌های سفارشی در /wordlists/custom
+	customWordlistsDir := "/wordlists/custom"
+
+	// بررسی وردلیست‌های پیش‌فرض
+	for _, wl := range defaultWordlists {
+		if _, err := os.Stat(wl); err == nil {
+			wordlists = append(wordlists, map[string]string{
+				"path": wl,
+				"name": filepath.Base(wl),
+				"type": "default",
+			})
+		}
+	}
+
+	// بررسی وردلیست‌های سفارشی
+	if entries, err := os.ReadDir(customWordlistsDir); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				fullPath := filepath.Join(customWordlistsDir, entry.Name())
+				wordlists = append(wordlists, map[string]string{
+					"path": fullPath,
+					"name": entry.Name(),
+					"type": "custom",
+				})
+			}
+		}
+	}
+
+	return c.JSON(fiber.Map{
+		"status": "success",
+		"data":   wordlists,
+	})
 }

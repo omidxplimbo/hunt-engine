@@ -12,6 +12,15 @@ const KNOWN_SOURCES = [
   { id: 'waymore', label: 'Waymore' },
 ];
 
+const KNOWN_ASSET_PROVIDERS = [
+  { id: 'subfinder', label: 'Subfinder' },
+  { id: 'assetfinder', label: 'Assetfinder' },
+  { id: 'crtsh', label: 'crt.sh' },
+  { id: 'cero', label: 'Cero' },
+  { id: 'alterx', label: 'Alterx' },
+  { id: 'puredns', label: 'Puredns' },
+];
+
 const TargetAssets = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -29,6 +38,7 @@ const TargetAssets = () => {
   const [filterHasCdn, setFilterHasCdn] = useState<boolean | undefined>(undefined);
   const [filterHasWaf, setFilterHasWaf] = useState<boolean | undefined>(undefined);
   const [filterHasCloud, setFilterHasCloud] = useState<boolean | undefined>(undefined);
+  const [filterAssetProvider, setFilterAssetProvider] = useState<string | null>(null); // 👈 single provider filter (null = ALL)
   
   // URL Filters
   const [filterJsOnly, setFilterJsOnly] = useState<boolean>(false);
@@ -48,7 +58,7 @@ const TargetAssets = () => {
   useEffect(() => { 
       setPage(1); 
       setSearchTerm(""); 
-  }, [filterLive, filterHttpx, filterDnsOnly, filterHasPorts, filterNoCdn, filterHasCdn, filterHasWaf, filterHasCloud, filterJsOnly, filterSources, activeTab]);
+  }, [filterLive, filterHttpx, filterDnsOnly, filterHasPorts, filterNoCdn, filterHasCdn, filterHasWaf, filterHasCloud, filterAssetProvider, filterJsOnly, filterSources, activeTab]);
 
   const toggleHttpx = () => {
       if (!filterHttpx) { setFilterDnsOnly(undefined); setFilterHttpx(true); } else { setFilterHttpx(undefined); }
@@ -133,7 +143,30 @@ const TargetAssets = () => {
 
   const targetQuery = useQuery({ queryKey: ['target', targetId], queryFn: () => getTargetDetails(targetId), enabled: !!targetId });
   
-  const assetsQuery = useQuery({ queryKey: ['assets', targetId, page, filterLive, filterHttpx, filterDnsOnly, filterHasPorts, filterNoCdn, filterHasCdn, filterHasWaf, filterHasCloud, debouncedSearch, sortBy, sortOrder], queryFn: () => getTargetAssets(targetId, page, 50, { is_live: filterLive, search: debouncedSearch, has_httpx: filterHttpx, dns_only: filterDnsOnly, has_ports: filterHasPorts, no_cdn: filterNoCdn, has_cdn: filterHasCdn, has_waf: filterHasWaf, has_cloud: filterHasCloud }, sortBy, sortOrder), enabled: !!targetId && activeTab === 'assets' });
+  const assetsQuery = useQuery({
+    queryKey: ['assets', targetId, page, filterLive, filterHttpx, filterDnsOnly, filterHasPorts, filterNoCdn, filterHasCdn, filterHasWaf, filterHasCloud, filterAssetProvider, debouncedSearch, sortBy, sortOrder],
+    queryFn: () =>
+      getTargetAssets(
+        targetId,
+        page,
+        50,
+        {
+          is_live: filterLive,
+          search: debouncedSearch,
+          has_httpx: filterHttpx,
+          dns_only: filterDnsOnly,
+          has_ports: filterHasPorts,
+          no_cdn: filterNoCdn,
+          has_cdn: filterHasCdn,
+          has_waf: filterHasWaf,
+          has_cloud: filterHasCloud,
+          sources: filterAssetProvider ? [filterAssetProvider] : undefined,
+        },
+        sortBy,
+        sortOrder
+      ),
+    enabled: !!targetId && activeTab === 'assets',
+  });
   
   // آپدیت کوئری URLها با پارامترهای جدید
   const urlsQuery = useQuery({ 
@@ -217,6 +250,38 @@ const TargetAssets = () => {
                     <button onClick={toggleHasCdn} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterHasCdn ? "border-hack-warning text-hack-warning bg-hack-warning/5" : "border-hack-border")}><Shield size={12} /> CDN</button>
                     <button onClick={toggleHasWaf} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterHasWaf ? "border-hack-secondary text-hack-secondary bg-hack-secondary/5" : "border-hack-border")}><Shield size={12} /> WAF</button>
                     <button onClick={toggleHasCloud} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterHasCloud ? "border-hack-primary text-hack-primary bg-hack-primary/10" : "border-hack-border")}><Cloud size={12} /> CLOUD</button>
+                </div>
+                <div className="hidden md:block w-px bg-hack-border h-4"></div>
+                <div className="flex items-center gap-2 w-full md:w-auto">
+                  <span className="text-[10px] uppercase text-hack-dim tracking-widest whitespace-nowrap">Provider:</span>
+                  <div className="flex items-center gap-2 min-w-[180px]">
+                    <select
+                      className="bg-black/40 border border-hack-border text-hack-primary text-[11px] font-mono px-2 py-1 rounded-none focus:outline-none focus:border-hack-primary/60 min-w-[180px]"
+                      value={filterAssetProvider ?? ""}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setFilterAssetProvider(v === "" ? null : v);
+                      }}
+                      title="Filter assets by discovery provider"
+                    >
+                      <option value="">ALL PROVIDERS</option>
+                      {KNOWN_ASSET_PROVIDERS.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </select>
+
+                    {filterAssetProvider && (
+                      <button
+                        onClick={() => setFilterAssetProvider(null)}
+                        className="hack-btn-ghost border border-hack-border px-2 py-1 text-[10px] uppercase tracking-wider text-hack-dim hover:text-white whitespace-nowrap"
+                        title="Clear provider filter (back to ALL)"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
                 </div>
             </div>
         )}

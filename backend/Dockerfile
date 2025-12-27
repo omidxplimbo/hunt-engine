@@ -13,6 +13,13 @@ RUN go install -v github.com/tomnomnom/assetfinder@latest
 RUN go install -v github.com/projectdiscovery/alterx/cmd/alterx@latest
 RUN go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest
 RUN go install -v github.com/glebarez/cero@latest
+RUN go install -v github.com/d3mondev/puredns/v2@latest
+
+# puredns نیاز به massdns دارد (برای resolve سریع)
+RUN git clone --depth 1 https://github.com/blechschmidt/massdns.git /tmp/massdns \
+    && make -C /tmp/massdns \
+    && mkdir -p /out \
+    && cp /tmp/massdns/bin/massdns /out/massdns
 
 # فاز ۲: پروبینگ
 RUN go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
@@ -53,6 +60,8 @@ COPY --from=go_builder /go/bin/assetfinder /usr/local/bin/assetfinder
 COPY --from=go_builder /go/bin/alterx /usr/local/bin/alterx
 COPY --from=go_builder /go/bin/dnsx /usr/local/bin/dnsx
 COPY --from=go_builder /go/bin/cero /usr/local/bin/cero
+COPY --from=go_builder /go/bin/puredns /usr/local/bin/puredns
+COPY --from=go_builder /out/massdns /usr/local/bin/massdns
 COPY --from=go_builder /go/bin/httpx /usr/local/bin/httpx
 COPY --from=go_builder /go/bin/cdncheck /usr/local/bin/cdncheck
 COPY --from=go_builder /go/bin/waybackurls /usr/local/bin/waybackurls

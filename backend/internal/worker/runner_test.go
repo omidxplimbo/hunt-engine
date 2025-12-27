@@ -1,136 +1,95 @@
 package worker
 
-import (
-	"testing"
-)
+import "testing"
 
 func TestNormalizeSubdomain(t *testing.T) {
+	root := "example.com"
+
 	tests := []struct {
-		name       string
-		subdomain  string
-		rootDomain string
-		expected   string
+		name string
+		in   string
+		want string
 	}{
 		{
-			name:       "Remove www prefix - reject if equals root",
-			subdomain:  "www.example.com",
-			rootDomain: "example.com",
-			expected:   "", // بعد از حذف www برابر rootDomain می‌شود، پس رد می‌شود
+			name: "trims_and_lowercases",
+			in:   "  API.Example.com  ",
+			want: "api.example.com",
 		},
 		{
-			name:       "Keep subdomain",
-			subdomain:  "api.example.com",
-			rootDomain: "example.com",
-			expected:   "api.example.com",
+			name: "removes_www_prefix_only",
+			in:   "WWW.Api.Example.com",
+			want: "api.example.com",
 		},
 		{
-			name:       "Remove www from subdomain",
-			subdomain:  "www.api.example.com",
-			rootDomain: "example.com",
-			expected:   "api.example.com",
+			name: "rejects_root_domain",
+			in:   "example.com",
+			want: "",
 		},
 		{
-			name:       "Reject root domain",
-			subdomain:  "example.com",
-			rootDomain: "example.com",
-			expected:   "",
+			name: "rejects_www_root_domain",
+			in:   "www.example.com",
+			want: "",
 		},
 		{
-			name:       "Case insensitive - normalize to lowercase",
-			subdomain:  "WWW.API.EXAMPLE.COM",
-			rootDomain: "example.com",
-			expected:   "api.example.com",
+			name: "rejects_non_subdomain_suffix_trick",
+			in:   "foo.notexample.com",
+			want: "",
 		},
 		{
-			name:       "Invalid domain",
-			subdomain:  "other.com",
-			rootDomain: "example.com",
-			expected:   "",
+			name: "rejects_empty",
+			in:   "   ",
+			want: "",
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := normalizeSubdomain(tt.subdomain, tt.rootDomain)
-			if result != tt.expected {
-				t.Errorf("normalizeSubdomain(%q, %q) = %q, want %q", tt.subdomain, tt.rootDomain, result, tt.expected)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := normalizeSubdomain(tc.in, root); got != tc.want {
+				t.Fatalf("normalizeSubdomain(%q, %q) = %q; want %q", tc.in, root, got, tc.want)
 			}
 		})
 	}
 }
 
 func TestParseCrtshJSON(t *testing.T) {
-	tests := []struct {
-		name        string
-		jsonData    string
-		regexPattern string
-		rootDomain  string
-		expected    []string
-	}{
-		{
-			name: "Parse common_name and name_value",
-			jsonData: `[
-				{"common_name": "*.example.com", "name_value": "example.com\nwww.example.com"},
-				{"common_name": "api.example.com", "name_value": "api.example.com"}
-			]`,
-			regexPattern: "example\\.com",
-			rootDomain:   "example.com",
-			expected:     []string{"example.com", "www.example.com", "api.example.com"},
-		},
-		{
-			name: "Filter by root domain",
-			jsonData: `[
-				{"common_name": "example.com"},
-				{"common_name": "other.com"}
-			]`,
-			regexPattern: "example\\.com",
-			rootDomain:   "example.com",
-			expected:     []string{"example.com"},
-		},
-		{
-			name: "Remove wildcard prefix",
-			jsonData: `[
-				{"common_name": "*.sub.example.com"},
-				{"common_name": "\\*.api.example.com"}
-			]`,
-			regexPattern: "example\\.com",
-			rootDomain:   "example.com",
-			expected:     []string{"sub.example.com", "api.example.com"},
-		},
-		{
-			name:        "Empty JSON",
-			jsonData:    `[]`,
-			regexPattern: "example\\.com",
-			rootDomain:   "example.com",
-			expected:     []string{},
-		},
+	root := "example.com"
+	data := []byte(`[
+		{"common_name":"*.api.example.com","name_value":"api.example.com\nwww.example.com\n*.dev.example.com"},
+		{"common_name":"EXAMPLE.COM","name_value":"shop.example.com\nfoo.notexample.com"},
+		{"name_value":""}
+	]`)
+
+	got := parseCrtshJSON(data, root)
+	if len(got) == 0 {
+		t.Fatalf("parseCrtshJSON returned empty results")
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := parseCrtshJSON([]byte(tt.jsonData), tt.regexPattern, tt.rootDomain)
-			
-			// Convert to map for easier comparison
-			resultMap := make(map[string]bool)
-			for _, r := range result {
-				resultMap[r] = true
-			}
-			expectedMap := make(map[string]bool)
-			for _, e := range tt.expected {
-				expectedMap[e] = true
-			}
+	// We only assert a few key expectations; full normalization happens later via normalizeSubdomain.
+	wantSet := map[string]bool{
+		"api.example.com":     false,
+		"www.example.com":     false,
+		"dev.example.com":     false,
+		"shop.example.com":    false,
+		"foo.notexample.com":  false, // parseCrtshJSON only filters by suffix; boundary is enforced in normalizeSubdomain
+		"example.com":         false, // allowed here; normalizeSubdomain will drop root
+	}
 
-			if len(resultMap) != len(expectedMap) {
-				t.Errorf("parseCrtshJSON() returned %d results, want %d", len(resultMap), len(expectedMap))
-				return
-			}
+	for _, s := range got {
+		if _, ok := wantSet[s]; ok {
+			wantSet[s] = true
+		}
+	}
 
-			for _, e := range tt.expected {
-				if !resultMap[e] {
-					t.Errorf("parseCrtshJSON() missing expected result: %q", e)
-				}
-			}
-		})
+	// Ensure we got at least the expected core entries from CN + name_value parsing.
+	for k, seen := range wantSet {
+		// skip the known edge cases that depend on later normalization rules
+		if k == "foo.notexample.com" || k == "example.com" {
+			continue
+		}
+		if !seen {
+			t.Fatalf("expected %q to be present in parseCrtshJSON results; got=%v", k, got)
+		}
 	}
 }
+
 

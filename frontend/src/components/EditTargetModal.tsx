@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { updateTarget, type UpdateTargetPayload } from '../api/targets';
+import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
+import { updateTarget, type UpdateTargetPayload, getWordlists, type Wordlist } from '../api/targets';
 import type { Target } from '../types/target';
-import { X, Loader2, Settings, Zap, Globe, Network } from 'lucide-react';
+import { X, Loader2, Settings, Zap, Globe, Network, FileText } from 'lucide-react';
 import clsx from 'clsx';
 
 interface Props {
@@ -41,10 +41,17 @@ export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
         use_portscan: (target as any).use_portscan ?? false,
         use_cero: (target as any).use_cero ?? false,
         use_crtsh: (target as any).use_crtsh ?? false,
+        use_puredns: (target as any).use_puredns ?? false,
+        puredns_wordlists: (target as any).puredns_wordlists || [],
         modules: existingModules,
       });
     }
   }, [target]);
+
+  const { data: wordlists = [] } = useQuery({
+    queryKey: ['wordlists'],
+    queryFn: getWordlists,
+  });
 
   const mutation = useMutation({
     mutationFn: (data: UpdateTargetPayload) => updateTarget(target!.id, data),
@@ -62,8 +69,8 @@ export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-      <div className="hack-box w-full max-w-md relative animate-in fade-in zoom-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 bg-black/80 backdrop-blur-sm overflow-y-auto">
+      <div className="hack-box w-full max-w-md relative animate-in fade-in zoom-in duration-200 flex flex-col max-h-[90vh] min-h-0 my-6">
         <div className="flex justify-between items-center p-4 border-b border-hack-border">
           <div className="flex items-center gap-2 text-hack-primary">
             <Settings size={18} />
@@ -72,7 +79,7 @@ export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
           <button onClick={onClose} className="text-hack-dim hover:text-hack-danger transition-colors"><X size={18} /></button>
         </div>
 
-        <form onSubmit={(e) => { e.preventDefault(); mutation.mutate(formData); }} className="p-6 space-y-5">
+        <form onSubmit={(e) => { e.preventDefault(); mutation.mutate(formData); }} className="p-6 space-y-5 overflow-y-auto flex-1 min-h-0">
           <div className="space-y-1">
             <label className="text-[10px] uppercase text-hack-dim tracking-widest">Name</label>
             <input type="text" className="hack-input w-full" value={formData.name || ''} onChange={e => setFormData({ ...formData, name: e.target.value })} />
@@ -142,6 +149,53 @@ export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
             <label className="block text-xs font-bold text-hack-text tracking-wide cursor-pointer flex items-center gap-1">
               <Globe size={12} className="text-purple-400" /> CRT.SH
             </label>
+          </div>
+
+          <div className="p-3 border border-hack-border bg-black/30 flex flex-col gap-3">
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={formData.use_puredns ?? false}
+                onChange={e => setFormData({ ...formData, use_puredns: e.target.checked, puredns_wordlists: e.target.checked ? (formData.puredns_wordlists || []) : [] })}
+                className="accent-hack-primary h-4 w-4"
+              />
+              <label className="block text-xs font-bold text-hack-text tracking-wide cursor-pointer flex items-center gap-1">
+                <FileText size={12} className="text-orange-400" /> PUREDNS
+              </label>
+            </div>
+            
+            {formData.use_puredns && (
+              <div className="mt-2 space-y-2 max-h-40 overflow-y-auto">
+                <label className="text-[9px] uppercase text-hack-dim tracking-widest">Select Wordlists:</label>
+                <div className="space-y-1">
+                  {wordlists.map((wl: Wordlist) => (
+                    <div key={wl.path} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id={`wl-edit-${wl.path}`}
+                        checked={(formData.puredns_wordlists || []).includes(wl.path)}
+                        onChange={(e) => {
+                          const current = formData.puredns_wordlists || [];
+                          if (e.target.checked) {
+                            setFormData({ ...formData, puredns_wordlists: [...current, wl.path] });
+                          } else {
+                            setFormData({ ...formData, puredns_wordlists: current.filter(p => p !== wl.path) });
+                          }
+                        }}
+                        className="accent-hack-primary h-3 w-3"
+                      />
+                      <label htmlFor={`wl-edit-${wl.path}`} className="text-[9px] text-hack-text cursor-pointer flex items-center gap-1">
+                        <span className={wl.type === 'custom' ? 'text-orange-400' : 'text-blue-400'}>[{wl.type}]</span>
+                        {wl.name}
+                      </label>
+                    </div>
+                  ))}
+                  {wordlists.length === 0 && (
+                    <p className="text-[8px] text-hack-dim">No wordlists available. Add wordlists to /wordlists/custom directory.</p>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-3">
