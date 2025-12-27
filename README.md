@@ -294,6 +294,23 @@ Puredns uses wordlists for bruteforcing. You can use:
 
 See: **`WORDLISTS-GUIDE.md`** for the full guide (where to put files, format, and examples).
 
+### 🔑 Subfinder Provider API Keys (Per-User)
+
+Subfinder supports many passive sources that require API keys (e.g., `shodan`, `securitytrails`, `chaos`, etc).  
+This platform lets **each user** manage their own subfinder provider keys **from the UI**, and they are applied **dynamically at runtime**.
+
+- Keys are stored **per-user** (isolated by account).  
+- Keys are **not printed** in logs.  
+- When subfinder runs, the engine generates a temporary `provider-config.yaml` and passes it via `subfinder -pc ...` **only for targets owned by that user**.
+
+#### Configure in UI
+- Go to **Account** page
+- In **Subfinder Provider API Keys**, add providers (example: `shodan`) and paste API key
+- Click **Save**
+
+> Note: UI currently supports **one API key string per provider** (it maps to `provider: ["API_KEY"]` in subfinder).  
+> Some providers support more complex entries; we can extend the UI later if needed.
+
 #### Exporting Targets
 1. Click **Export** button on Targets page
 2. Select targets to export (or leave empty to export all)
@@ -367,6 +384,9 @@ This order is enforced automatically, even if modules are specified in a differe
 * `PATCH /api/me` - Update current user profile (e.g., username)
 * `POST /api/me/change-password` - Change password (requires current password)
 * `DELETE /api/me` - Delete own account (requires current password)
+* `GET /api/me/subfinder/providers` - List current user's subfinder provider configs
+* `PUT /api/me/subfinder/providers` - Replace current user's provider list (used by UI Save)
+* `DELETE /api/me/subfinder/providers/:provider` - Remove a single provider for current user
 
 ### Targets
 * `GET /api/targets` - List all targets (paginated)
