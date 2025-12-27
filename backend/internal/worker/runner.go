@@ -746,8 +746,13 @@ func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveRes
 					now := time.Now()
 					logChange(database.DB, existing.ID, "is_live", strconv.FormatBool(existing.IsLive), strconv.FormatBool(isLive))
 
-					if isLive {
-						telegram.SendChangeAlert(target.RootDomain, val, "is_live", "false", "true")
+					// اگر ساب‌دامین قبلاً در دیتابیس بود اما لایو نبود و حالا لایو شده، به عنوان fresh asset در نظر می‌گیریم
+					if isLive && !existing.IsLive {
+						if !isFirstRun {
+							telegram.SendNewAssetAlert(target.RootDomain, val)
+						}
+					} else if !isLive {
+						telegram.SendChangeAlert(target.RootDomain, val, "is_live", "true", "false")
 					}
 
 					database.DB.Model(existing).Updates(map[string]interface{}{
@@ -761,6 +766,7 @@ func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveRes
 					database.DB.Model(existing).Update("dnsx_ip", dnsxIPJSON)
 				}
 			} else {
+				// ساب‌دامین جدید: فقط اگر لایو باشد (دارای IP از dnsx) به عنوان fresh asset در نظر می‌گیریم
 				newAsset := models.Asset{
 					TargetID:     target.ID,
 					Value:        val,
@@ -774,6 +780,7 @@ func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveRes
 				}
 				toInsert = append(toInsert, newAsset)
 
+				// فقط برای ساب‌دامین‌های جدید که لایو هستند (دارای IP از dnsx) نوتیف می‌فرستیم
 				if !isFirstRun && isLive {
 					telegram.SendNewAssetAlert(target.RootDomain, val)
 				}
@@ -798,8 +805,10 @@ func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveRes
 func UpdateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 	var targetName string
 	var target models.Target
+	isFirstRun := false
 	if err := database.DB.First(&target, targetID).Error; err == nil {
 		targetName = target.RootDomain
+		isFirstRun = target.ScanCount == 0
 	}
 
 	countUpdated := 0
@@ -810,6 +819,8 @@ func UpdateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 			var asset models.Asset
 			if err := tx.Set("gorm:query_option", "FOR UPDATE").Where("value = ? AND target_id = ?", hostInput, targetID).First(&asset).Error; err != nil {
 				if err == gorm.ErrRecordNotFound {
+					// این حالت نادر است چون Phase 2 فقط assets موجود در دیتابیس را پردازش می‌کند
+					// اما اگر asset جدیدی پیدا شد و لایو است، فقط در صورتی نوتیف می‌فرستیم که اولین اجرا نباشد
 					asset = models.Asset{
 						TargetID: targetID, Value: hostInput, Type: "subdomain", IsNew: true, IsLive: true,
 						Technologies: "[]", HostIP: "[]", RawHttpx: "{}", DnsxIP: "[]",
@@ -817,7 +828,10 @@ func UpdateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 					if err := tx.Create(&asset).Error; err != nil {
 						return err
 					}
-					telegram.SendNewAssetAlert(targetName, hostInput)
+					// فقط برای assets جدید که لایو هستند و اولین اجرا نیست، نوتیف می‌فرستیم
+					if !isFirstRun && result.StatusCode > 0 {
+						telegram.SendNewAssetAlert(targetName, hostInput)
+					}
 				} else {
 					continue
 				}
