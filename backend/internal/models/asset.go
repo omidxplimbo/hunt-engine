@@ -39,6 +39,10 @@ type Target struct {
 	// 👇 Port scan (nmap) in PHASE 1 (optional)
 	UsePortscan bool `gorm:"default:false" json:"use_portscan"`
 
+	// 👇 ابزارهای جدید برای فاز اول (Discovery)
+	UseCero  bool `gorm:"default:false" json:"use_cero"`  // Scrape domain names from SSL certificates
+	UseCrtsh bool `gorm:"default:false" json:"use_crtsh"` // Use crt.sh API for subdomain discovery
+
 	ScanModules string `gorm:"type:jsonb;default:'[\"DISCOVERY\", \"PROBING\"]'" json:"scan_modules"`
 
 	Assets []Asset `json:"-"`
@@ -85,6 +89,9 @@ type Asset struct {
 	OpenPorts string `gorm:"type:jsonb;default:'{}'" json:"open_ports"`
 
 	RawHttpx string `gorm:"type:jsonb" json:"raw_httpx"`
+
+	// 👇 Sources/Providers که این subdomain را پیدا کرده‌اند (مثلاً: ["subfinder", "assetfinder", "cero", "crtsh"])
+	Sources string `gorm:"type:jsonb;default:'[]'" json:"sources"`
 
 	History []AssetHistory `json:"history,omitempty"`
 }

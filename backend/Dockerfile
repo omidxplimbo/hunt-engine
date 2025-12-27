@@ -12,6 +12,7 @@ RUN go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
 RUN go install -v github.com/tomnomnom/assetfinder@latest
 RUN go install -v github.com/projectdiscovery/alterx/cmd/alterx@latest
 RUN go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest
+RUN go install -v github.com/glebarez/cero@latest
 
 # فاز ۲: پروبینگ
 RUN go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
@@ -51,6 +52,7 @@ COPY --from=go_builder /go/bin/subfinder /usr/local/bin/subfinder
 COPY --from=go_builder /go/bin/assetfinder /usr/local/bin/assetfinder
 COPY --from=go_builder /go/bin/alterx /usr/local/bin/alterx
 COPY --from=go_builder /go/bin/dnsx /usr/local/bin/dnsx
+COPY --from=go_builder /go/bin/cero /usr/local/bin/cero
 COPY --from=go_builder /go/bin/httpx /usr/local/bin/httpx
 COPY --from=go_builder /go/bin/cdncheck /usr/local/bin/cdncheck
 COPY --from=go_builder /go/bin/waybackurls /usr/local/bin/waybackurls

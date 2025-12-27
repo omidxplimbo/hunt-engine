@@ -257,6 +257,7 @@ const TargetAssets = () => {
                 {activeTab === 'assets' ? (
                     <>
                     <SortableHeader field="value" label="Asset" className="w-[300px]" />
+                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">Providers</th>
                     <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">DNS IP</th>
                     <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">HTTP IP</th>
                     <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">Ports</th>
@@ -302,6 +303,26 @@ const TargetAssets = () => {
                         try { techs = JSON.parse(asset.technologies); } catch {} 
                     }
 
+                    // Parse sources
+                    let sources: string[] = [];
+                    if (Array.isArray(asset.sources)) {
+                        sources = asset.sources;
+                    } else if (typeof asset.sources === 'string') {
+                        try { sources = JSON.parse(asset.sources); } catch {}
+                    }
+
+                    // رنگ‌های مختلف برای هر provider
+                    const getSourceColor = (source: string) => {
+                        const colors: Record<string, string> = {
+                            'subfinder': 'border-blue-400 text-blue-400 bg-blue-900/20',
+                            'assetfinder': 'border-green-400 text-green-400 bg-green-900/20',
+                            'cero': 'border-purple-400 text-purple-400 bg-purple-900/20',
+                            'crtsh': 'border-orange-400 text-orange-400 bg-orange-900/20',
+                            'alterx': 'border-yellow-400 text-yellow-400 bg-yellow-900/20',
+                        };
+                        return colors[source.toLowerCase()] || 'border-hack-border text-hack-dim bg-black/30';
+                    };
+
                     return (
                     <tr key={asset.id} className="hover:bg-hack-primary/5 transition-colors font-mono text-sm group">
                         <td className="px-6 py-3 align-top">
@@ -319,6 +340,23 @@ const TargetAssets = () => {
                               </a>
                             </div>
                         </div>
+                        </td>
+                        <td className="px-6 py-3 align-top">
+                            <div className="flex flex-wrap gap-1">
+                                {sources.length > 0 ? (
+                                    sources.map((source, idx) => (
+                                        <span 
+                                            key={idx} 
+                                            className={clsx("text-[9px] px-1.5 py-0.5 border uppercase tracking-wider", getSourceColor(source))}
+                                            title={`Found by ${source}`}
+                                        >
+                                            {source}
+                                        </span>
+                                    ))
+                                ) : (
+                                    <span className="text-hack-dim text-[9px]">-</span>
+                                )}
+                            </div>
                         </td>
                         <td className="px-6 py-3 align-top"><div className="flex flex-col gap-1">{dnsxIps.length > 0 ? dnsxIps.map((ip, idx) => <span key={idx} className="text-[10px] text-hack-secondary">{ip}</span>) : <span className="text-hack-dim">-</span>}</div></td>
                         <td className="px-6 py-3 align-top"><div className="flex flex-col gap-1">{httpxIps.length > 0 ? httpxIps.map((ip, idx) => <span key={idx} className="text-[10px] text-hack-dim">{ip}</span>) : <span className="text-hack-dim">-</span>}</div></td>

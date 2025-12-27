@@ -12,6 +12,9 @@ type CreateTargetRequest struct {
 	UseWaymore *bool `json:"use_waymore"`
 	// 👇 PHASE 1 optional port scan (nmap)
 	UsePortscan *bool `json:"use_portscan"`
+	// 👇 ابزارهای جدید برای فاز اول (Discovery)
+	UseCero  *bool `json:"use_cero"`  // Scrape domain names from SSL certificates
+	UseCrtsh *bool `json:"use_crtsh"` // Use crt.sh API for subdomain discovery
 }
 
 // UpdateTargetRequest برای ویرایش تنظیمات تارگت
@@ -26,6 +29,9 @@ type UpdateTargetRequest struct {
 	UseWaymore *bool `json:"use_waymore"`
 	// 👇 PHASE 1 optional port scan (nmap)
 	UsePortscan *bool `json:"use_portscan"`
+	// 👇 ابزارهای جدید برای فاز اول (Discovery)
+	UseCero  *bool `json:"use_cero"`  // Scrape domain names from SSL certificates
+	UseCrtsh *bool `json:"use_crtsh"` // Use crt.sh API for subdomain discovery
 }
 
 // TargetExportData ساختار استاندارد برای Export/Import تارگت‌ها
@@ -48,6 +54,8 @@ type TargetExportItem struct {
 	UseAlterx   bool     `json:"use_alterx"`
 	UseWaymore  bool     `json:"use_waymore"`
 	UsePortscan bool     `json:"use_portscan"`
+	UseCero     bool     `json:"use_cero"`
+	UseCrtsh    bool     `json:"use_crtsh"`
 
 	// داده‌های مرتبط
 	Assets []AssetExportItem `json:"assets"` // لیست ساب‌دامین‌ها و دارایی‌ها

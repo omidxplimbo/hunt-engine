@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -268,10 +269,11 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		return
 	}
 	updateTargetPhase(targetID, "PHASE 1: PASSIVE ENUM")
-	passiveResults := runPassiveCollection(targetID, rootDomain)
+	passiveResults, passiveSources := runPassiveCollection(targetID, rootDomain)
 
 	// 2. Mutation (Alterx)
 	var mutatedResults []string
+	mutatedSources := make(map[string][]string)
 	if targetConf.UseAlterx {
 		if checkStopRequest(targetID) {
 			return
@@ -287,6 +289,11 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 			}
 			log.Printf("❌ Alterx failed: %v. Proceeding without mutations.\n", err)
 			mutatedResults = []string{}
+		} else {
+			// برای alterx، source را "alterx" تنظیم می‌کنیم
+			for _, subdomain := range mutatedResults {
+				mutatedSources[subdomain] = []string{"alterx"}
+			}
 		}
 	} else {
 		log.Printf("⏩ Skipping Alterx (Mutation) for %s based on target config.\n", rootDomain)
@@ -298,6 +305,33 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 
 	masterList := mergeUnique(passiveResults, mutatedResults)
 	masterList = mergeUnique(masterList, existingAssets)
+
+	// Merge sources: passive + mutated
+	allSources := make(map[string][]string)
+	for subdomain, sources := range passiveSources {
+		allSources[subdomain] = sources
+	}
+	for subdomain, sources := range mutatedSources {
+		if existing, ok := allSources[subdomain]; ok {
+			// Merge sources (unique)
+			sourceMap := make(map[string]bool)
+			for _, s := range existing {
+				sourceMap[s] = true
+			}
+			for _, s := range sources {
+				sourceMap[s] = true
+			}
+			var merged []string
+			for s := range sourceMap {
+				merged = append(merged, s)
+			}
+			sort.Strings(merged)
+			allSources[subdomain] = merged
+		} else {
+			allSources[subdomain] = sources
+		}
+	}
+
 	writeSliceToFile(allFoundFile, masterList)
 	log.Printf("📊 Master list created with %d potential subdomains. Starting validation (DNSX)...\n", len(masterList))
 
@@ -325,7 +359,7 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	updateTargetPhase(targetID, "PHASE 1: SAVING RESULTS")
 	var target models.Target
 	database.DB.First(&target, targetID)
-	saveDiscoveryResultsToDB(target, masterList, dnsxResults)
+	saveDiscoveryResultsToDB(target, masterList, dnsxResults, allSources)
 
 	// 6. CDN Check for all live IPs from DNS validation
 	if checkStopRequest(targetID) {
@@ -705,12 +739,39 @@ func saveCrawledURLs(targetID uint, rootDomain string, urls map[string]string, s
 // Smart Storage & Notification Logic
 // ==========================================
 
-func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveResults map[string][]string) {
+func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveResults map[string][]string, sourcesMap map[string][]string) {
 	log.Printf("💾 Saving/Updating assets (Scan Count: %d)...", target.ScanCount)
 
 	isFirstRun := target.ScanCount == 0
 	countNew := 0
 	countUpdated := 0
+
+	// Helper function برای merge کردن sources
+	mergeSources := func(existingSourcesJSON string, newSources []string) string {
+		var existingSources []string
+		if existingSourcesJSON != "" && existingSourcesJSON != "[]" {
+			_ = json.Unmarshal([]byte(existingSourcesJSON), &existingSources)
+		}
+
+		// ایجاد map برای unique کردن
+		sourceMap := make(map[string]bool)
+		for _, s := range existingSources {
+			sourceMap[s] = true
+		}
+		for _, s := range newSources {
+			sourceMap[s] = true
+		}
+
+		// تبدیل به slice و مرتب کردن
+		var merged []string
+		for s := range sourceMap {
+			merged = append(merged, s)
+		}
+		sort.Strings(merged)
+
+		bytes, _ := json.Marshal(merged)
+		return string(bytes)
+	}
 
 	chunkSize := 1000
 	for i := 0; i < len(masterList); i += chunkSize {
@@ -741,7 +802,21 @@ func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveRes
 				dnsxIPJSON = string(bytes)
 			}
 
+			// دریافت sources برای این subdomain
+			newSources := sourcesMap[val]
+			sourcesJSON := "[]"
+			if len(newSources) > 0 {
+				bytes, _ := json.Marshal(newSources)
+				sourcesJSON = string(bytes)
+			}
+
 			if existing, ok := existingMap[val]; ok {
+				// Merge sources با sources موجود
+				mergedSourcesJSON := mergeSources(existing.Sources, newSources)
+
+				updateData := make(map[string]interface{})
+				needsUpdate := false
+
 				if existing.IsLive != isLive {
 					now := time.Now()
 					logChange(database.DB, existing.ID, "is_live", strconv.FormatBool(existing.IsLive), strconv.FormatBool(isLive))
@@ -755,15 +830,25 @@ func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveRes
 						telegram.SendChangeAlert(target.RootDomain, val, "is_live", "true", "false")
 					}
 
-					database.DB.Model(existing).Updates(map[string]interface{}{
-						"is_live":        isLive,
-						"is_new":         true,
-						"last_change_at": &now,
-						"dnsx_ip":        dnsxIPJSON,
-					})
-					countUpdated++
+					updateData["is_live"] = isLive
+					updateData["is_new"] = true
+					updateData["last_change_at"] = &now
+					updateData["dnsx_ip"] = dnsxIPJSON
+					needsUpdate = true
 				} else if isLive && existing.DnsxIP != dnsxIPJSON {
-					database.DB.Model(existing).Update("dnsx_ip", dnsxIPJSON)
+					updateData["dnsx_ip"] = dnsxIPJSON
+					needsUpdate = true
+				}
+
+				// آپدیت sources اگر تغییر کرده
+				if existing.Sources != mergedSourcesJSON {
+					updateData["sources"] = mergedSourcesJSON
+					needsUpdate = true
+				}
+
+				if needsUpdate {
+					database.DB.Model(existing).Updates(updateData)
+					countUpdated++
 				}
 			} else {
 				// ساب‌دامین جدید: فقط اگر لایو باشد (دارای IP از dnsx) به عنوان fresh asset در نظر می‌گیریم
@@ -777,6 +862,7 @@ func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveRes
 					HostIP:       "[]",
 					RawHttpx:     "{}",
 					DnsxIP:       dnsxIPJSON,
+					Sources:      sourcesJSON,
 				}
 				toInsert = append(toInsert, newAsset)
 
@@ -1056,33 +1142,274 @@ func runDnsx(targetID uint, inputFile, outputFile string) (map[string][]string, 
 	return results, scanner.Err()
 }
 
-func runPassiveCollection(targetID uint, domain string) []string {
+// normalizeSubdomain حذف www و normalize کردن subdomain
+func normalizeSubdomain(subdomain, rootDomain string) string {
+	subdomain = strings.TrimSpace(subdomain)
+	if subdomain == "" {
+		return ""
+	}
+
+	// تبدیل به lowercase برای مقایسه
+	subdomainLower := strings.ToLower(subdomain)
+	rootDomainLower := strings.ToLower(rootDomain)
+
+	// حذف www. از ابتدای subdomain (case-insensitive)
+	subdomainLower = strings.TrimPrefix(subdomainLower, "www.")
+
+	// اطمینان از اینکه subdomain با rootDomain تمام می‌شود
+	if !strings.HasSuffix(subdomainLower, rootDomainLower) {
+		return ""
+	}
+
+	// اگر subdomain برابر rootDomain باشد، رد می‌کنیم (فقط subdomain می‌خواهیم)
+	if subdomainLower == rootDomainLower {
+		return ""
+	}
+
+	return subdomainLower
+}
+
+// SubdomainSource نگه‌داری subdomain و source آن
+type SubdomainSource struct {
+	Subdomain string
+	Source    string
+}
+
+func runPassiveCollection(targetID uint, domain string) ([]string, map[string][]string) {
+	// دریافت تنظیمات target
+	var target models.Target
+	if err := database.DB.First(&target, targetID).Error; err != nil {
+		log.Printf("⚠️ Failed to fetch target config: %v\n", err)
+		// استفاده از تنظیمات پیش‌فرض
+		target.UseCero = false
+		target.UseCrtsh = false
+	}
+
 	var wg sync.WaitGroup
-	results := make(chan string, 50000)
+	results := make(chan SubdomainSource, 50000)
+
 	runTool := func(name string, args ...string) {
 		defer wg.Done()
 		output, err := runCommandWithKillSwitch(targetID, name, args...)
 		if err == nil {
 			for _, line := range strings.Split(string(output), "\n") {
-				results <- strings.TrimSpace(line)
+				normalized := normalizeSubdomain(strings.TrimSpace(line), domain)
+				if normalized != "" {
+					results <- SubdomainSource{Subdomain: normalized, Source: name}
+				}
 			}
 		} else {
 			log.Printf("❌ %s error/killed: %v\n", name, err)
 		}
 	}
+
+	// ابزارهای همیشگی
 	wg.Add(2)
 	go runTool("subfinder", "-d", domain, "-silent", "-all")
 	go runTool("assetfinder", "--subs-only", domain)
+
+	// ابزارهای انتخابی
+	if target.UseCero {
+		wg.Add(1)
+		log.Printf("🔐 Starting CERO for %s (SSL certificate scraping)...\n", domain)
+		go func() {
+			defer wg.Done()
+			ceroResults := runCero(targetID, domain)
+			log.Printf("✅ CERO found %d domains for %s\n", len(ceroResults), domain)
+			for _, res := range ceroResults {
+				normalized := normalizeSubdomain(res, domain)
+				if normalized != "" {
+					results <- SubdomainSource{Subdomain: normalized, Source: "cero"}
+				}
+			}
+		}()
+	} else {
+		log.Printf("⏩ Skipping CERO for %s (Disabled in settings)\n", domain)
+	}
+
+	if target.UseCrtsh {
+		wg.Add(1)
+		log.Printf("🔍 Starting CRT.SH API query for %s...\n", domain)
+		go func() {
+			defer wg.Done()
+			crtshResults := runCrtsh(domain)
+			log.Printf("✅ CRT.SH found %d domains for %s\n", len(crtshResults), domain)
+			for _, res := range crtshResults {
+				normalized := normalizeSubdomain(res, domain)
+				if normalized != "" {
+					results <- SubdomainSource{Subdomain: normalized, Source: "crtsh"}
+				}
+			}
+		}()
+	} else {
+		log.Printf("⏩ Skipping CRT.SH for %s (Disabled in settings)\n", domain)
+	}
+
 	go func() { wg.Wait(); close(results) }()
-	uniqueMap := make(map[string]bool)
+
+	// Map برای نگه‌داری subdomain -> []sources
+	sourcesMap := make(map[string]map[string]bool)
 	var finalSlice []string
+
 	for res := range results {
-		if res != "" && strings.HasSuffix(res, domain) && !uniqueMap[res] {
-			uniqueMap[res] = true
-			finalSlice = append(finalSlice, res)
+		if res.Subdomain != "" && strings.HasSuffix(res.Subdomain, domain) {
+			// اضافه کردن subdomain به لیست
+			if _, exists := sourcesMap[res.Subdomain]; !exists {
+				sourcesMap[res.Subdomain] = make(map[string]bool)
+				finalSlice = append(finalSlice, res.Subdomain)
+			}
+			// اضافه کردن source
+			sourcesMap[res.Subdomain][res.Source] = true
 		}
 	}
-	return finalSlice
+
+	// تبدیل map[string]bool به []string
+	sourcesListMap := make(map[string][]string)
+	for subdomain, sourcesSet := range sourcesMap {
+		var sources []string
+		for source := range sourcesSet {
+			sources = append(sources, source)
+		}
+		sort.Strings(sources) // مرتب کردن برای consistency
+		sourcesListMap[subdomain] = sources
+	}
+
+	return finalSlice, sourcesListMap
+}
+
+// runCero اجرای ابزار cero برای scrape کردن domain names از SSL certificates
+func runCero(targetID uint, domain string) []string {
+	output, err := runCommandWithKillSwitch(targetID, "cero", "-d", domain)
+	if err != nil {
+		log.Printf("⚠️ CERO error/killed: %v\n", err)
+		return []string{}
+	}
+
+	var results []string
+	for _, line := range strings.Split(string(output), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			results = append(results, trimmed)
+		}
+	}
+	if len(results) > 0 {
+		log.Printf("🔐 CERO scraped %d domains from SSL certificates\n", len(results))
+	}
+	return results
+}
+
+// runCrtsh استفاده از crt.sh API برای پیدا کردن subdomain ها
+func runCrtsh(rootDomain string) []string {
+	// Escape کردن نقطه‌ها برای regex
+	re := strings.ReplaceAll(rootDomain, ".", "\\.")
+
+	// ساخت URL برای crt.sh
+	url1 := fmt.Sprintf("https://crt.sh/?q=%%25.%s&output=json", rootDomain)
+	url2 := fmt.Sprintf("https://crt.sh/?q=%s&output=json", rootDomain)
+
+	var allResults []string
+
+	// درخواست اول: با wildcard
+	log.Printf("🔍 Querying crt.sh API (wildcard): %s\n", url1)
+	if data, err := fetchCrtshData(url1); err == nil {
+		parsed := parseCrtshJSON(data, re, rootDomain)
+		allResults = append(allResults, parsed...)
+		log.Printf("✅ crt.sh wildcard query returned %d domains\n", len(parsed))
+	} else {
+		log.Printf("⚠️ crt.sh wildcard query failed: %v\n", err)
+	}
+
+	// درخواست دوم: بدون wildcard
+	log.Printf("🔍 Querying crt.sh API (exact): %s\n", url2)
+	if data, err := fetchCrtshData(url2); err == nil {
+		parsed := parseCrtshJSON(data, re, rootDomain)
+		allResults = append(allResults, parsed...)
+		log.Printf("✅ crt.sh exact query returned %d domains\n", len(parsed))
+	} else {
+		log.Printf("⚠️ crt.sh exact query failed: %v\n", err)
+	}
+
+	// Unique کردن نتایج
+	uniqueMap := make(map[string]bool)
+	var finalResults []string
+	for _, res := range allResults {
+		res = strings.ToLower(strings.TrimSpace(res))
+		if res != "" && !uniqueMap[res] {
+			uniqueMap[res] = true
+			finalResults = append(finalResults, res)
+		}
+	}
+
+	log.Printf("🔍 CRT.SH total unique domains: %d\n", len(finalResults))
+	return finalResults
+}
+
+// fetchCrtshData دریافت داده از crt.sh API
+func fetchCrtshData(url string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("crt.sh API returned status %d", resp.StatusCode)
+	}
+
+	return ioutil.ReadAll(resp.Body)
+}
+
+// parseCrtshJSON پارس کردن JSON از crt.sh و استخراج domain names
+func parseCrtshJSON(data []byte, regexPattern, rootDomain string) []string {
+	var results []string
+	var jsonData []map[string]interface{}
+
+	if err := json.Unmarshal(data, &jsonData); err != nil {
+		return results
+	}
+
+	for _, item := range jsonData {
+		// استخراج common_name
+		if cn, ok := item["common_name"].(string); ok && cn != "" {
+			// حذف wildcard
+			cn = strings.TrimPrefix(cn, "*.")
+			cn = strings.TrimPrefix(cn, "\\*.")
+			results = append(results, cn)
+		}
+
+		// استخراج name_value (می‌تواند یک string یا array باشد)
+		if nv, ok := item["name_value"].(string); ok && nv != "" {
+			// name_value می‌تواند چند خطی باشد
+			for _, line := range strings.Split(nv, "\n") {
+				line = strings.TrimSpace(line)
+				if line != "" {
+					line = strings.TrimPrefix(line, "*.")
+					results = append(results, line)
+				}
+			}
+		}
+	}
+
+	// فیلتر کردن بر اساس rootDomain
+	var filtered []string
+	for _, res := range results {
+		res = strings.ToLower(strings.TrimSpace(res))
+		// بررسی اینکه با rootDomain تمام می‌شود
+		if strings.HasSuffix(res, rootDomain) {
+			filtered = append(filtered, res)
+		}
+	}
+
+	return filtered
 }
 
 func runAlterx(targetID uint, inputFile, rootDomain string) ([]string, error) {

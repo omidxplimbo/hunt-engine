@@ -15,6 +15,9 @@ export interface Target {
   use_waymore: boolean;
   // 👇 optional port scan during discovery
   use_portscan: boolean;
+  // 👇 ابزارهای جدید برای فاز اول (Discovery)
+  use_cero?: boolean;  // Scrape domain names from SSL certificates
+  use_crtsh?: boolean; // Use crt.sh API for subdomain discovery
   scan_modules: string;
 }
 

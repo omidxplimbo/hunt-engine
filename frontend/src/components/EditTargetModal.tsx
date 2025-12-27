@@ -39,6 +39,8 @@ export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
         use_alterx: target.use_alterx,
         use_waymore: target.use_waymore, // 👈 مقداردهی اولیه
         use_portscan: (target as any).use_portscan ?? false,
+        use_cero: (target as any).use_cero ?? false,
+        use_crtsh: (target as any).use_crtsh ?? false,
         modules: existingModules,
       });
     }
@@ -104,15 +106,41 @@ export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
             </div>
           </div>
 
+          <div className="grid grid-cols-2 gap-3">
+            <div className="p-3 border border-hack-border bg-black/30 flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={formData.use_portscan ?? false}
+                onChange={e => setFormData({ ...formData, use_portscan: e.target.checked })}
+                className="accent-hack-primary h-4 w-4"
+              />
+              <label className="block text-xs font-bold text-hack-text tracking-wide cursor-pointer flex items-center gap-1">
+                <Network size={12} className="text-hack-primary" /> PORTSCAN
+              </label>
+            </div>
+
+            <div className="p-3 border border-hack-border bg-black/30 flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={formData.use_cero ?? false}
+                onChange={e => setFormData({ ...formData, use_cero: e.target.checked })}
+                className="accent-hack-primary h-4 w-4"
+              />
+              <label className="block text-xs font-bold text-hack-text tracking-wide cursor-pointer flex items-center gap-1">
+                <Network size={12} className="text-green-400" /> CERO
+              </label>
+            </div>
+          </div>
+
           <div className="p-3 border border-hack-border bg-black/30 flex items-center gap-2">
             <input
               type="checkbox"
-              checked={formData.use_portscan ?? false}
-              onChange={e => setFormData({ ...formData, use_portscan: e.target.checked })}
+              checked={formData.use_crtsh ?? false}
+              onChange={e => setFormData({ ...formData, use_crtsh: e.target.checked })}
               className="accent-hack-primary h-4 w-4"
             />
             <label className="block text-xs font-bold text-hack-text tracking-wide cursor-pointer flex items-center gap-1">
-              <Network size={12} className="text-hack-primary" /> PORTSCAN (NMAP)
+              <Globe size={12} className="text-purple-400" /> CRT.SH
             </label>
           </div>
 

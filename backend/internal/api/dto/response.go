@@ -21,6 +21,9 @@ type TargetResponse struct {
 	UseWaymore bool `json:"use_waymore"`
 	// 👇 optional port scan during discovery
 	UsePortscan bool `json:"use_portscan"`
+	// 👇 ابزارهای جدید برای فاز اول (Discovery)
+	UseCero  bool `json:"use_cero"`  // Scrape domain names from SSL certificates
+	UseCrtsh bool `json:"use_crtsh"` // Use crt.sh API for subdomain discovery
 
 	ScanModules string `json:"scan_modules"`
 }
@@ -51,6 +54,7 @@ type AssetResponse struct {
 	ResponseTime   int64       `json:"response_time_ms"`
 	OpenPorts      interface{} `json:"open_ports"`
 	RawHttpx       interface{} `json:"raw_httpx,omitempty"`
+	Sources        interface{} `json:"sources"` // لیست ابزارهایی که این subdomain را پیدا کرده‌اند
 }
 
 type FoundURLResponse struct {

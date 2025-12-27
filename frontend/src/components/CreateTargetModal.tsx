@@ -26,6 +26,8 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
     use_alterx: true,
     use_waymore: false, // پیش‌فرض
     use_portscan: false, // پیش‌فرض
+    use_cero: false, // پیش‌فرض
+    use_crtsh: false, // پیش‌فرض
   });
 
   const mutation = useMutation({
@@ -33,7 +35,7 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['targets'] });
       onClose();
-      setFormData({ name: '', root_domain: '', description: '', frequency: 720, modules: ['DISCOVERY', 'PROBING', 'CRAWLING'], use_alterx: true, use_waymore: false, use_portscan: false });
+      setFormData({ name: '', root_domain: '', description: '', frequency: 720, modules: ['DISCOVERY', 'PROBING', 'CRAWLING'], use_alterx: true, use_waymore: false, use_portscan: false, use_cero: false, use_crtsh: false });
     },
   });
 
@@ -93,20 +95,54 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
             </div>
           </div>
 
+          <div className="grid grid-cols-2 gap-3">
+            <div className="p-3 border border-hack-border bg-black/30 flex flex-col justify-center gap-2">
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="use_portscan"
+                  checked={formData.use_portscan}
+                  onChange={e => setFormData({ ...formData, use_portscan: e.target.checked })}
+                  className="accent-hack-primary h-4 w-4"
+                />
+                <label htmlFor="use_portscan" className="text-xs font-bold text-hack-text tracking-wide cursor-pointer flex items-center gap-1">
+                  <Network size={12} className="text-hack-primary" /> PORTSCAN
+                </label>
+              </div>
+              <p className="text-[8px] text-hack-dim leading-tight">Scan open ports (NMAP).</p>
+            </div>
+
+            <div className="p-3 border border-hack-border bg-black/30 flex flex-col justify-center gap-2">
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="use_cero"
+                  checked={formData.use_cero || false}
+                  onChange={e => setFormData({ ...formData, use_cero: e.target.checked })}
+                  className="accent-hack-primary h-4 w-4"
+                />
+                <label htmlFor="use_cero" className="text-xs font-bold text-hack-text tracking-wide cursor-pointer flex items-center gap-1">
+                  <Network size={12} className="text-green-400" /> CERO
+                </label>
+              </div>
+              <p className="text-[8px] text-hack-dim leading-tight">Scrape SSL certificates.</p>
+            </div>
+          </div>
+
           <div className="p-3 border border-hack-border bg-black/30 flex flex-col justify-center gap-2">
             <div className="flex items-center gap-2">
               <input
                 type="checkbox"
-                id="use_portscan"
-                checked={formData.use_portscan}
-                onChange={e => setFormData({ ...formData, use_portscan: e.target.checked })}
+                id="use_crtsh"
+                checked={formData.use_crtsh || false}
+                onChange={e => setFormData({ ...formData, use_crtsh: e.target.checked })}
                 className="accent-hack-primary h-4 w-4"
               />
-              <label htmlFor="use_portscan" className="text-xs font-bold text-hack-text tracking-wide cursor-pointer flex items-center gap-1">
-                <Network size={12} className="text-hack-primary" /> PORTSCAN (NMAP)
+              <label htmlFor="use_crtsh" className="text-xs font-bold text-hack-text tracking-wide cursor-pointer flex items-center gap-1">
+                <Globe size={12} className="text-purple-400" /> CRT.SH
               </label>
             </div>
-            <p className="text-[8px] text-hack-dim leading-tight">Scan open ports for non-CDN DNSx IPs during PHASE 1.</p>
+            <p className="text-[8px] text-hack-dim leading-tight">Query crt.sh API for subdomains.</p>
           </div>
 
           <div className="space-y-2">

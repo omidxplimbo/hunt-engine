@@ -29,6 +29,9 @@ export interface Asset {
   
   // داده خام
   raw_httpx?: any;
+  
+  // 👇 Sources/Providers که این subdomain را پیدا کرده‌اند
+  sources?: string[];
 }
 
 export interface AssetResponse {

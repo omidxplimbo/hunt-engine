@@ -62,7 +62,10 @@ Each `Target` has a `created_by_user_id` owner.
 
 The platform integrates industry-standard security tools within its isolated environment:
 
-* **Discovery:** `subfinder`, `assetfinder`
+* **Discovery:** 
+  * `subfinder`, `assetfinder` (Always enabled)
+  * `cero` (**Optional per target**) - Scrape domain names from SSL certificates
+  * `crtsh` (**Optional per target**) - Query crt.sh API for subdomain discovery
 * **Permutation/Mutation:** `alterx` (Optional per target)
 * **Validation/Resolution:** `dnsx` (w/ fixed resolvers)
 * **Probing:** `httpx` (Rich JSON output, WAF/CDN detection)
@@ -83,6 +86,9 @@ We are following a multi-phase development roadmap.
 * [x] **Smart Recon Pipeline:** Implemented a full chain (Passive -> Mutation -> Validation).
 * [x] **History Injection:** Re-scans previously dead assets to detect resurrections.
 * [x] **Smart Storage Logic:** "Upsert" logic to track live/dead status.
+* [x] **Enhanced Discovery Tools:** Added `cero` (SSL certificate scraping) and `crtsh` (Certificate Transparency API) as optional tools.
+* [x] **Source Tracking:** Each subdomain tracks which tools discovered it (subfinder, assetfinder, cero, crtsh, alterx).
+* [x] **Fresh Asset Logic:** Fixed notification spam - only truly new live subdomains trigger alerts.
 
 ### ✅ Phase 2: Probing & Fingerprinting (COMPLETED)
 **Goal:** Extract detailed technical intelligence from live assets.
@@ -126,6 +132,13 @@ We are following a multi-phase development roadmap.
 * [x] **SSL/TLS:** Automated Let's Encrypt certificate management with auto-renewal.
 * [x] **Reverse Proxy:** Nginx with HTTPS enforcement and security headers.
 * [x] **Domain Management:** Dynamic domain configuration via environment variables.
+
+### ✅ Phase 4.7: Enhanced Discovery & Source Tracking (COMPLETED)
+**Goal:** Expand discovery capabilities and track subdomain sources.
+* [x] **New Discovery Tools:** Added `cero` (SSL certificate scraping) and `crtsh` (Certificate Transparency API) as optional discovery tools.
+* [x] **Source Tracking:** Each subdomain now tracks which tools discovered it, displayed as color-coded provider tags in the UI.
+* [x] **Smart Source Merging:** When a subdomain is found by multiple tools, all sources are tracked and merged automatically.
+* [x] **Fresh Asset Fix:** Improved notification logic to prevent spam - only truly new live subdomains trigger fresh asset alerts.
 
 ---
 
@@ -262,7 +275,12 @@ cat QUICK-STEPS.txt
    * **Target Root:** The root domain (e.g., `example.com`)
    * **Recon Frequency:** Minutes between scans (default: 720 = 12 hours)
    * **Modules:** Select scan phases (DISCOVERY, PROBING, CRAWLING)
-   * **Options:** Toggle Alterx (permutation), Waymore (deep crawl) and **Portscan (nmap)** (optional)
+   * **Options:** 
+     * Toggle **Alterx** (permutation)
+     * Toggle **Waymore** (deep crawl)
+     * Toggle **Portscan (nmap)** (optional)
+     * Toggle **CERO** (SSL certificate scraping) - Optional
+     * Toggle **CRT.SH** (Certificate Transparency API) - Optional
 
 #### Exporting Targets
 1. Click **Export** button on Targets page
@@ -292,6 +310,13 @@ cat QUICK-STEPS.txt
 * **Search:** Filter by domain name
 * **CDN/WAF/CLOUD Badges:** Visual indicators per asset (separate fields)
 * **Ports Column:** If Portscan is enabled, open ports (from `nmap`) are shown per asset.
+* **Providers Column:** Shows which tools discovered each subdomain with color-coded tags:
+  * `subfinder` (Blue)
+  * `assetfinder` (Green)
+  * `cero` (Purple)
+  * `crtsh` (Orange)
+  * `alterx` (Yellow)
+  * Multiple tags indicate the subdomain was found by multiple tools
 
 #### Port Scanning (Optional / Phase 1)
 When enabled per target (`use_portscan=true`), the engine runs `nmap` in **PHASE 1 (DISCOVERY)** **after** `cdncheck` and scans **only**:
@@ -383,6 +408,8 @@ You can combine these query params on `GET /api/targets/:id/assets`:
       "use_alterx": true,
       "use_waymore": false,
       "use_portscan": false,
+      "use_cero": false,
+      "use_crtsh": false,
       "assets": [...],
       "urls": [...]
     }

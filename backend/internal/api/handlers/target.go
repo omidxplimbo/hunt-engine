@@ -69,17 +69,19 @@ func CreateTarget(c *fiber.Ctx) error {
 
 	target := models.Target{
 		CreatedByUserID: uid,
-		Name:         req.Name,
-		RootDomain:   req.RootDomain,
-		Description:  req.Description,
-		InScope:      true,
-		Frequency:    req.Frequency,
-		ScanModules:  string(modulesJSON),
-		Status:       "SCANNING",
-		CurrentPhase: "QUEUED: STARTING...",
-		UseAlterx:    true,
-		UseWaymore:   false,
-		UsePortscan:  false,
+		Name:            req.Name,
+		RootDomain:      req.RootDomain,
+		Description:     req.Description,
+		InScope:         true,
+		Frequency:       req.Frequency,
+		ScanModules:     string(modulesJSON),
+		Status:          "SCANNING",
+		CurrentPhase:    "QUEUED: STARTING...",
+		UseAlterx:       true,
+		UseWaymore:      false,
+		UsePortscan:     false,
+		UseCero:         false,
+		UseCrtsh:        false,
 	}
 
 	if req.UseAlterx != nil {
@@ -90,6 +92,12 @@ func CreateTarget(c *fiber.Ctx) error {
 	}
 	if req.UsePortscan != nil {
 		target.UsePortscan = *req.UsePortscan
+	}
+	if req.UseCero != nil {
+		target.UseCero = *req.UseCero
+	}
+	if req.UseCrtsh != nil {
+		target.UseCrtsh = *req.UseCrtsh
 	}
 
 	if err := database.DB.Create(&target).Error; err != nil {
@@ -144,6 +152,12 @@ func UpdateTarget(c *fiber.Ctx) error {
 	}
 	if req.UsePortscan != nil {
 		target.UsePortscan = *req.UsePortscan
+	}
+	if req.UseCero != nil {
+		target.UseCero = *req.UseCero
+	}
+	if req.UseCrtsh != nil {
+		target.UseCrtsh = *req.UseCrtsh
 	}
 
 	// 👇👇👇 فیکس اصلی اینجاست: مرتب‌سازی لیست ماژول‌ها قبل از آپدیت دیتابیس
@@ -664,6 +678,8 @@ func toTargetResponse(t models.Target, assetCount int64) dto.TargetResponse {
 		UseAlterx:    t.UseAlterx,
 		UseWaymore:   t.UseWaymore,
 		UsePortscan:  t.UsePortscan,
+		UseCero:      t.UseCero,
+		UseCrtsh:     t.UseCrtsh,
 		ScanModules:  t.ScanModules,
 	}
 }
@@ -680,6 +696,12 @@ func toAssetResponse(a models.Asset) dto.AssetResponse {
 	var openPorts interface{}
 	if a.OpenPorts != "" && a.OpenPorts != "{}" && a.OpenPorts != "null" {
 		_ = json.Unmarshal([]byte(a.OpenPorts), &openPorts)
+	}
+	var sources interface{}
+	if a.Sources != "" && a.Sources != "[]" && a.Sources != "null" {
+		_ = json.Unmarshal([]byte(a.Sources), &sources)
+	} else {
+		sources = []string{} // پیش‌فرض: آرایه خالی
 	}
 
 	return dto.AssetResponse{
@@ -707,6 +729,7 @@ func toAssetResponse(a models.Asset) dto.AssetResponse {
 		ResponseTime:   a.ResponseTimeMs,
 		OpenPorts:      openPorts,
 		RawHttpx:       rawHttpx,
+		Sources:        sources,
 	}
 }
 
@@ -836,6 +859,8 @@ func ExportTarget(c *fiber.Ctx) error {
 			UseAlterx:   t.UseAlterx,
 			UseWaymore:  t.UseWaymore,
 			UsePortscan: t.UsePortscan,
+			UseCero:     t.UseCero,
+			UseCrtsh:    t.UseCrtsh,
 			Assets:      assetItems,
 			URLs:        urlItems,
 		}
@@ -912,17 +937,19 @@ func ImportTarget(c *fiber.Ctx) error {
 		// ایجاد تارگت جدید
 		target := models.Target{
 			CreatedByUserID: uid,
-			Name:         item.Name,
-			RootDomain:   item.RootDomain,
-			Description:  item.Description,
-			InScope:      item.InScope,
-			Frequency:    item.Frequency,
-			ScanModules:  string(modulesJSON),
-			Status:       "READY", // تارگت‌های import شده به صورت READY هستند (نه SCANNING)
-			CurrentPhase: "IDLE",
-			UseAlterx:    item.UseAlterx,
-			UseWaymore:   item.UseWaymore,
-			UsePortscan:  item.UsePortscan,
+			Name:            item.Name,
+			RootDomain:      item.RootDomain,
+			Description:     item.Description,
+			InScope:         item.InScope,
+			Frequency:       item.Frequency,
+			ScanModules:     string(modulesJSON),
+			Status:          "READY", // تارگت‌های import شده به صورت READY هستند (نه SCANNING)
+			CurrentPhase:    "IDLE",
+			UseAlterx:       item.UseAlterx,
+			UseWaymore:      item.UseWaymore,
+			UsePortscan:     item.UsePortscan,
+			UseCero:         item.UseCero,
+			UseCrtsh:        item.UseCrtsh,
 		}
 
 		if err := database.DB.Create(&target).Error; err != nil {

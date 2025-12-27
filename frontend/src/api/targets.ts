@@ -33,6 +33,9 @@ export interface CreateTargetPayload {
   use_waymore: boolean;
   // 👇 optional port scan during discovery
   use_portscan: boolean;
+  // 👇 ابزارهای جدید برای فاز اول (Discovery)
+  use_cero?: boolean;  // Scrape domain names from SSL certificates
+  use_crtsh?: boolean; // Use crt.sh API for subdomain discovery
 }
 
 export const createTarget = async (payload: CreateTargetPayload) => {
@@ -55,6 +58,9 @@ export interface UpdateTargetPayload {
   use_waymore?: boolean;
   // 👇 optional port scan during discovery
   use_portscan?: boolean;
+  // 👇 ابزارهای جدید برای فاز اول (Discovery)
+  use_cero?: boolean;  // Scrape domain names from SSL certificates
+  use_crtsh?: boolean; // Use crt.sh API for subdomain discovery
 }
 
 export const updateTarget = async (id: number, payload: UpdateTargetPayload) => {
@@ -178,6 +184,8 @@ export interface TargetExportItem {
   use_alterx: boolean;
   use_waymore: boolean;
   use_portscan: boolean;
+  use_cero: boolean;
+  use_crtsh: boolean;
   assets: AssetExportItem[];
   urls: URLExportItem[];
 }
