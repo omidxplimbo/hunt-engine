@@ -231,7 +231,10 @@ func PutMySubfinderProviders(c *fiber.Ctx) error {
 	defer func() { _ = tx.Rollback() }()
 
 	// Replace semantics: delete all then insert the new set
-	if err := tx.Where("user_id = ?", uid).Delete(&models.SubfinderProviderConfig{}).Error; err != nil {
+	// IMPORTANT: hard-delete (Unscoped) to avoid unique constraint conflicts with soft-deleted rows.
+	// The table uses a unique index on (user_id, provider). Soft deletes keep rows, so recreating the
+	// same provider would fail.
+	if err := tx.Unscoped().Where("user_id = ?", uid).Delete(&models.SubfinderProviderConfig{}).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update subfinder providers"})
 	}
 
@@ -264,7 +267,8 @@ func DeleteMySubfinderProvider(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "provider is required"})
 	}
 
-	if err := database.DB.
+	// IMPORTANT: hard-delete (Unscoped) to allow re-adding the same provider later without unique conflicts.
+	if err := database.DB.Unscoped().
 		Where("user_id = ? AND provider = ?", uid, provider).
 		Delete(&models.SubfinderProviderConfig{}).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete provider"})
