@@ -87,6 +87,10 @@ func main() {
 	api.Patch("/me", handlers.UpdateMe)
 	api.Post("/me/change-password", handlers.ChangeMyPassword)
 	api.Delete("/me", handlers.DeleteMe)
+	// 👇 Subfinder API keys/config (per-user)
+	api.Get("/me/subfinder/providers", handlers.GetMySubfinderProviders)
+	api.Put("/me/subfinder/providers", handlers.PutMySubfinderProviders)
+	api.Delete("/me/subfinder/providers/:provider", handlers.DeleteMySubfinderProvider)
 
 	// 👇👇👇 روت‌های مدیریت کاربران (فقط ادمین)
 	adminUsers := api.Group("/users", middleware.AdminOnly())

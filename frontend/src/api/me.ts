@@ -22,4 +22,31 @@ export const changeMyPassword = async (payload: ChangePasswordPayload) => {
   return res.data;
 };
 
+// -----------------------------
+// Subfinder provider config (per-user)
+// -----------------------------
+
+export interface SubfinderProviderItem {
+  provider: string;
+  entries: any[];
+}
+
+export const getMySubfinderProviders = async () => {
+  const res = await apiClient.get<{ status: string; data: { providers: SubfinderProviderItem[] } }>(
+    '/me/subfinder/providers'
+  );
+  return res.data.data.providers;
+};
+
+export const putMySubfinderProviders = async (providers: SubfinderProviderItem[]) => {
+  const res = await apiClient.put<{ status: string; message: string }>('/me/subfinder/providers', { providers });
+  return res.data;
+};
+
+export const deleteMySubfinderProvider = async (provider: string) => {
+  const p = encodeURIComponent(provider);
+  const res = await apiClient.delete<{ status: string; message: string }>(`/me/subfinder/providers/${p}`);
+  return res.data;
+};
+
 

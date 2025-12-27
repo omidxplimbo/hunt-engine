@@ -45,7 +45,7 @@ func Connect() {
 	// 3. Auto Migration (جادوی GORM)
 	// 👇 مدل FoundURL اضافه شد
 	log.Println("Running auto-migrations...")
-	err = DB.AutoMigrate(&models.Target{}, &models.Asset{}, &models.AssetHistory{}, &models.User{}, &models.FoundURL{})
+	err = DB.AutoMigrate(&models.Target{}, &models.Asset{}, &models.AssetHistory{}, &models.User{}, &models.FoundURL{}, &models.SubfinderProviderConfig{})
 
 	if err != nil {
 		log.Fatal("❌ Auto-migration failed! \n", err)

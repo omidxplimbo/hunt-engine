@@ -24,12 +24,55 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/telegram"
+	"gopkg.in/yaml.v3"
 	"gorm.io/gorm"
 )
 
 const workerTempRoot = "/tmp/hunt-engine"
 
 const DefaultBatchSize = 500
+
+// subfinderProviderKeys is the default set of providers emitted by subfinder v2.11.0
+// when it generates /root/.config/subfinder/provider-config.yaml
+var subfinderProviderKeys = []string{
+	"alienvault",
+	"bevigil",
+	"bufferover",
+	"builtwith",
+	"c99",
+	"censys",
+	"certspotter",
+	"chaos",
+	"chinaz",
+	"digitalyama",
+	"dnsdb",
+	"dnsdumpster",
+	"dnsrepo",
+	"domainsproject",
+	"driftnet",
+	"facebook",
+	"fofa",
+	"fullhunt",
+	"github",
+	"intelx",
+	"leakix",
+	"merklemap",
+	"netlas",
+	"onyphe",
+	"profundis",
+	"pugrecon",
+	"quake",
+	"redhuntlabs",
+	"robtex",
+	"rsecloud",
+	"securitytrails",
+	"shodan",
+	"threatbook",
+	"virustotal",
+	"whoisxmlapi",
+	"windvane",
+	"zoomeyeapi",
+}
 
 func sanitizePathComponent(s string) string {
 	s = strings.TrimSpace(s)
@@ -1260,6 +1303,62 @@ func normalizeSubdomain(subdomain, rootDomain string) string {
 	return subdomainLower
 }
 
+// writeSubfinderProviderConfigFile builds a per-user provider-config.yaml for subfinder and writes it
+// into the current target temp directory. Returns empty string if the user has no provider entries.
+func writeSubfinderProviderConfigFile(targetID uint, userID uint) (string, error) {
+	if userID == 0 {
+		return "", nil
+	}
+
+	var rows []models.SubfinderProviderConfig
+	if err := database.DB.
+		Where("user_id = ?", userID).
+		Order("provider asc").
+		Find(&rows).Error; err != nil {
+		return "", err
+	}
+	if len(rows) == 0 {
+		return "", nil
+	}
+
+	tempDir, _, err := getTargetTempDir(targetID)
+	if err != nil {
+		return "", err
+	}
+
+	// Start from subfinder defaults so unknown providers don't break anything and we keep a stable schema.
+	cfg := make(map[string]interface{}, len(subfinderProviderKeys)+len(rows))
+	for _, k := range subfinderProviderKeys {
+		cfg[k] = []interface{}{}
+	}
+
+	for _, r := range rows {
+		p := strings.ToLower(strings.TrimSpace(r.Provider))
+		if p == "" {
+			continue
+		}
+		var entries []interface{}
+		if strings.TrimSpace(r.Entries) != "" {
+			_ = json.Unmarshal([]byte(r.Entries), &entries)
+		}
+		if entries == nil {
+			entries = []interface{}{}
+		}
+		cfg[p] = entries
+	}
+
+	yml, err := yaml.Marshal(cfg)
+	if err != nil {
+		return "", err
+	}
+
+	outPath := filepath.Join(tempDir, fmt.Sprintf("subfinder_provider-config_u%d.yaml", userID))
+	if err := os.WriteFile(outPath, yml, 0600); err != nil {
+		return "", err
+	}
+	return outPath, nil
+}
+
 // runPuredns اجرای puredns برای bruteforce subdomain discovery
 // این تابع subdomain‌های لایو (resolve شده) با IP‌هایشان را برمی‌گرداند
 // خروجی: map[string][]string که key=subdomain و value=[]IP
@@ -1408,6 +1507,18 @@ func runPassiveCollection(targetID uint, domain string) ([]string, map[string][]
 		target.UseCrtsh = false
 	}
 
+	// Build per-owner subfinder provider-config (API keys) if present
+	subfinderPC, err := writeSubfinderProviderConfigFile(targetID, target.CreatedByUserID)
+	if err != nil {
+		log.Printf("⚠️ Failed to build subfinder provider-config (user_id=%d): %v\n", target.CreatedByUserID, err)
+		subfinderPC = ""
+	}
+	if subfinderPC != "" {
+		// do not log file contents (API keys)
+		log.Printf("🔑 Subfinder provider-config loaded for user_id=%d\n", target.CreatedByUserID)
+		defer func() { _ = os.Remove(subfinderPC) }()
+	}
+
 	var wg sync.WaitGroup
 	results := make(chan SubdomainSource, 50000)
 
@@ -1428,7 +1539,13 @@ func runPassiveCollection(targetID uint, domain string) ([]string, map[string][]
 
 	// ابزارهای همیشگی
 	wg.Add(2)
-	go runTool("subfinder", "-d", domain, "-silent", "-all")
+	go func() {
+		args := []string{"-d", domain, "-silent", "-all"}
+		if subfinderPC != "" {
+			args = append(args, "-pc", subfinderPC)
+		}
+		runTool("subfinder", args...)
+	}()
 	go runTool("assetfinder", "--subs-only", domain)
 
 	// ابزارهای انتخابی

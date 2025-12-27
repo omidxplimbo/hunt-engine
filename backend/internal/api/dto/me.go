@@ -21,5 +21,19 @@ type DeleteMeRequest struct {
 	CurrentPassword string `json:"current_password"`
 }
 
+// -----------------------------
+// Subfinder Provider Config (User-scoped)
+// -----------------------------
+
+type SubfinderProviderItem struct {
+	Provider string        `json:"provider"`
+	Entries  []interface{} `json:"entries"`
+}
+
+type PutMySubfinderProvidersRequest struct {
+	// Replace mode: the provided list becomes the full set for the current user.
+	Providers []SubfinderProviderItem `json:"providers"`
+}
+
 
 

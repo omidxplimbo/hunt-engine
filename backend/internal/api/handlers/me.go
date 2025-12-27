@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -142,6 +144,133 @@ func DeleteMe(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{"status": "success", "message": "Account deleted"})
+}
+
+// -----------------------------
+// Subfinder provider config (per-user)
+// -----------------------------
+
+// GetMySubfinderProviders returns the current user's subfinder provider configs.
+func GetMySubfinderProviders(c *fiber.Ctx) error {
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+
+	var rows []models.SubfinderProviderConfig
+	if err := database.DB.
+		Where("user_id = ?", uid).
+		Order("provider asc").
+		Find(&rows).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to load subfinder providers"})
+	}
+
+	items := make([]dto.SubfinderProviderItem, 0, len(rows))
+	for _, r := range rows {
+		var entries []interface{}
+		_ = json.Unmarshal([]byte(r.Entries), &entries)
+		items = append(items, dto.SubfinderProviderItem{
+			Provider: r.Provider,
+			Entries:  entries,
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"status": "success",
+		"data": fiber.Map{
+			"providers": items,
+		},
+	})
+}
+
+// PutMySubfinderProviders replaces the current user's provider list with the provided payload.
+func PutMySubfinderProviders(c *fiber.Ctx) error {
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+
+	req := new(dto.PutMySubfinderProvidersRequest)
+	if err := c.BodyParser(req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	// Normalize + validate, build final rows
+	type row struct {
+		Provider string
+		Entries  string
+	}
+	var final []row
+	seen := make(map[string]bool)
+
+	for _, p := range req.Providers {
+		provider := strings.ToLower(strings.TrimSpace(p.Provider))
+		if provider == "" {
+			continue
+		}
+		if seen[provider] {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": fmt.Sprintf("Duplicate provider: %s", provider)})
+		}
+		seen[provider] = true
+
+		if p.Entries == nil {
+			p.Entries = []interface{}{}
+		}
+		entriesJSON, err := json.Marshal(p.Entries)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": fmt.Sprintf("Invalid entries for provider %s", provider)})
+		}
+
+		final = append(final, row{Provider: provider, Entries: string(entriesJSON)})
+	}
+
+	tx := database.DB.Begin()
+	if tx.Error != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to start transaction"})
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Replace semantics: delete all then insert the new set
+	if err := tx.Where("user_id = ?", uid).Delete(&models.SubfinderProviderConfig{}).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update subfinder providers"})
+	}
+
+	for _, r := range final {
+		cfg := models.SubfinderProviderConfig{
+			UserID:   uid,
+			Provider: r.Provider,
+			Entries:  r.Entries,
+		}
+		if err := tx.Create(&cfg).Error; err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update subfinder providers"})
+		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update subfinder providers"})
+	}
+
+	return c.JSON(fiber.Map{"status": "success", "message": "Subfinder providers updated"})
+}
+
+// DeleteMySubfinderProvider removes a single provider for the current user.
+func DeleteMySubfinderProvider(c *fiber.Ctx) error {
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+	provider := strings.ToLower(strings.TrimSpace(c.Params("provider")))
+	if provider == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "provider is required"})
+	}
+
+	if err := database.DB.
+		Where("user_id = ? AND provider = ?", uid, provider).
+		Delete(&models.SubfinderProviderConfig{}).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete provider"})
+	}
+
+	return c.JSON(fiber.Map{"status": "success", "message": "Provider deleted"})
 }
 
 
