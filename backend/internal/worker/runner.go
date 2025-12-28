@@ -1349,6 +1349,8 @@ func runCommandWithKillSwitch(targetID uint, name string, args ...string) ([]byt
 		case err := <-done:
 			return outBuf.Bytes(), err
 		case <-ticker.C:
+			// keep scan heartbeat fresh so API doesn't treat active scans as stale
+			scanHeartbeat(targetID)
 			if checkStopRequest(targetID) {
 				log.Printf("🛑 Kill switch activated for target %d. Killing process %s...", targetID, name)
 				if err := cmd.Process.Kill(); err != nil {
@@ -1378,6 +1380,8 @@ func runCommandWithKillSwitchCombined(targetID uint, name string, args ...string
 		case err := <-done:
 			return outBuf.Bytes(), err
 		case <-ticker.C:
+			// keep scan heartbeat fresh so API doesn't treat active scans as stale
+			scanHeartbeat(targetID)
 			if checkStopRequest(targetID) {
 				log.Printf("🛑 Kill switch activated for target %d. Killing process %s...", targetID, name)
 				if err := cmd.Process.Kill(); err != nil {
@@ -1475,6 +1479,13 @@ func scanMarkRunning(targetID uint, module, step string) {
 			"heartbeat_at":   &now,
 			"last_error":     "",
 		}).Error
+}
+
+func scanHeartbeat(targetID uint) {
+	now := time.Now()
+	_ = database.DB.Model(&models.TargetScanState{}).
+		Where("target_id = ? AND status = ?", targetID, "RUNNING").
+		Update("heartbeat_at", &now).Error
 }
 
 func scanMarkPaused(targetID uint, reason string) {

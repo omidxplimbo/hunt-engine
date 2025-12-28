@@ -25,6 +25,8 @@ services:
     volumes:
       # 👇 این خط برای وردلیست‌های سفارشی اضافه شد (برای آینده)
       - ./custom_wordlists:/wordlists/custom
+      # 👇 persist worker temp workspace for crash-safe resume
+      - hunt_workspaces:/tmp/hunt-engine
     depends_on:
       - postgres
       - redis
@@ -158,3 +160,4 @@ volumes:
   redis_data:
   nginx_logs:
   dns_cache:
+  hunt_workspaces:
