@@ -338,6 +338,7 @@ This platform lets **each user** manage their own subfinder provider keys **from
 * **CLOUD:** Show only assets with CLOUD provider detected (cdncheck)
 * **Search:** Filter by domain name
 * **Provider Filter (Dropdown):** Filter assets by the discovery provider (subfinder/assetfinder/crtsh/cero/alterx/puredns)
+* **Status Filter (Dropdown):** Filter assets by HTTP status code (e.g. `200` or `2xx/3xx/4xx/5xx`)
 * **CDN/WAF/CLOUD Badges:** Visual indicators per asset (separate fields)
 * **Ports Column:** If Portscan is enabled, open ports (from `nmap`) are shown per asset.
 * **Providers Column:** Shows which tools discovered each subdomain with color-coded tags:
@@ -424,6 +425,8 @@ You can combine these query params on `GET /api/targets/:id/assets`:
 * `has_cdn=true` - only assets with CDN detected (httpx or cdncheck)
 * `has_waf=true` - only assets with WAF detected (cdncheck)
 * `has_cloud=true` - only assets with CLOUD detected (cdncheck)
+* `status_code=200` - only assets with exact HTTP status code
+* `status_code=2xx` - only assets with status in a class range (supports `2xx/3xx/4xx/5xx`)
 
 ## 📦 Export/Import Format
 
