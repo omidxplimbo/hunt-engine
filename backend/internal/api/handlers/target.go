@@ -212,10 +212,6 @@ func StartDiscovery(c *fiber.Ctx) error {
 		return err
 	}
 
-	if target.Status == "SCANNING" {
-		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"status": "error", "message": "Target is already being scanned."})
-	}
-
 	var modules []string
 	if err := json.Unmarshal([]byte(target.ScanModules), &modules); err != nil || len(modules) == 0 {
 		modules = []string{"DISCOVERY", "PROBING", "CRAWLING"}
@@ -230,14 +226,76 @@ func StartDiscovery(c *fiber.Ctx) error {
 		database.DB.Model(target).Update("scan_modules", string(sortedJSON))
 	}
 
-	firstModule := modules[0]
+	// --- Load scan state (if any) and decide whether this is a NEW RUN or a RESUME ---
+	var st models.TargetScanState
+	stErr := database.DB.Where("target_id = ?", target.ID).First(&st).Error
+
+	// If the target is marked SCANNING, only allow "resume" when heartbeat is stale (crash).
+	if target.Status == "SCANNING" {
+		if stErr == nil && st.HeartbeatAt != nil && time.Since(*st.HeartbeatAt) < 2*time.Minute {
+			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"status": "error", "message": "Target is already being scanned."})
+		}
+		// stale heartbeat -> allow user to re-queue and continue from checkpoint
+	}
+
+	// If user presses EXECUTE while READY, we treat it as a new run and reset checkpoints.
+	isNewRun := target.Status == "READY"
+	if isNewRun {
+		newRunID := fmt.Sprintf("run_%d", time.Now().UnixNano())
+		if stErr != nil {
+			_ = database.DB.Create(&models.TargetScanState{
+				TargetID:        target.ID,
+				RunID:           newRunID,
+				Status:          "PAUSED",
+				CompletedSteps:  "[]",
+				Meta:            "{}",
+				CurrentModule:   "",
+				CurrentStep:     "",
+				HeartbeatAt:     nil,
+				LastError:       "",
+			}).Error
+		} else {
+			_ = database.DB.Model(&models.TargetScanState{}).
+				Where("target_id = ?", target.ID).
+				Updates(map[string]interface{}{
+					"run_id":          newRunID,
+					"status":          "PAUSED",
+					"completed_steps": "[]",
+					"meta":            "{}",
+					"current_module":  "",
+					"current_step":    "",
+					"heartbeat_at":    nil,
+					"last_error":      "",
+				}).Error
+		}
+		// reset target "paused by user" etc
+		_ = database.DB.Model(target).Update("current_phase", "QUEUED: STARTING...").Error
+	}
+
+	// Choose resume module: first module in order that doesn't have <MODULE>:DONE in scan state.
+	resumeModule := modules[0]
+	if stErr == nil && st.CompletedSteps != "" && st.CompletedSteps != "[]" {
+		var completed []string
+		if json.Unmarshal([]byte(st.CompletedSteps), &completed) == nil {
+			set := make(map[string]bool)
+			for _, k := range completed {
+				set[strings.TrimSpace(k)] = true
+			}
+			for _, m := range modules {
+				if !set[fmt.Sprintf("%s:DONE", m)] {
+					resumeModule = m
+					break
+				}
+			}
+		}
+	}
 
 	database.DB.Model(target).Updates(map[string]interface{}{
 		"status":        "SCANNING",
-		"current_phase": fmt.Sprintf("QUEUED: STARTING %s...", firstModule),
+		"current_phase": fmt.Sprintf("QUEUED: STARTING %s...", resumeModule),
 	})
 
-	taskPayload := fmt.Sprintf("%s:%d:%s", firstModule, target.ID, target.RootDomain)
+	taskPayload := fmt.Sprintf("%s:%d:%s", resumeModule, target.ID, target.RootDomain)
 
 	if err := redisq.Client.RPush(redisq.Ctx, redisq.QueueName, taskPayload).Err(); err != nil {
 		database.DB.Model(&target).Update("status", "READY")
@@ -246,7 +304,33 @@ func StartDiscovery(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{
 		"status":  "success",
-		"message": fmt.Sprintf("Scan started. First phase: %s", firstModule),
+		"message": fmt.Sprintf("Scan started. Next phase: %s", resumeModule),
+	})
+}
+
+// ResumeTargetScan is an alias for StartDiscovery (kept for clarity in UI/API).
+func ResumeTargetScan(c *fiber.Ctx) error {
+	return StartDiscovery(c)
+}
+
+// GetTargetScanState returns persistent checkpoint/progress for a target.
+func GetTargetScanState(c *fiber.Ctx) error {
+	id := c.Params("id")
+	targetID := uint(0)
+	_, _ = fmt.Sscanf(id, "%d", &targetID)
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	var st models.TargetScanState
+	if err := database.DB.Where("target_id = ?", target.ID).First(&st).Error; err != nil {
+		return c.JSON(fiber.Map{"status": "success", "data": fiber.Map{"exists": false}})
+	}
+
+	return c.JSON(fiber.Map{
+		"status": "success",
+		"data":   st,
 	})
 }
 

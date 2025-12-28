@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -158,12 +159,53 @@ func acquireTargetLock(targetID uint) (func(), bool) {
 	_ = os.MkdirAll(lockDir, 0o755)
 	lockPath := filepath.Join(lockDir, fmt.Sprintf("target_%d.lock", targetID))
 
-	if err := os.Mkdir(lockPath, 0o755); err != nil {
-		// already locked
-		return func() {}, false
+	type lockMeta struct {
+		PID       int   `json:"pid"`
+		CreatedAt int64 `json:"created_at"` // unix seconds
 	}
 
-	return func() { _ = os.RemoveAll(lockPath) }, true
+	const staleAfter = 30 * time.Minute
+	metaPath := filepath.Join(lockPath, "meta.json")
+
+	tryAcquire := func() (func(), bool) {
+		if err := os.Mkdir(lockPath, 0o755); err != nil {
+			return func() {}, false
+		}
+		// best-effort write meta
+		m := lockMeta{PID: os.Getpid(), CreatedAt: time.Now().Unix()}
+		if b, err := json.Marshal(m); err == nil {
+			_ = os.WriteFile(metaPath, b, 0o644)
+		}
+		return func() { _ = os.RemoveAll(lockPath) }, true
+	}
+
+	if release, ok := tryAcquire(); ok {
+		return release, true
+	}
+
+	// already locked: check if stale (e.g., worker crash left lock behind)
+	var createdAt time.Time
+	if b, err := os.ReadFile(metaPath); err == nil {
+		var m lockMeta
+		if json.Unmarshal(b, &m) == nil && m.CreatedAt > 0 {
+			createdAt = time.Unix(m.CreatedAt, 0)
+		}
+	}
+	if createdAt.IsZero() {
+		if fi, err := os.Stat(lockPath); err == nil {
+			createdAt = fi.ModTime()
+		}
+	}
+
+	if !createdAt.IsZero() && time.Since(createdAt) > staleAfter {
+		log.Printf("🧹 Removing stale lock for target %d (age: %s)\n", targetID, time.Since(createdAt))
+		_ = os.RemoveAll(lockPath)
+		if release, ok := tryAcquire(); ok {
+			return release, true
+		}
+	}
+
+	return func() {}, false
 }
 
 // HttpxResult ساختار برای پارس کردن خروجی JSON
@@ -294,12 +336,21 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	dnsxOutputFile := filepath.Join(tempDir, "dnsx_output.json")
 	cdncheckInputFile := filepath.Join(tempDir, "cdncheck_input.txt")
 	nmapInputFile := filepath.Join(tempDir, "nmap_input.txt")
+	// checkpoint artifacts (persist across crashes so we can resume safely)
+	passiveResultsFile := filepath.Join(tempDir, "passive_results.txt")
+	passiveSourcesFile := filepath.Join(tempDir, "passive_sources.json")
+	alterxResultsFile := filepath.Join(tempDir, "alterx_results.txt")
+	alterxSourcesFile := filepath.Join(tempDir, "alterx_sources.json")
+	purednsResultsFile := filepath.Join(tempDir, "puredns_results.json")
+	allSourcesFile := filepath.Join(tempDir, "all_sources.json")
+	dnsxResultsFile := filepath.Join(tempDir, "dnsx_results.json")
 
 	var targetConf models.Target
 	if err := database.DB.First(&targetConf, targetID).Error; err != nil {
 		log.Printf("❌ Failed to fetch target config: %v\n", err)
 		return
 	}
+	_, _ = ensureScanState(targetID)
 
 	if checkStopRequest(targetID) {
 		return
@@ -308,21 +359,38 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	startTime := time.Now()
 
 	// 1. Passive
-	if checkStopRequest(targetID) {
-		return
+	var passiveResults []string
+	passiveSources := make(map[string][]string)
+	if scanIsStepDone(targetID, "DISCOVERY", "PASSIVE_ENUM") {
+		passiveResults, _ = readSliceFromFile(passiveResultsFile)
+		_ = readJSONFromFile(passiveSourcesFile, &passiveSources)
+		log.Printf("⏩ Resume: skipping PASSIVE ENUM (loaded %d results from checkpoint)\n", len(passiveResults))
+	} else {
+		if checkStopRequest(targetID) {
+			return
+		}
+		scanMarkRunning(targetID, "DISCOVERY", "PASSIVE_ENUM")
+		updateTargetPhase(targetID, "PHASE 1: PASSIVE ENUM")
+		passiveResults, passiveSources = runPassiveCollection(targetID, rootDomain)
+		_ = writeSliceToFile(passiveResultsFile, passiveResults)
+		_ = writeJSONToFile(passiveSourcesFile, passiveSources)
+		scanMarkStepDone(targetID, "DISCOVERY", "PASSIVE_ENUM")
 	}
-	updateTargetPhase(targetID, "PHASE 1: PASSIVE ENUM")
-	passiveResults, passiveSources := runPassiveCollection(targetID, rootDomain)
 
 	// 2. Mutation (Alterx)
 	var mutatedResults []string
 	mutatedSources := make(map[string][]string)
-	if targetConf.UseAlterx {
+	if scanIsStepDone(targetID, "DISCOVERY", "ALTERX") {
+		mutatedResults, _ = readSliceFromFile(alterxResultsFile)
+		_ = readJSONFromFile(alterxSourcesFile, &mutatedSources)
+		log.Printf("⏩ Resume: skipping ALTERX (loaded %d results from checkpoint)\n", len(mutatedResults))
+	} else if targetConf.UseAlterx {
 		if checkStopRequest(targetID) {
 			return
 		}
+		scanMarkRunning(targetID, "DISCOVERY", "ALTERX")
 		updateTargetPhase(targetID, "PHASE 1: MUTATION (ALTERX)")
-		writeSliceToFile(allFoundFile, passiveResults)
+		_ = writeSliceToFile(allFoundFile, passiveResults)
 
 		var err error
 		mutatedResults, err = runAlterx(targetID, allFoundFile, rootDomain)
@@ -333,22 +401,33 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 			log.Printf("❌ Alterx failed: %v. Proceeding without mutations.\n", err)
 			mutatedResults = []string{}
 		} else {
-			// برای alterx، source را "alterx" تنظیم می‌کنیم
 			for _, subdomain := range mutatedResults {
 				mutatedSources[subdomain] = []string{"alterx"}
 			}
 		}
+		_ = writeSliceToFile(alterxResultsFile, mutatedResults)
+		_ = writeJSONToFile(alterxSourcesFile, mutatedSources)
+		scanMarkStepDone(targetID, "DISCOVERY", "ALTERX")
 	} else {
 		log.Printf("⏩ Skipping Alterx (Mutation) for %s based on target config.\n", rootDomain)
+		scanMarkStepDone(targetID, "DISCOVERY", "ALTERX")
 	}
 
 	// 2.5. Puredns Bruteforce (فقط subdomain‌های لایو)
 	var purednsResults map[string][]string
 	purednsSources := make(map[string][]string)
-	if targetConf.UsePuredns {
+	if scanIsStepDone(targetID, "DISCOVERY", "PUREDNS") {
+		purednsResults = map[string][]string{}
+		_ = readJSONFromFile(purednsResultsFile, &purednsResults)
+		for subdomain := range purednsResults {
+			purednsSources[subdomain] = []string{"puredns"}
+		}
+		log.Printf("⏩ Resume: skipping PUREDNS (loaded %d results from checkpoint)\n", len(purednsResults))
+	} else if targetConf.UsePuredns {
 		if checkStopRequest(targetID) {
 			return
 		}
+		scanMarkRunning(targetID, "DISCOVERY", "PUREDNS")
 		updateTargetPhase(targetID, "PHASE 1: PUREDNS BRUTEFORCE")
 
 		// پارس کردن وردلیست‌های انتخابی
@@ -360,6 +439,7 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 			}
 		}
 
+		purednsResults = map[string][]string{}
 		if len(wordlists) > 0 {
 			var err error
 			purednsResults, err = runPuredns(targetID, rootDomain, wordlists)
@@ -370,7 +450,6 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 				log.Printf("❌ Puredns failed: %v. Proceeding without bruteforce results.\n", err)
 				purednsResults = map[string][]string{}
 			} else {
-				// برای puredns، source را "puredns" تنظیم می‌کنیم
 				for subdomain := range purednsResults {
 					purednsSources[subdomain] = []string{"puredns"}
 				}
@@ -379,143 +458,187 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		} else {
 			log.Printf("⏩ Skipping Puredns for %s (no wordlists selected)\n", rootDomain)
 		}
+		_ = writeJSONToFile(purednsResultsFile, purednsResults)
+		scanMarkStepDone(targetID, "DISCOVERY", "PUREDNS")
 	} else {
 		log.Printf("⏩ Skipping Puredns for %s (disabled in target config)\n", rootDomain)
+		purednsResults = map[string][]string{}
+		_ = writeJSONToFile(purednsResultsFile, purednsResults)
+		scanMarkStepDone(targetID, "DISCOVERY", "PUREDNS")
 	}
 
-	// 3. Merge & History
-	var existingAssets []string
-	database.DB.Model(&models.Asset{}).Where("target_id = ?", targetID).Pluck("value", &existingAssets)
-
-	masterList := mergeUnique(passiveResults, mutatedResults)
-	// اضافه کردن subdomain‌های puredns به masterList
-	var purednsSubdomains []string
-	for subdomain := range purednsResults {
-		purednsSubdomains = append(purednsSubdomains, subdomain)
-	}
-	masterList = mergeUnique(masterList, purednsSubdomains) // puredns results are already live, so we add them directly
-	masterList = mergeUnique(masterList, existingAssets)
-
-	// Merge sources: passive + mutated + puredns
+	// 3. Merge & History (creates master list + allSources map)
+	var masterList []string
 	allSources := make(map[string][]string)
-	for subdomain, sources := range passiveSources {
-		allSources[subdomain] = sources
-	}
-	for subdomain, sources := range mutatedSources {
-		if existing, ok := allSources[subdomain]; ok {
-			// Merge sources (unique)
-			sourceMap := make(map[string]bool)
-			for _, s := range existing {
-				sourceMap[s] = true
-			}
-			for _, s := range sources {
-				sourceMap[s] = true
-			}
-			var merged []string
-			for s := range sourceMap {
-				merged = append(merged, s)
-			}
-			sort.Strings(merged)
-			allSources[subdomain] = merged
-		} else {
+	if scanIsStepDone(targetID, "DISCOVERY", "MERGE") {
+		masterList, _ = readSliceFromFile(allFoundFile)
+		_ = readJSONFromFile(allSourcesFile, &allSources)
+		log.Printf("⏩ Resume: skipping MERGE (loaded %d items from checkpoint)\n", len(masterList))
+	} else {
+		scanMarkRunning(targetID, "DISCOVERY", "MERGE")
+
+		var existingAssets []string
+		database.DB.Model(&models.Asset{}).Where("target_id = ?", targetID).Pluck("value", &existingAssets)
+
+		masterList = mergeUnique(passiveResults, mutatedResults)
+		var purednsSubdomains []string
+		for subdomain := range purednsResults {
+			purednsSubdomains = append(purednsSubdomains, subdomain)
+		}
+		masterList = mergeUnique(masterList, purednsSubdomains)
+		masterList = mergeUnique(masterList, existingAssets)
+
+		// Merge sources: passive + mutated + puredns
+		for subdomain, sources := range passiveSources {
 			allSources[subdomain] = sources
 		}
-	}
-	for subdomain, sources := range purednsSources {
-		if existing, ok := allSources[subdomain]; ok {
-			// Merge sources (unique)
-			sourceMap := make(map[string]bool)
-			for _, s := range existing {
-				sourceMap[s] = true
+		for subdomain, sources := range mutatedSources {
+			if existing, ok := allSources[subdomain]; ok {
+				sourceMap := make(map[string]bool)
+				for _, s := range existing {
+					sourceMap[s] = true
+				}
+				for _, s := range sources {
+					sourceMap[s] = true
+				}
+				var merged []string
+				for s := range sourceMap {
+					merged = append(merged, s)
+				}
+				sort.Strings(merged)
+				allSources[subdomain] = merged
+			} else {
+				allSources[subdomain] = sources
 			}
-			for _, s := range sources {
-				sourceMap[s] = true
-			}
-			var merged []string
-			for s := range sourceMap {
-				merged = append(merged, s)
-			}
-			sort.Strings(merged)
-			allSources[subdomain] = merged
-		} else {
-			allSources[subdomain] = sources
 		}
+		for subdomain, sources := range purednsSources {
+			if existing, ok := allSources[subdomain]; ok {
+				sourceMap := make(map[string]bool)
+				for _, s := range existing {
+					sourceMap[s] = true
+				}
+				for _, s := range sources {
+					sourceMap[s] = true
+				}
+				var merged []string
+				for s := range sourceMap {
+					merged = append(merged, s)
+				}
+				sort.Strings(merged)
+				allSources[subdomain] = merged
+			} else {
+				allSources[subdomain] = sources
+			}
+		}
+
+		_ = writeSliceToFile(allFoundFile, masterList)
+		_ = writeJSONToFile(allSourcesFile, allSources)
+		scanMarkStepDone(targetID, "DISCOVERY", "MERGE")
 	}
 
-	writeSliceToFile(allFoundFile, masterList)
 	log.Printf("📊 Master list created with %d potential subdomains. Starting validation (DNSX)...\n", len(masterList))
 
 	// 4. Validation (DNSX)
-	if checkStopRequest(targetID) {
-		return
-	}
-	updateTargetPhase(targetID, "PHASE 1: DNSX VALIDATION")
-
-	dnsxResults, err := runDnsx(targetID, allFoundFile, dnsxOutputFile)
-	if err != nil {
-		if err.Error() == "process killed by user request" {
+	var dnsxResults map[string][]string
+	if scanIsStepDone(targetID, "DISCOVERY", "DNSX") {
+		dnsxResults = map[string][]string{}
+		_ = readJSONFromFile(dnsxResultsFile, &dnsxResults)
+		log.Printf("⏩ Resume: skipping DNSX (loaded %d live subdomains from checkpoint)\n", len(dnsxResults))
+	} else {
+		if checkStopRequest(targetID) {
 			return
 		}
-		log.Printf("❌ Dnsx failed: %v\n", err)
-		return
-	}
-	_ = os.Remove(dnsxOutputFile)
+		scanMarkRunning(targetID, "DISCOVERY", "DNSX")
+		updateTargetPhase(targetID, "PHASE 1: DNSX VALIDATION")
 
-	// Merge puredns results (که قبلاً لایو هستند) با dnsxResults
-	for subdomain, ips := range purednsResults {
-		if existingIPs, exists := dnsxResults[subdomain]; exists {
-			// Merge IPs (unique)
-			ipMap := make(map[string]bool)
-			for _, ip := range existingIPs {
-				ipMap[ip] = true
+		var err error
+		dnsxResults, err = runDnsx(targetID, allFoundFile, dnsxOutputFile)
+		if err != nil {
+			if err.Error() == "process killed by user request" {
+				return
 			}
-			for _, ip := range ips {
-				ipMap[ip] = true
-			}
-			var mergedIPs []string
-			for ip := range ipMap {
-				mergedIPs = append(mergedIPs, ip)
-			}
-			dnsxResults[subdomain] = mergedIPs
-		} else {
-			dnsxResults[subdomain] = ips
+			log.Printf("❌ Dnsx failed: %v\n", err)
+			scanMarkFailed(targetID, fmt.Sprintf("dnsx failed: %v", err))
+			return
 		}
+		_ = os.Remove(dnsxOutputFile)
+
+		// Merge puredns results (already live) into dnsxResults
+		for subdomain, ips := range purednsResults {
+			if existingIPs, exists := dnsxResults[subdomain]; exists {
+				ipMap := make(map[string]bool)
+				for _, ip := range existingIPs {
+					ipMap[ip] = true
+				}
+				for _, ip := range ips {
+					ipMap[ip] = true
+				}
+				var mergedIPs []string
+				for ip := range ipMap {
+					mergedIPs = append(mergedIPs, ip)
+				}
+				dnsxResults[subdomain] = mergedIPs
+			} else {
+				dnsxResults[subdomain] = ips
+			}
+		}
+
+		_ = writeJSONToFile(dnsxResultsFile, dnsxResults)
+		scanMarkStepDone(targetID, "DISCOVERY", "DNSX")
 	}
 
 	log.Printf("✅ [Stage 3] Confirmed %d LIVE subdomains with IPs (including %d from puredns).\n", len(dnsxResults), len(purednsResults))
 
 	// 5. Saving
-	if checkStopRequest(targetID) {
-		return
-	}
-	updateTargetPhase(targetID, "PHASE 1: SAVING RESULTS")
-	var target models.Target
-	database.DB.First(&target, targetID)
-	saveDiscoveryResultsToDB(target, masterList, dnsxResults, allSources)
-
-	// 6. CDN Check for all live IPs from DNS validation
-	if checkStopRequest(targetID) {
-		return
-	}
-	updateTargetPhase(targetID, "PHASE 1: CDN CHECK")
-	log.Printf("🔍 Starting CDN check for all live IPs from DNS validation...\n")
-	runCdnCheckForLiveAssets(targetID, dnsxResults, cdncheckInputFile)
-	_ = os.Remove(cdncheckInputFile)
-
-	// 7. Optional Port Scan (Nmap) - ONLY: live assets resolved by dnsx AND no CDN
-	if targetConf.UsePortscan {
+	if scanIsStepDone(targetID, "DISCOVERY", "SAVE") {
+		log.Printf("⏩ Resume: skipping SAVE RESULTS\n")
+	} else {
 		if checkStopRequest(targetID) {
 			return
 		}
+		scanMarkRunning(targetID, "DISCOVERY", "SAVE")
+		updateTargetPhase(targetID, "PHASE 1: SAVING RESULTS")
+		var target models.Target
+		database.DB.First(&target, targetID)
+		saveDiscoveryResultsToDB(target, masterList, dnsxResults, allSources)
+		scanMarkStepDone(targetID, "DISCOVERY", "SAVE")
+	}
+
+	// 6. CDN Check for all live IPs from DNS validation
+	if scanIsStepDone(targetID, "DISCOVERY", "CDNCHECK") {
+		log.Printf("⏩ Resume: skipping CDN CHECK\n")
+	} else {
+		if checkStopRequest(targetID) {
+			return
+		}
+		scanMarkRunning(targetID, "DISCOVERY", "CDNCHECK")
+		updateTargetPhase(targetID, "PHASE 1: CDN CHECK")
+		log.Printf("🔍 Starting CDN check for all live IPs from DNS validation...\n")
+		runCdnCheckForLiveAssets(targetID, dnsxResults, cdncheckInputFile)
+		_ = os.Remove(cdncheckInputFile)
+		scanMarkStepDone(targetID, "DISCOVERY", "CDNCHECK")
+	}
+
+	// 7. Optional Port Scan (Nmap) - ONLY: live assets resolved by dnsx AND no CDN
+	if scanIsStepDone(targetID, "DISCOVERY", "NMAP") {
+		log.Printf("⏩ Resume: skipping NMAP\n")
+	} else if targetConf.UsePortscan {
+		if checkStopRequest(targetID) {
+			return
+		}
+		scanMarkRunning(targetID, "DISCOVERY", "NMAP")
 		updateTargetPhase(targetID, "PHASE 1: PORT SCAN (NMAP)")
 		log.Printf("🔎 Starting optional port scan (nmap) for target %d...\n", targetID)
 		runPortScanForLiveNoCDNAssets(targetID, nmapInputFile)
 		_ = os.Remove(nmapInputFile)
+		scanMarkStepDone(targetID, "DISCOVERY", "NMAP")
 	} else {
 		log.Printf("⏩ Skipping Nmap Port Scan (Disabled in settings)\n")
+		scanMarkStepDone(targetID, "DISCOVERY", "NMAP")
 	}
 
 	log.Printf("🏁 PHASE 1 finished for %s in %s.\n", rootDomain, time.Since(startTime))
+	scanMarkStepDone(targetID, "DISCOVERY", "DONE")
 	triggerNextModule(targetID, rootDomain, "DISCOVERY")
 
 	// cleanup big temp file at end of discovery phase
@@ -545,6 +668,13 @@ func runProbingPhase(targetID uint, rootDomain string) {
 	updateTargetPhase(targetID, "PHASE 2: INITIALIZING")
 	startTime := time.Now()
 
+	_, _ = ensureScanState(targetID)
+	if scanIsStepDone(targetID, "PROBING", "DONE") {
+		log.Printf("⏩ Resume: PROBING already completed. Chaining next module.\n")
+		triggerNextModule(targetID, rootDomain, "PROBING")
+		return
+	}
+
 	var totalLive int64
 	database.DB.Model(&models.Asset{}).Where("target_id = ? AND is_live = true", targetID).Count(&totalLive)
 
@@ -555,18 +685,36 @@ func runProbingPhase(targetID uint, rootDomain string) {
 	}
 	log.Printf("✅ Found %d live assets in DB. Starting batch processing...\n", totalLive)
 
+	meta := scanGetMeta(targetID)
 	processedCount := 0
 	offset := 0
+	if pm, ok := meta["probing"].(map[string]interface{}); ok {
+		if v, ok := pm["offset"].(float64); ok && int(v) > 0 {
+			offset = int(v)
+		}
+		if v, ok := pm["processed_count"].(float64); ok && int(v) > 0 {
+			processedCount = int(v)
+		}
+	}
 	totalBatches := int(totalLive)/batchSize + 1
-	currentBatch := 1
+	currentBatch := (offset / batchSize) + 1
 
 	for {
 		if checkStopRequest(targetID) {
+			// persist checkpoint so resume continues from this offset
+			meta["probing"] = map[string]interface{}{
+				"offset":          offset,
+				"processed_count": processedCount,
+				"batch_size":      batchSize,
+				"total_live":      totalLive,
+			}
+			scanSetMeta(targetID, meta)
 			return
 		}
 
 		statusMsg := fmt.Sprintf("PHASE 2: BATCH %d/%d", currentBatch, totalBatches)
 		updateTargetPhase(targetID, statusMsg)
+		scanMarkRunning(targetID, "PROBING", "HTTPX_BATCH")
 
 		var batchAssets []models.Asset
 		err := database.DB.Where("target_id = ? AND is_live = true", targetID).
@@ -618,9 +766,19 @@ func runProbingPhase(targetID uint, rootDomain string) {
 
 		offset += batchSize
 		currentBatch++
+
+		// persist checkpoint after each batch
+		meta["probing"] = map[string]interface{}{
+			"offset":          offset,
+			"processed_count": processedCount,
+			"batch_size":      batchSize,
+			"total_live":      totalLive,
+		}
+		scanSetMeta(targetID, meta)
 	}
 
 	log.Printf("🏁 PHASE 2 finished. Total processed: %d in %s.\n", processedCount, time.Since(startTime))
+	scanMarkStepDone(targetID, "PROBING", "DONE")
 	triggerNextModule(targetID, rootDomain, "PROBING")
 }
 
@@ -649,6 +807,13 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 	log.Printf("🚀 Starting PHASE 3 (CRAWLING) for target ID: %d\n", targetID)
 	updateTargetPhase(targetID, "PHASE 3: FETCHING ASSETS")
 
+	_, _ = ensureScanState(targetID)
+	if scanIsStepDone(targetID, "CRAWLING", "DONE") {
+		log.Printf("⏩ Resume: CRAWLING already completed. Chaining next module.\n")
+		triggerNextModule(targetID, rootDomain, "CRAWLING")
+		return
+	}
+
 	var liveAssets []string
 	database.DB.Model(&models.Asset{}).
 		Where("target_id = ? AND is_live = true", targetID).
@@ -668,90 +833,122 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 		return
 	}
 
-	urlsMap := make(map[string]string)
-
 	// 1. Waybackurls
-	if checkStopRequest(targetID) {
-		return
-	}
-	updateTargetPhase(targetID, "PHASE 3: RUNNING WAYBACK")
-	runToolAndCollect(targetID, crawlingRootFile, urlsMap, "wayback", "waybackurls")
-
-	// 2. GAU
-	if len(liveAssets) > 0 {
+	if scanIsStepDone(targetID, "CRAWLING", "WAYBACK") {
+		log.Printf("⏩ Resume: skipping WAYBACK\n")
+	} else {
 		if checkStopRequest(targetID) {
 			return
 		}
-		updateTargetPhase(targetID, "PHASE 3: RUNNING GAU")
-		runToolAndCollect(targetID, crawlingAssetsFile, urlsMap, "gau", "gau", "--threads", "10")
+		scanMarkRunning(targetID, "CRAWLING", "WAYBACK")
+		updateTargetPhase(targetID, "PHASE 3: RUNNING WAYBACK")
+		tmp := make(map[string]string)
+		runToolAndCollect(targetID, crawlingRootFile, tmp, "wayback", "waybackurls")
+		saveCrawledURLs(targetID, rootDomain, tmp, true)
+		scanMarkStepDone(targetID, "CRAWLING", "WAYBACK")
+	}
+
+	// 2. GAU
+	if len(liveAssets) > 0 {
+		if scanIsStepDone(targetID, "CRAWLING", "GAU") {
+			log.Printf("⏩ Resume: skipping GAU\n")
+		} else {
+			if checkStopRequest(targetID) {
+				return
+			}
+			scanMarkRunning(targetID, "CRAWLING", "GAU")
+			updateTargetPhase(targetID, "PHASE 3: RUNNING GAU")
+			tmp := make(map[string]string)
+			runToolAndCollect(targetID, crawlingAssetsFile, tmp, "gau", "gau", "--threads", "10")
+			saveCrawledURLs(targetID, rootDomain, tmp, true)
+			scanMarkStepDone(targetID, "CRAWLING", "GAU")
+		}
+	} else {
+		scanMarkStepDone(targetID, "CRAWLING", "GAU")
 	}
 
 	// 👇👇👇 3. Waymore Implementation (بخش اضافه شده)
 	if target.UseWaymore {
-		if checkStopRequest(targetID) {
-			return
-		}
-		updateTargetPhase(targetID, "PHASE 3: RUNNING WAYMORE")
-		log.Printf("🔥 Running Waymore for %s...\n", rootDomain)
-
-		// فایل خروجی موقت برای Waymore
-		waymoreOutputFile := filepath.Join(tempDir, "waymore.txt")
-
-		// دستور Waymore:
-		// -i: دامنه ورودی
-		// -mode U: فقط URLها را برگردان
-		// -n: ساب‌دامین‌های جدید را اسکن نکن (فقط آرشیو)
-		// -oU: مسیر فایل خروجی URLها
-		_, err := runCommandWithKillSwitch(targetID, "waymore", "-i", rootDomain, "-mode", "U", "-n", "-oU", waymoreOutputFile)
-
-		if err != nil {
-			log.Printf("⚠️ Waymore execution failed: %v\n", err)
+		if scanIsStepDone(targetID, "CRAWLING", "WAYMORE") {
+			log.Printf("⏩ Resume: skipping WAYMORE\n")
 		} else {
-			// خواندن فایل خروجی Waymore و اضافه کردن به لیست
-			content, err := ioutil.ReadFile(waymoreOutputFile)
-			if err == nil {
-				lines := strings.Split(string(content), "\n")
-				for _, line := range lines {
-					u := strings.TrimSpace(line)
-					if u != "" {
-						if _, exists := urlsMap[u]; !exists {
-							urlsMap[u] = "waymore"
+			if checkStopRequest(targetID) {
+				return
+			}
+			scanMarkRunning(targetID, "CRAWLING", "WAYMORE")
+			updateTargetPhase(targetID, "PHASE 3: RUNNING WAYMORE")
+			log.Printf("🔥 Running Waymore for %s...\n", rootDomain)
+
+			// فایل خروجی موقت برای Waymore
+			waymoreOutputFile := filepath.Join(tempDir, "waymore.txt")
+
+			_, err := runCommandWithKillSwitch(targetID, "waymore", "-i", rootDomain, "-mode", "U", "-n", "-oU", waymoreOutputFile)
+
+			tmp := make(map[string]string)
+			if err != nil {
+				log.Printf("⚠️ Waymore execution failed: %v\n", err)
+			} else {
+				content, err := ioutil.ReadFile(waymoreOutputFile)
+				if err == nil {
+					lines := strings.Split(string(content), "\n")
+					for _, line := range lines {
+						u := strings.TrimSpace(line)
+						if u != "" {
+							tmp[u] = "waymore"
 						}
 					}
+					log.Printf("✅ Waymore found %d URLs.\n", len(lines))
+				} else {
+					log.Printf("⚠️ Could not read Waymore output file: %v\n", err)
 				}
-				log.Printf("✅ Waymore found %d URLs.\n", len(lines))
-			} else {
-				log.Printf("⚠️ Could not read Waymore output file: %v\n", err)
+				_ = os.Remove(waymoreOutputFile)
 			}
-			// پاک کردن فایل موقت Waymore
-			os.Remove(waymoreOutputFile)
+			saveCrawledURLs(targetID, rootDomain, tmp, true)
+			scanMarkStepDone(targetID, "CRAWLING", "WAYMORE")
 		}
 	} else {
 		log.Println("⏩ Skipping Waymore (Disabled in settings)")
+		scanMarkStepDone(targetID, "CRAWLING", "WAYMORE")
 	}
 	// 👆👆👆 پایان بخش اضافه شده
 
 	// 4. Katana
 	if len(liveAssets) > 0 {
-		if checkStopRequest(targetID) {
-			return
+		if scanIsStepDone(targetID, "CRAWLING", "KATANA") {
+			log.Printf("⏩ Resume: skipping KATANA\n")
+		} else {
+			if checkStopRequest(targetID) {
+				return
+			}
+			scanMarkRunning(targetID, "CRAWLING", "KATANA")
+			updateTargetPhase(targetID, "PHASE 3: RUNNING KATANA")
+			tmp := make(map[string]string)
+			runToolAndCollect(targetID, crawlingAssetsFile, tmp, "katana", "katana", "-list", crawlingAssetsFile, "-jc", "-kf", "-silent", "-c", "10")
+			saveCrawledURLs(targetID, rootDomain, tmp, true)
+			scanMarkStepDone(targetID, "CRAWLING", "KATANA")
 		}
-		updateTargetPhase(targetID, "PHASE 3: RUNNING KATANA")
-		runToolAndCollect(targetID, crawlingAssetsFile, urlsMap, "katana", "katana", "-list", crawlingAssetsFile, "-jc", "-kf", "-silent", "-c", "10")
+	} else {
+		scanMarkStepDone(targetID, "CRAWLING", "KATANA")
 	}
 
 	// Filtering & Saving
-	if checkStopRequest(targetID) {
-		return
+	if scanIsStepDone(targetID, "CRAWLING", "FILTER_SAVE") {
+		log.Printf("⏩ Resume: skipping FILTER/SAVE\n")
+	} else {
+		if checkStopRequest(targetID) {
+			return
+		}
+		scanMarkRunning(targetID, "CRAWLING", "FILTER_SAVE")
+		updateTargetPhase(targetID, "PHASE 3: FILTERING & SAVING")
+		// URLs were already saved per-tool; this step is mostly a final marker.
+		scanMarkStepDone(targetID, "CRAWLING", "FILTER_SAVE")
 	}
-	updateTargetPhase(targetID, "PHASE 3: FILTERING & SAVING")
 
-	os.Remove(crawlingAssetsFile)
-	os.Remove(crawlingRootFile)
-
-	saveCrawledURLs(targetID, rootDomain, urlsMap, true)
+	_ = os.Remove(crawlingAssetsFile)
+	_ = os.Remove(crawlingRootFile)
 
 	log.Printf("🏁 PHASE 3 finished for %s.\n", rootDomain)
+	scanMarkStepDone(targetID, "CRAWLING", "DONE")
 	triggerNextModule(targetID, rootDomain, "CRAWLING")
 }
 
@@ -1202,6 +1399,7 @@ func checkStopRequest(targetID uint) bool {
 		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{
 			"status": "PAUSED", "current_phase": "PAUSED BY USER", "stop_requested": false, "last_scan_at": &now,
 		})
+		scanMarkPaused(targetID, "paused by user")
 		return true
 	}
 	return false
@@ -1209,6 +1407,146 @@ func checkStopRequest(targetID uint) bool {
 
 func updateTargetPhase(targetID uint, phase string) {
 	database.DB.Model(&models.Target{}).Where("id = ?", targetID).Update("current_phase", phase)
+}
+
+// =================================================================
+// Persistent Scan Checkpointing (DB-backed)
+// =================================================================
+
+func ensureScanState(targetID uint) (*models.TargetScanState, error) {
+	var st models.TargetScanState
+	err := database.DB.Where("target_id = ?", targetID).First(&st).Error
+	if err == nil {
+		return &st, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	st = models.TargetScanState{
+		TargetID: targetID,
+		Status:   "PAUSED",
+		RunID:    fmt.Sprintf("run_%d", time.Now().UnixNano()),
+	}
+	if err := database.DB.Create(&st).Error; err != nil {
+		return nil, err
+	}
+	return &st, nil
+}
+
+func scanCompletedSet(completedJSON string) map[string]bool {
+	out := make(map[string]bool)
+	if completedJSON == "" {
+		return out
+	}
+	var keys []string
+	if err := json.Unmarshal([]byte(completedJSON), &keys); err != nil {
+		return out
+	}
+	for _, k := range keys {
+		k = strings.TrimSpace(k)
+		if k != "" {
+			out[k] = true
+		}
+	}
+	return out
+}
+
+func scanCompletedList(set map[string]bool) []string {
+	var keys []string
+	for k := range set {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func scanStepKey(module, step string) string {
+	return fmt.Sprintf("%s:%s", strings.TrimSpace(module), strings.TrimSpace(step))
+}
+
+func scanMarkRunning(targetID uint, module, step string) {
+	now := time.Now()
+	_ = database.DB.Model(&models.TargetScanState{}).
+		Where("target_id = ?", targetID).
+		Updates(map[string]interface{}{
+			"status":         "RUNNING",
+			"current_module": module,
+			"current_step":   step,
+			"heartbeat_at":   &now,
+			"last_error":     "",
+		}).Error
+}
+
+func scanMarkPaused(targetID uint, reason string) {
+	now := time.Now()
+	_ = database.DB.Model(&models.TargetScanState{}).
+		Where("target_id = ?", targetID).
+		Updates(map[string]interface{}{
+			"status":       "PAUSED",
+			"heartbeat_at": &now,
+			"last_error":   reason,
+		}).Error
+}
+
+func scanMarkFailed(targetID uint, errMsg string) {
+	now := time.Now()
+	_ = database.DB.Model(&models.TargetScanState{}).
+		Where("target_id = ?", targetID).
+		Updates(map[string]interface{}{
+			"status":       "FAILED",
+			"heartbeat_at": &now,
+			"last_error":   errMsg,
+		}).Error
+}
+
+func scanMarkStepDone(targetID uint, module, step string) {
+	st, err := ensureScanState(targetID)
+	if err != nil {
+		return
+	}
+	set := scanCompletedSet(st.CompletedSteps)
+	set[scanStepKey(module, step)] = true
+	keys := scanCompletedList(set)
+	b, _ := json.Marshal(keys)
+	now := time.Now()
+	_ = database.DB.Model(&models.TargetScanState{}).
+		Where("target_id = ?", targetID).
+		Updates(map[string]interface{}{
+			"completed_steps": string(b),
+			"heartbeat_at":    &now,
+		}).Error
+}
+
+func scanIsStepDone(targetID uint, module, step string) bool {
+	st, err := ensureScanState(targetID)
+	if err != nil {
+		return false
+	}
+	set := scanCompletedSet(st.CompletedSteps)
+	return set[scanStepKey(module, step)]
+}
+
+func scanGetMeta(targetID uint) map[string]interface{} {
+	st, err := ensureScanState(targetID)
+	if err != nil {
+		return map[string]interface{}{}
+	}
+	out := map[string]interface{}{}
+	if st.Meta != "" {
+		_ = json.Unmarshal([]byte(st.Meta), &out)
+	}
+	return out
+}
+
+func scanSetMeta(targetID uint, meta map[string]interface{}) {
+	b, _ := json.Marshal(meta)
+	now := time.Now()
+	_ = database.DB.Model(&models.TargetScanState{}).
+		Where("target_id = ?", targetID).
+		Updates(map[string]interface{}{
+			"meta":         string(b),
+			"heartbeat_at": &now,
+		}).Error
 }
 
 func triggerNextModule(targetID uint, rootDomain, currentModule string) {
@@ -1237,6 +1575,15 @@ func triggerNextModule(targetID uint, rootDomain, currentModule string) {
 		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{
 			"last_scan_at": &now, "status": "READY", "scan_count": gorm.Expr("scan_count + 1"), "current_phase": "IDLE",
 		})
+		_ = database.DB.Model(&models.TargetScanState{}).
+			Where("target_id = ?", targetID).
+			Updates(map[string]interface{}{
+				"status":         "COMPLETED",
+				"current_module": "",
+				"current_step":   "",
+				"heartbeat_at":   &now,
+				"last_error":     "",
+			}).Error
 		// پاکسازی workspace موقت این target بعد از پایان کامل chain
 		cleanupTargetTempDir(targetID)
 	}
@@ -1854,6 +2201,38 @@ func mergeUnique(slice1, slice2 []string) []string {
 func writeSliceToFile(filename string, data []string) error {
 	content := strings.Join(data, "\n")
 	return ioutil.WriteFile(filename, []byte(content), 0644)
+}
+
+func readSliceFromFile(filename string) ([]string, error) {
+	b, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(string(b), "\n")
+	var out []string
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l != "" {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+func writeJSONToFile(filename string, v interface{}) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filename, b, 0o644)
+}
+
+func readJSONFromFile(filename string, v interface{}) error {
+	b, err := os.ReadFile(filename)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, v)
 }
 
 // CdnCheckResult ساختار نتیجه cdncheck

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 
@@ -45,7 +46,15 @@ func Connect() {
 	// 3. Auto Migration (جادوی GORM)
 	// 👇 مدل FoundURL اضافه شد
 	log.Println("Running auto-migrations...")
-	err = DB.AutoMigrate(&models.Target{}, &models.Asset{}, &models.AssetHistory{}, &models.User{}, &models.FoundURL{}, &models.SubfinderProviderConfig{})
+	err = DB.AutoMigrate(
+		&models.Target{},
+		&models.Asset{},
+		&models.AssetHistory{},
+		&models.User{},
+		&models.FoundURL{},
+		&models.SubfinderProviderConfig{},
+		&models.TargetScanState{},
+	)
 
 	if err != nil {
 		log.Fatal("❌ Auto-migration failed! \n", err)
@@ -67,15 +76,25 @@ func CleanupZombieScans() {
 	result := DB.Model(&models.Target{}).
 		Where("status = ?", "SCANNING").
 		Updates(map[string]interface{}{
-			"status":         "READY",
-			"current_phase":  "INTERRUPTED (CRASH)",
+			"status":         "PAUSED",
+			"current_phase":  "INTERRUPTED (CRASH) - RESUMABLE",
 			"stop_requested": false,
 		})
+
+	// Also mark scan-state as paused best-effort (so UI/API can safely resume).
+	now := time.Now().UTC()
+	_ = DB.Model(&models.TargetScanState{}).
+		Where("status = ?", "RUNNING").
+		Updates(map[string]interface{}{
+			"status":       "PAUSED",
+			"heartbeat_at": &now,
+			"last_error":   "interrupted (crash)",
+		}).Error
 
 	if result.Error != nil {
 		log.Printf("❌ Failed to cleanup zombies: %v\n", result.Error)
 	} else if result.RowsAffected > 0 {
-		log.Printf("✅ Cleaned up %d interrupted scans. They are now READY.\n", result.RowsAffected)
+		log.Printf("✅ Cleaned up %d interrupted scans. They are now PAUSED (resumable).\n", result.RowsAffected)
 	} else {
 		log.Println("✅ No zombie scans found. System is clean.")
 	}

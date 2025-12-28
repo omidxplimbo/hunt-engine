@@ -75,12 +75,14 @@ func main() {
 	// Operations
 	api.Post("/targets/:id/probe", handlers.StartProbing)
 	api.Post("/targets/:id/discovery", handlers.StartDiscovery)
+	api.Post("/targets/:id/resume", handlers.ResumeTargetScan)
 	api.Post("/targets/:id/stop", handlers.StopScan)
 
 	// Asset Routes
 	api.Get("/targets/:id/assets", handlers.GetTargetAssets)
 	api.Get("/targets/:id/urls", handlers.GetTargetURLs) // 👈 این خط جدید است
 	api.Get("/targets/:id/ips", handlers.ExportTargetIPs) // Export IPs به صورت txt
+	api.Get("/targets/:id/scan-state", handlers.GetTargetScanState)
 
 	// 👇 Self-service (کاربر روی اکانت خودش)
 	api.Get("/me", handlers.GetMe)
