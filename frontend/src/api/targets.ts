@@ -1,6 +1,7 @@
 import { apiClient } from './client';
 import type { Target, TargetResponse } from '../types/target';
 import type { AssetResponse, AssetFilters } from '../types/asset';
+import type { FindingListResponse, Finding, FindingStatus } from '../types/finding';
 
 // --- بخش مدیریت تارگت‌ها (Targets) ---
 
@@ -169,6 +170,29 @@ export const getTargetURLs = async (
 
   const response = await apiClient.get<FoundURLResponse>(`/targets/${targetId}/urls`, { params });
   return response.data;
+};
+
+// --- Findings (Vuln Results) ---
+export const getTargetFindings = async (
+  targetId: number,
+  page = 1,
+  limit = 50,
+  filters?: { search?: string; severity?: string; status?: string; type?: string }
+) => {
+  const offset = (page - 1) * limit;
+  const params: any = { limit, offset };
+  if (filters?.search) params.search = filters.search;
+  if (filters?.severity) params.severity = filters.severity;
+  if (filters?.status) params.status = filters.status;
+  if (filters?.type) params.type = filters.type;
+
+  const res = await apiClient.get<FindingListResponse>(`/targets/${targetId}/findings`, { params });
+  return res.data;
+};
+
+export const updateFinding = async (findingId: number, payload: { status?: FindingStatus; notes?: string; reported_to?: string }) => {
+  const res = await apiClient.patch<{ status: string; data: Finding }>(`/findings/${findingId}`, payload);
+  return res.data;
 };
 
 // --- بخش Export/Import تارگت‌ها ---

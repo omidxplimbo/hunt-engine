@@ -718,6 +718,9 @@ func DeleteTarget(c *fiber.Ctx) error {
 		if err := tx.Exec("DELETE FROM found_urls WHERE target_id = ?", id).Error; err != nil {
 			return err
 		}
+		if err := tx.Exec("DELETE FROM findings WHERE target_id = ?", id).Error; err != nil {
+			return err
+		}
 
 		if err := tx.Unscoped().Delete(&target).Error; err != nil {
 			return err

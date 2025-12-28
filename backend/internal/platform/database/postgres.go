@@ -52,6 +52,7 @@ func Connect() {
 		&models.AssetHistory{},
 		&models.User{},
 		&models.FoundURL{},
+		&models.Finding{},
 		&models.SubfinderProviderConfig{},
 		&models.TargetScanState{},
 	)
