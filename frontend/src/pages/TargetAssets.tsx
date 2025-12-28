@@ -355,21 +355,21 @@ const TargetAssets = () => {
       <div className="hack-box flex flex-col flex-1 overflow-hidden relative">
         <div className="absolute top-0 right-0 p-1 border-b border-l border-hack-primary/20 bg-hack-primary/5 text-[8px] text-hack-primary font-mono hidden md:block">DATA_GRID_V1</div>
 
-        <div className="overflow-x-auto w-full flex-1">
-            <table className="w-full text-left min-w-[1000px]"> 
+          <div className="overflow-x-auto w-full flex-1">
+            <table className="w-full text-left min-w-[1100px] table-fixed"> 
             <thead className="sticky top-0 z-10 bg-black/90 backdrop-blur-sm">
                 <tr>
                 {activeTab === 'assets' ? (
                     <>
                     <SortableHeader field="value" label="Asset" className="w-[300px]" />
-                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">Providers</th>
-                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">DNS IP</th>
-                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">HTTP IP</th>
-                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">Ports</th>
+                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[220px]">Providers</th>
+                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[150px]">DNS IP</th>
+                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[150px]">HTTP IP</th>
+                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[190px]">Ports</th>
                     <SortableHeader field="status_code" label="Stat" className="w-[80px]" />
-                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">CDN</th>
-                    <SortableHeader field="title" label="Title" className="w-[250px]" />
-                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border">Stack</th>
+                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[170px]">CDN</th>
+                    <SortableHeader field="title" label="Title" className="w-[280px]" />
+                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[220px]">Stack</th>
                     <SortableHeader field="content_length" label="Size" className="w-[100px] text-right" />
                     </>
                 ) : (
@@ -439,7 +439,7 @@ const TargetAssets = () => {
                                 target="_blank"
                                 rel="noreferrer"
                                 title={asset.value}
-                                className="text-gray-300 hover:text-hack-primary transition-colors group-hover:underline underline-offset-4 truncate whitespace-nowrap block"
+                                className="text-gray-300 hover:text-hack-primary transition-colors group-hover:underline underline-offset-4 truncate whitespace-nowrap block max-w-full"
                               >
                                 {asset.value}
                               </a>
