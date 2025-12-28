@@ -375,6 +375,23 @@ The platform automatically ensures scan modules execute in the correct order:
 
 This order is enforced automatically, even if modules are specified in a different order.
 
+### Crash-Safe Resume (Persistent Checkpoints)
+
+Each target scan is **checkpointed** into the database so you can safely **Pause** and later **Resume**, or recover from server/container crashes **without re-doing completed steps**.
+
+**How it works**
+- The worker writes a persistent scan state record (`TargetScanState`) for each target.
+- After each major step, the worker marks that step as **completed** and stores minimal progress metadata (e.g. probing batch offset).
+- On resume, the worker **skips completed steps** and continues from the next step.
+
+**What is checkpointed**
+- **DISCOVERY**: PASSIVE ENUM, ALTERX, PUREDNS, MERGE, DNSX, SAVE, CDNCHECK, NMAP
+- **PROBING**: HTTPX batch processing uses a persisted offset so it continues where it left off
+- **CRAWLING**: each tool result is saved per-step (Wayback/GAU/Waymore/Katana) so resume does not duplicate work
+
+**Persistence across container restarts**
+- The worker workspace (`/tmp/hunt-engine`) is persisted via Docker volume (`hunt_workspaces`) so crash/restart does not wipe intermediate checkpoint artifacts.
+
 ## 🔌 API Endpoints
 
 ### Authentication
@@ -395,8 +412,10 @@ This order is enforced automatically, even if modules are specified in a differe
 * `GET /api/targets/:id` - Get target details
 * `PATCH /api/targets/:id` - Update target
 * `DELETE /api/targets/:id` - Delete target
-* `POST /api/targets/:id/discovery` - Start/resume scan
+* `POST /api/targets/:id/discovery` - Start scan (**smart**; resumes from checkpoint if possible)
+* `POST /api/targets/:id/resume` - Resume scan from last checkpoint (UI uses this)
 * `POST /api/targets/:id/stop` - Stop running scan
+* `GET /api/targets/:id/scan-state` - Get persistent checkpoint/progress info for this target
 
 ### Export/Import
 * `GET /api/targets/export` - Export all targets
