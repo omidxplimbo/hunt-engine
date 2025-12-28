@@ -394,6 +394,7 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	hasCdn := c.Query("has_cdn")
 	hasWaf := c.Query("has_waf")
 	hasCloud := c.Query("has_cloud")
+	statusCodeFilter := strings.TrimSpace(c.Query("status_code")) // e.g. "200" or "2xx"
 
 	// 👇 Providers filter (array or comma-separated): sources=subfinder&sources=crtsh OR sources=subfinder,crtsh
 	var sources []string
@@ -454,7 +455,7 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	if len(sources) > 0 {
 		sourcesKey = strings.Join(sources, ",")
 	}
-	filtersKey := fmt.Sprintf("l:%s|n:%s|s:%s|h:%s|d:%s|p:%s|no_cdn:%s|cdn:%s|waf:%s|cloud:%s|src:%s|sb:%s|o:%s", isLive, isNew, search, hasHttpx, dnsOnly, hasPorts, noCdn, hasCdn, hasWaf, hasCloud, sourcesKey, sortBy, order)
+	filtersKey := fmt.Sprintf("l:%s|n:%s|s:%s|h:%s|d:%s|p:%s|no_cdn:%s|cdn:%s|waf:%s|cloud:%s|sc:%s|src:%s|sb:%s|o:%s", isLive, isNew, search, hasHttpx, dnsOnly, hasPorts, noCdn, hasCdn, hasWaf, hasCloud, statusCodeFilter, sourcesKey, sortBy, order)
 	cacheKey := cache.GenerateAssetKey(targetID, offset, limit, filtersKey)
 
 	var cachedResponse fiber.Map
@@ -473,6 +474,21 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	}
 	if search != "" {
 		db = db.Where("value LIKE ?", "%"+search+"%")
+	}
+
+	// Status code filter:
+	// - exact: status_code=200
+	// - class: status_code=2xx (or 3xx/4xx/5xx)
+	if statusCodeFilter != "" {
+		raw := strings.ToLower(statusCodeFilter)
+		if len(raw) == 3 && raw[1:] == "xx" && raw[0] >= '1' && raw[0] <= '5' {
+			start := int(raw[0]-'0') * 100
+			db = db.Where("status_code >= ? AND status_code < ?", start, start+100)
+		} else {
+			if n, err := strconv.Atoi(raw); err == nil {
+				db = db.Where("status_code = ?", n)
+			}
+		}
 	}
 
 	// Providers (sources) filter: match ANY selected provider (OR)

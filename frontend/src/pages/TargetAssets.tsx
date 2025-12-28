@@ -39,6 +39,7 @@ const TargetAssets = () => {
   const [filterHasWaf, setFilterHasWaf] = useState<boolean | undefined>(undefined);
   const [filterHasCloud, setFilterHasCloud] = useState<boolean | undefined>(undefined);
   const [filterAssetProvider, setFilterAssetProvider] = useState<string | null>(null); // 👈 single provider filter (null = ALL)
+  const [filterStatusCode, setFilterStatusCode] = useState<string>(""); // 👈 "" = ALL, "200" or "2xx"...
   
   // URL Filters
   const [filterJsOnly, setFilterJsOnly] = useState<boolean>(false);
@@ -58,7 +59,7 @@ const TargetAssets = () => {
   useEffect(() => { 
       setPage(1); 
       setSearchTerm(""); 
-  }, [filterLive, filterHttpx, filterDnsOnly, filterHasPorts, filterNoCdn, filterHasCdn, filterHasWaf, filterHasCloud, filterAssetProvider, filterJsOnly, filterSources, activeTab]);
+  }, [filterLive, filterHttpx, filterDnsOnly, filterHasPorts, filterNoCdn, filterHasCdn, filterHasWaf, filterHasCloud, filterAssetProvider, filterStatusCode, filterJsOnly, filterSources, activeTab]);
 
   const toggleHttpx = () => {
       if (!filterHttpx) { setFilterDnsOnly(undefined); setFilterHttpx(true); } else { setFilterHttpx(undefined); }
@@ -144,7 +145,7 @@ const TargetAssets = () => {
   const targetQuery = useQuery({ queryKey: ['target', targetId], queryFn: () => getTargetDetails(targetId), enabled: !!targetId });
   
   const assetsQuery = useQuery({
-    queryKey: ['assets', targetId, page, filterLive, filterHttpx, filterDnsOnly, filterHasPorts, filterNoCdn, filterHasCdn, filterHasWaf, filterHasCloud, filterAssetProvider, debouncedSearch, sortBy, sortOrder],
+    queryKey: ['assets', targetId, page, filterLive, filterHttpx, filterDnsOnly, filterHasPorts, filterNoCdn, filterHasCdn, filterHasWaf, filterHasCloud, filterAssetProvider, filterStatusCode, debouncedSearch, sortBy, sortOrder],
     queryFn: () =>
       getTargetAssets(
         targetId,
@@ -160,6 +161,7 @@ const TargetAssets = () => {
           has_cdn: filterHasCdn,
           has_waf: filterHasWaf,
           has_cloud: filterHasCloud,
+          status_code: filterStatusCode || undefined,
           sources: filterAssetProvider ? [filterAssetProvider] : undefined,
         },
         sortBy,
@@ -277,6 +279,44 @@ const TargetAssets = () => {
                         onClick={() => setFilterAssetProvider(null)}
                         className="hack-btn-ghost border border-hack-border px-2 py-1 text-[10px] uppercase tracking-wider text-hack-dim hover:text-white whitespace-nowrap"
                         title="Clear provider filter (back to ALL)"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="hidden md:block w-px bg-hack-border h-4"></div>
+                <div className="flex items-center gap-2 w-full md:w-auto">
+                  <span className="text-[10px] uppercase text-hack-dim tracking-widest whitespace-nowrap">Status:</span>
+                  <div className="flex items-center gap-2 min-w-[160px]">
+                    <select
+                      className="bg-black/40 border border-hack-border text-hack-primary text-[11px] font-mono px-2 py-1 rounded-none focus:outline-none focus:border-hack-primary/60 min-w-[160px]"
+                      value={filterStatusCode}
+                      onChange={(e) => setFilterStatusCode(e.target.value)}
+                      title="Filter assets by HTTP status code"
+                    >
+                      <option value="">ALL STATUS</option>
+                      <option value="2xx">2xx (Success)</option>
+                      <option value="3xx">3xx (Redirect)</option>
+                      <option value="4xx">4xx (Client Err)</option>
+                      <option value="5xx">5xx (Server Err)</option>
+                      <option value="200">200</option>
+                      <option value="301">301</option>
+                      <option value="302">302</option>
+                      <option value="401">401</option>
+                      <option value="403">403</option>
+                      <option value="404">404</option>
+                      <option value="429">429</option>
+                      <option value="500">500</option>
+                      <option value="502">502</option>
+                      <option value="503">503</option>
+                    </select>
+
+                    {filterStatusCode && (
+                      <button
+                        onClick={() => setFilterStatusCode("")}
+                        className="hack-btn-ghost border border-hack-border px-2 py-1 text-[10px] uppercase tracking-wider text-hack-dim hover:text-white whitespace-nowrap"
+                        title="Clear status filter (back to ALL)"
                       >
                         Clear
                       </button>
