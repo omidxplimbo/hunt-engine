@@ -145,6 +145,32 @@ func getTargetTempDir(targetID uint) (string, string, error) {
 	return td, username, nil
 }
 
+func getTargetToolTmpDir(targetID uint) string {
+	td, _, err := getTargetTempDir(targetID)
+	if err != nil || td == "" {
+		// fallback to default OS tmp; best-effort
+		return ""
+	}
+	tmpDir := filepath.Join(td, "_tmp")
+	_ = os.MkdirAll(tmpDir, 0o755)
+	return tmpDir
+}
+
+func envWithTargetTmp(targetID uint) []string {
+	// Inherit existing env, but force TMPDIR/TMP/TEMP into per-target workspace
+	env := append([]string{}, os.Environ()...)
+	tmpDir := getTargetToolTmpDir(targetID)
+	if tmpDir == "" {
+		return env
+	}
+	env = append(env,
+		"TMPDIR="+tmpDir,
+		"TMP="+tmpDir,
+		"TEMP="+tmpDir,
+	)
+	return env
+}
+
 func cleanupTargetTempDir(targetID uint) {
 	td, _, err := getTargetTempDir(targetID)
 	if err != nil {
@@ -266,6 +292,10 @@ func Start() {
 
 	log.Println("👷 Worker started. Waiting for jobs...", redisq.QueueName)
 
+	// Best-effort cleanup of legacy temp dirs created by tools (e.g. httpxXXXX) under /tmp.
+	// With TMPDIR redirected to per-target workspace, new ones should not be created.
+	cleanupLegacyToolTmp()
+
 	for {
 		result, err := redisq.Client.BLPop(context.Background(), 0*time.Second, redisq.QueueName).Result()
 		if err != nil {
@@ -274,6 +304,36 @@ func Start() {
 			continue
 		}
 		go processJobDispatcher(result[1])
+	}
+}
+
+func cleanupLegacyToolTmp() {
+	entries, err := os.ReadDir("/tmp")
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-30 * time.Minute)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		// Only legacy httpx temp dirs in /tmp root (NOT inside /tmp/hunt-engine)
+		if !strings.HasPrefix(name, "httpx") {
+			continue
+		}
+		full := filepath.Join("/tmp", name)
+		// safety: do not touch our workspace root
+		if strings.HasPrefix(full, workerTempRoot) {
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if fi.ModTime().Before(cutoff) {
+			_ = os.RemoveAll(full)
+		}
 	}
 }
 
@@ -959,6 +1019,8 @@ func runToolAndCollect(targetID uint, inputFile string, results map[string]strin
 	if cmdName == "waybackurls" || cmdName == "gau" {
 		catCmd := exec.Command("cat", inputFile)
 		toolCmd := exec.Command(cmdName, cmdArgs...)
+		catCmd.Env = envWithTargetTmp(targetID)
+		toolCmd.Env = envWithTargetTmp(targetID)
 
 		toolCmd.Stdin, _ = catCmd.StdoutPipe()
 		var outBuf bytes.Buffer
@@ -1335,6 +1397,7 @@ func UpdateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 // ... (Helper Functions)
 func runCommandWithKillSwitch(targetID uint, name string, args ...string) ([]byte, error) {
 	cmd := exec.Command(name, args...)
+	cmd.Env = envWithTargetTmp(targetID)
 	var outBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	if err := cmd.Start(); err != nil {
@@ -1365,6 +1428,7 @@ func runCommandWithKillSwitch(targetID uint, name string, args ...string) ([]byt
 // runCommandWithKillSwitchCombined مثل runCommandWithKillSwitch ولی stdout/stderr را با هم برمی‌گرداند (برای ابزارهایی مثل nmap)
 func runCommandWithKillSwitchCombined(targetID uint, name string, args ...string) ([]byte, error) {
 	cmd := exec.Command(name, args...)
+	cmd.Env = envWithTargetTmp(targetID)
 	var outBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &outBuf
