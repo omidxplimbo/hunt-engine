@@ -4,9 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -29,7 +27,6 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/telegram"
 	"gopkg.in/yaml.v3"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 const workerTempRoot = "/tmp/hunt-engine"
@@ -258,64 +255,6 @@ type HttpxResult struct {
 type DnsxResult struct {
 	Host string   `json:"host"`
 	A    []string `json:"a"`
-}
-
-// NucleiEvent is a minimal subset of nuclei JSONL output.
-type NucleiEvent struct {
-	TemplateID  string `json:"template-id"`
-	TemplateURL string `json:"template-url"`
-	Info        struct {
-		Name        string      `json:"name"`
-		Severity    string      `json:"severity"`
-		Tags        interface{} `json:"tags"`
-		Description string      `json:"description"`
-	} `json:"info"`
-	Type        string   `json:"type"`
-	Host        string   `json:"host"`
-	MatchedAt   string   `json:"matched-at"`
-	MatcherName string   `json:"matcher-name"`
-	CurlCommand string   `json:"curl-command"`
-	Extracted   []string `json:"extracted-results"`
-	Timestamp   string   `json:"timestamp"`
-}
-
-func nucleiTagsToSlice(v interface{}) []string {
-	switch t := v.(type) {
-	case []interface{}:
-		var out []string
-		for _, it := range t {
-			if s, ok := it.(string); ok && strings.TrimSpace(s) != "" {
-				out = append(out, strings.TrimSpace(s))
-			}
-		}
-		return out
-	case []string:
-		var out []string
-		for _, s := range t {
-			s = strings.TrimSpace(s)
-			if s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	case string:
-		// nuclei sometimes provides tags as comma-separated string
-		var out []string
-		for _, s := range strings.Split(t, ",") {
-			s = strings.TrimSpace(s)
-			if s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	default:
-		return []string{}
-	}
-}
-
-func computeFindingHash(templateID, matchedAt, matcherName string) string {
-	sum := sha256.Sum256([]byte(templateID + "|" + matchedAt + "|" + matcherName))
-	return hex.EncodeToString(sum[:])
 }
 
 // Start موتور اصلی کارگر را روشن می‌کند.
@@ -896,26 +835,6 @@ func runProbingPhase(targetID uint, rootDomain string) {
 			"total_live":      totalLive,
 		}
 		scanSetMeta(targetID, meta)
-	}
-
-	// Optional: Nuclei findings scan (controlled via ENABLE_NUCLEI)
-	if scanIsStepDone(targetID, "PROBING", "NUCLEI") {
-		log.Printf("⏩ Resume: skipping NUCLEI\n")
-	} else if nucleiEnabled() {
-		if checkStopRequest(targetID) {
-			return
-		}
-		scanMarkRunning(targetID, "PROBING", "NUCLEI")
-		updateTargetPhase(targetID, "PHASE 2: NUCLEI SCAN (FINDINGS)")
-		if err := runNucleiAndStoreFindings(targetID, tempDir); err != nil {
-			if err.Error() == "process killed by user request" {
-				return
-			}
-			log.Printf("⚠️ nuclei scan failed: %v\n", err)
-		}
-		scanMarkStepDone(targetID, "PROBING", "NUCLEI")
-	} else {
-		scanMarkStepDone(targetID, "PROBING", "NUCLEI")
 	}
 
 	log.Printf("🏁 PHASE 2 finished. Total processed: %d in %s.\n", processedCount, time.Since(startTime))
@@ -2318,25 +2237,6 @@ func getBatchSize() int {
 	return size
 }
 
-func nucleiEnabled() bool {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv("ENABLE_NUCLEI")))
-	return v == "true" || v == "1" || v == "yes"
-}
-
-func nucleiSeverities() string {
-	// comma-separated, e.g. "critical,high"
-	v := strings.TrimSpace(os.Getenv("NUCLEI_SEVERITIES"))
-	if v == "" {
-		return "critical,high"
-	}
-	return v
-}
-
-func nucleiTags() string {
-	// comma-separated, e.g. "takeover"
-	return strings.TrimSpace(os.Getenv("NUCLEI_TAGS"))
-}
-
 func readHttpxResults(filename string) (map[string]HttpxResult, error) {
 	file, err := os.Open(filename)
 	if err != nil {
@@ -2356,138 +2256,6 @@ func readHttpxResults(filename string) (map[string]HttpxResult, error) {
 		}
 	}
 	return results, scanner.Err()
-}
-
-func runNucleiAndStoreFindings(targetID uint, tempDir string) error {
-	if !nucleiEnabled() {
-		return nil
-	}
-
-	// Build input list from live assets (prefer FinalURL when available)
-	var assets []models.Asset
-	if err := database.DB.Select("id", "value", "final_url", "is_live", "status_code").
-		Where("target_id = ? AND is_live = true", targetID).
-		Find(&assets).Error; err != nil {
-		return err
-	}
-	if len(assets) == 0 {
-		return nil
-	}
-
-	inputSet := make(map[string]bool)
-	for _, a := range assets {
-		v := strings.TrimSpace(a.FinalURL)
-		if v == "" || v == "null" {
-			v = strings.TrimSpace(a.Value)
-		}
-		if v != "" {
-			inputSet[v] = true
-		}
-	}
-	var inputs []string
-	for k := range inputSet {
-		inputs = append(inputs, k)
-	}
-	sort.Strings(inputs)
-
-	inputFile := filepath.Join(tempDir, "nuclei_targets.txt")
-	outFile := filepath.Join(tempDir, "nuclei_output.jsonl")
-	_ = os.Remove(outFile)
-	if err := writeSliceToFile(inputFile, inputs); err != nil {
-		return err
-	}
-
-	args := []string{"-l", inputFile, "-jsonl", "-o", outFile, "-silent", "-no-color"}
-	if sev := nucleiSeverities(); strings.TrimSpace(sev) != "" {
-		args = append(args, "-severity", sev)
-	}
-	if tags := nucleiTags(); strings.TrimSpace(tags) != "" {
-		args = append(args, "-tags", tags)
-	}
-
-	_, err := runCommandWithKillSwitch(targetID, "nuclei", args...)
-	if err != nil {
-		if err.Error() == "process killed by user request" {
-			return err
-		}
-		// nuclei returns non-zero for some cases; still try to parse output file
-		log.Printf("⚠️ nuclei finished with issues: %v\n", err)
-	}
-
-	f, err2 := os.Open(outFile)
-	if err2 != nil {
-		_ = os.Remove(inputFile)
-		return nil
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	inserted := 0
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		var ev NucleiEvent
-		if err := json.Unmarshal([]byte(line), &ev); err != nil {
-			continue
-		}
-		title := ev.Info.Name
-		if strings.TrimSpace(title) == "" {
-			title = ev.TemplateID
-		}
-		sev := strings.ToLower(strings.TrimSpace(ev.Info.Severity))
-		if sev == "" {
-			sev = "info"
-		}
-
-		tagsSlice := nucleiTagsToSlice(ev.Info.Tags)
-		tagsJSON, _ := json.Marshal(tagsSlice)
-
-		// store full raw event as evidence for triage
-		var evidenceObj map[string]interface{}
-		_ = json.Unmarshal([]byte(line), &evidenceObj)
-		evidenceJSON, _ := json.Marshal(evidenceObj)
-
-		hash := computeFindingHash(ev.TemplateID, ev.MatchedAt, ev.MatcherName)
-
-		finding := models.Finding{
-			TargetID:    targetID,
-			Title:       title,
-			Type:        "nuclei",
-			Severity:    sev,
-			Status:      "open",
-			Hash:        hash,
-			TemplateID:  ev.TemplateID,
-			MatcherName: ev.MatcherName,
-			MatchedAt:   ev.MatchedAt,
-			Host:        ev.Host,
-			CurlCommand: ev.CurlCommand,
-			Tags:        string(tagsJSON),
-			Evidence:    string(evidenceJSON),
-		}
-
-		if err := database.DB.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "target_id"}, {Name: "hash"}},
-			DoNothing: true,
-		}).Create(&finding).Error; err == nil {
-			// Create returns nil even when conflict-do-nothing; count best-effort by checking ID
-			if finding.ID != 0 {
-				inserted++
-			}
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		log.Printf("⚠️ nuclei output scan error: %v\n", err)
-	}
-
-	if inserted > 0 {
-		log.Printf("✅ nuclei saved %d new findings (target %d)\n", inserted, targetID)
-	}
-
-	_ = os.Remove(outFile)
-	_ = os.Remove(inputFile)
-	return nil
 }
 
 func mergeUnique(slice1, slice2 []string) []string {

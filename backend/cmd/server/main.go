@@ -83,8 +83,6 @@ func main() {
 	api.Get("/targets/:id/urls", handlers.GetTargetURLs) // 👈 این خط جدید است
 	api.Get("/targets/:id/ips", handlers.ExportTargetIPs) // Export IPs به صورت txt
 	api.Get("/targets/:id/scan-state", handlers.GetTargetScanState)
-	api.Get("/targets/:id/findings", handlers.GetTargetFindings)
-	api.Patch("/findings/:id", handlers.UpdateFinding)
 
 	// 👇 Self-service (کاربر روی اکانت خودش)
 	api.Get("/me", handlers.GetMe)

@@ -25,9 +25,6 @@ RUN git clone --depth 1 https://github.com/blechschmidt/massdns.git /tmp/massdns
 RUN go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
 RUN go install -v github.com/projectdiscovery/cdncheck/cmd/cdncheck@latest
 
-# فاز ۴: Vuln Scanning (Findings)
-RUN go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
-
 # فاز ۳: خزش و کشف محتوا
 RUN go install github.com/tomnomnom/waybackurls@latest
 RUN go install github.com/lc/gau/v2/cmd/gau@latest
@@ -67,7 +64,6 @@ COPY --from=go_builder /go/bin/puredns /usr/local/bin/puredns
 COPY --from=go_builder /out/massdns /usr/local/bin/massdns
 COPY --from=go_builder /go/bin/httpx /usr/local/bin/httpx
 COPY --from=go_builder /go/bin/cdncheck /usr/local/bin/cdncheck
-COPY --from=go_builder /go/bin/nuclei /usr/local/bin/nuclei
 COPY --from=go_builder /go/bin/waybackurls /usr/local/bin/waybackurls
 COPY --from=go_builder /go/bin/gau /usr/local/bin/gau
 COPY --from=go_builder /go/bin/katana /usr/local/bin/katana

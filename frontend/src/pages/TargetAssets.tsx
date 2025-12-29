@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getTargetAssets, getTargetDetails, getTargetURLs, exportTargetIPs, getTargetFindings, updateFinding } from '../api/targets';
+import { useQuery } from '@tanstack/react-query';
+import { getTargetAssets, getTargetDetails, getTargetURLs, exportTargetIPs } from '../api/targets';
 import { ArrowLeft, Globe, CheckCircle, XCircle, Search, Monitor, Loader2, Network, ArrowUp, ArrowDown, Link2, FileText, Database, FileCode, Shield, Download, Cloud, Terminal } from 'lucide-react';
 import clsx from 'clsx';
-import type { FindingStatus } from '../types/finding';
 
 const KNOWN_SOURCES = [
   { id: 'wayback', label: 'Wayback' },
@@ -27,7 +26,7 @@ const TargetAssets = () => {
   const navigate = useNavigate();
   const targetId = Number(id);
 
-  const [activeTab, setActiveTab] = useState<'assets' | 'urls' | 'findings'>('assets');
+  const [activeTab, setActiveTab] = useState<'assets' | 'urls'>('assets');
   const [page, setPage] = useState(1);
   
   // Asset Filters
@@ -45,10 +44,6 @@ const TargetAssets = () => {
   // URL Filters
   const [filterJsOnly, setFilterJsOnly] = useState<boolean>(false);
   const [filterSources, setFilterSources] = useState<string[]>([]); // 👈 استیت جدید برای فیلتر سورس‌ها
-
-  // Findings Filters
-  const [filterFindingStatus, setFilterFindingStatus] = useState<string>("open");
-  const [filterFindingSeverity, setFilterFindingSeverity] = useState<string>("");
 
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -148,7 +143,6 @@ const TargetAssets = () => {
   };
 
   const targetQuery = useQuery({ queryKey: ['target', targetId], queryFn: () => getTargetDetails(targetId), enabled: !!targetId });
-  const queryClient = useQueryClient();
   
   const assetsQuery = useQuery({
     queryKey: ['assets', targetId, page, filterLive, filterHttpx, filterDnsOnly, filterHasPorts, filterNoCdn, filterHasCdn, filterHasWaf, filterHasCloud, filterAssetProvider, filterStatusCode, debouncedSearch, sortBy, sortOrder],
@@ -183,29 +177,11 @@ const TargetAssets = () => {
     enabled: !!targetId && activeTab === 'urls' 
   });
 
-  const findingsQuery = useQuery({
-    queryKey: ['findings', targetId, page, debouncedSearch, filterFindingStatus, filterFindingSeverity],
-    queryFn: () =>
-      getTargetFindings(targetId, page, 50, {
-        search: debouncedSearch,
-        status: filterFindingStatus || undefined,
-        severity: filterFindingSeverity || undefined,
-        type: undefined,
-      }),
-    enabled: !!targetId && activeTab === 'findings',
-  });
-
-  const updateFindingMutation = useMutation({
-    mutationFn: ({ id, status }: { id: number; status: FindingStatus }) => updateFinding(id, { status }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['findings', targetId] }),
-  });
-
-  const currentData = activeTab === 'assets' ? assetsQuery.data : activeTab === 'urls' ? urlsQuery.data : findingsQuery.data;
-  const isFetching = activeTab === 'assets' ? assetsQuery.isFetching : activeTab === 'urls' ? urlsQuery.isFetching : findingsQuery.isFetching;
+  const currentData = activeTab === 'assets' ? assetsQuery.data : urlsQuery.data;
+  const isFetching = activeTab === 'assets' ? assetsQuery.isFetching : urlsQuery.isFetching;
 
   const displayedUrls = urlsQuery.data?.data || [];
   const displayedAssets = assetsQuery.data?.data || [];
-  const displayedFindings = findingsQuery.data?.data || [];
 
   if (!targetId) return <div className="p-8 text-hack-danger font-mono"> FATAL ERROR: Invalid Target ID</div>;
 
@@ -235,9 +211,6 @@ const TargetAssets = () => {
           <button onClick={() => setActiveTab('urls')} className={clsx("hack-btn flex-1 md:flex-none justify-center", activeTab === 'urls' ? "bg-hack-primary text-black" : "bg-transparent text-hack-dim border-hack-dim/30")}>
               <Link2 size={14} /> Intel / URLs
           </button>
-          <button onClick={() => setActiveTab('findings')} className={clsx("hack-btn flex-1 md:flex-none justify-center", activeTab === 'findings' ? "bg-hack-primary text-black" : "bg-transparent text-hack-dim border-hack-dim/30")}>
-              <Shield size={14} /> Findings
-          </button>
           {activeTab === 'assets' && targetQuery.data && (
             <button 
               onClick={() => exportTargetIPs(targetId, targetQuery.data.root_domain)} 
@@ -255,7 +228,7 @@ const TargetAssets = () => {
           <Search className="text-hack-dim flex-shrink-0" size={14} />
           <input 
             type="text" 
-            placeholder={activeTab === 'assets' ? "QUERY ASSETS..." : activeTab === 'urls' ? "QUERY INTEL..." : "QUERY FINDINGS..."}
+            placeholder={activeTab === 'assets' ? "QUERY ASSETS..." : "QUERY INTEL..."}
             className="w-full bg-transparent border-none text-hack-primary pl-3 py-2 focus:ring-0 text-sm font-mono placeholder-hack-dim/50 min-w-0"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -377,48 +350,6 @@ const TargetAssets = () => {
                   ))}
             </div>
         )}
-
-        {activeTab === 'findings' && (
-          <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto">
-            <select
-              className="bg-black/40 border border-hack-border text-hack-primary text-[11px] font-mono px-2 py-1 rounded-none focus:outline-none focus:border-hack-primary/60"
-              value={filterFindingStatus}
-              onChange={(e) => setFilterFindingStatus(e.target.value)}
-              title="Filter findings by status"
-            >
-              <option value="">ALL STATUS</option>
-              <option value="open">OPEN</option>
-              <option value="triaged">TRIAGED</option>
-              <option value="duplicate">DUPLICATE</option>
-              <option value="fixed">FIXED</option>
-              <option value="wontfix">WONTFIX</option>
-            </select>
-
-            <select
-              className="bg-black/40 border border-hack-border text-hack-primary text-[11px] font-mono px-2 py-1 rounded-none focus:outline-none focus:border-hack-primary/60"
-              value={filterFindingSeverity}
-              onChange={(e) => setFilterFindingSeverity(e.target.value)}
-              title="Filter findings by severity"
-            >
-              <option value="">ALL SEVERITY</option>
-              <option value="critical">CRITICAL</option>
-              <option value="high">HIGH</option>
-              <option value="medium">MEDIUM</option>
-              <option value="low">LOW</option>
-              <option value="info">INFO</option>
-            </select>
-
-            {(filterFindingStatus || filterFindingSeverity) && (
-              <button
-                onClick={() => { setFilterFindingStatus("open"); setFilterFindingSeverity(""); }}
-                className="hack-btn-ghost border border-hack-border px-2 py-1 text-[10px] uppercase tracking-wider text-hack-dim hover:text-white whitespace-nowrap"
-                title="Reset findings filters"
-              >
-                Reset
-              </button>
-            )}
-          </div>
-        )}
       </div>
 
       <div className="hack-box flex flex-col flex-1 overflow-hidden relative">
@@ -441,18 +372,11 @@ const TargetAssets = () => {
                     <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[220px]">Stack</th>
                     <SortableHeader field="content_length" label="Size" className="w-[100px] text-right" />
                     </>
-                ) : activeTab === 'urls' ? (
+                ) : (
                     <>
                     <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[60%]">Resource Locator</th>
                     <SortableHeader field="source" label="Source" className="w-[20%]" />
                     <SortableHeader field="created_at" label="Timestamp" className="w-[20%] text-right" />
-                    </>
-                ) : (
-                    <>
-                      <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[90px]">Sev</th>
-                      <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[140px]">Status</th>
-                      <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[55%]">Title</th>
-                      <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[25%]">Match</th>
                     </>
                 )}
                 </tr>
@@ -607,7 +531,7 @@ const TargetAssets = () => {
                         <td className="px-6 py-3 align-top"><div className="flex flex-wrap gap-1 max-h-[60px] overflow-y-auto min-w-[150px]">{asset.web_server && <span className="px-1 py-0.5 bg-white/5 text-[9px] border border-white/10 text-hack-text whitespace-nowrap">{asset.web_server}</span>}{techs.map((tech, i) => <span key={i} className="px-1 py-0.5 bg-hack-primary/5 text-[9px] border border-hack-primary/20 text-hack-primary whitespace-nowrap">{tech}</span>)}</div></td>
                         <td className="px-6 py-3 align-top text-right text-xs text-hack-dim">{asset.content_length ? `${(asset.content_length / 1024).toFixed(1)} KB` : '-'}</td>
                     </tr>
-                    )}) : activeTab === 'urls' ? displayedUrls.map((url) => (
+                    )}) : displayedUrls.map((url) => (
                     <tr key={url.id} className="hover:bg-hack-primary/5 transition-colors group font-mono text-sm">
                         <td className="px-6 py-3 align-top">
                             <div className="flex items-start gap-3">
@@ -625,39 +549,6 @@ const TargetAssets = () => {
                         </td>
                         <td className="px-6 py-3 align-top text-right text-xs text-hack-dim whitespace-nowrap">{new Date(url.created_at).toLocaleString()}</td>
                     </tr>
-                    )) : displayedFindings.map((f) => (
-                      <tr key={f.id} className="hover:bg-hack-primary/5 transition-colors group font-mono text-sm">
-                        <td className="px-6 py-3 align-top">
-                          <span className={clsx("text-[10px] px-1.5 py-0.5 border uppercase tracking-wider",
-                            f.severity === 'critical' ? "border-hack-danger text-hack-danger bg-hack-danger/10" :
-                            f.severity === 'high' ? "border-hack-warning text-hack-warning bg-hack-warning/10" :
-                            f.severity === 'medium' ? "border-yellow-500 text-yellow-300 bg-yellow-900/20" :
-                            f.severity === 'low' ? "border-blue-500 text-blue-400 bg-blue-900/20" :
-                            "border-hack-border text-hack-dim bg-black/30")}>
-                            {f.severity || 'info'}
-                          </span>
-                        </td>
-                        <td className="px-6 py-3 align-top">
-                          <select
-                            className="bg-black/40 border border-hack-border text-hack-primary text-[11px] font-mono px-2 py-1 rounded-none focus:outline-none focus:border-hack-primary/60"
-                            value={f.status}
-                            onChange={(e) => updateFindingMutation.mutate({ id: f.id, status: e.target.value as FindingStatus })}
-                          >
-                            <option value="open">OPEN</option>
-                            <option value="triaged">TRIAGED</option>
-                            <option value="duplicate">DUPLICATE</option>
-                            <option value="fixed">FIXED</option>
-                            <option value="wontfix">WONTFIX</option>
-                          </select>
-                        </td>
-                        <td className="px-6 py-3 align-top">
-                          <div className="text-hack-text break-words">{f.title}</div>
-                          {f.template_id && <div className="text-[10px] text-hack-dim mt-1 break-all">{f.template_id}</div>}
-                        </td>
-                        <td className="px-6 py-3 align-top break-all text-hack-dim">
-                          {f.matched_at || f.host || '-'}
-                        </td>
-                      </tr>
                     ))}
             </tbody>
             </table>
