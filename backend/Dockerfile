@@ -44,8 +44,8 @@ FROM alpine:3.18
 LABEL maintainer="Omid Security Researcher"
 
 # 👇 نصب پایتون و ابزارهای بیلد مورد نیاز برای Waymore (gcc, headers, etc)
-# اضافه شدن: gcc python3-dev musl-dev linux-headers libffi-dev + nmap
-RUN apk --no-cache add ca-certificates bind-tools jq curl python3 py3-pip git gcc python3-dev musl-dev linux-headers libffi-dev nmap
+# اضافه شدن: gcc python3-dev musl-dev linux-headers libffi-dev + nmap + bash
+RUN apk --no-cache add ca-certificates bind-tools jq curl python3 py3-pip git gcc python3-dev musl-dev linux-headers libffi-dev nmap bash
 
 # نصب Waymore
 # نکته: Waymore نیاز به پایتون دارد. ما آن را از طریق pip نصب می‌کنیم.
@@ -71,6 +71,10 @@ COPY --from=go_builder /go/bin/ffuf /usr/local/bin/ffuf
 
 # کپی برنامه اصلی
 COPY --from=go_builder /app/hunt-engine-api .
+
+# کپی اسکریپت‌های کمکی (مثل AbuseDB)
+COPY --from=go_builder /app/scripts /root/hunt-engine/backend/scripts/
+RUN chmod +x /root/hunt-engine/backend/scripts/*.sh
 
 # کپی Amass
 COPY --from=caffix/amass:latest /bin/amass /usr/local/bin/amass

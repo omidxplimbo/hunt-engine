@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { createTarget, type CreateTargetPayload, getWordlists, type Wordlist } from '../api/targets';
-import { X, Loader2, Target, Zap, Globe, Network, FileText } from 'lucide-react';
+import { X, Loader2, Target, Zap, Globe, Network, FileText, Shield } from 'lucide-react';
 import clsx from 'clsx';
 
 interface Props {
@@ -29,6 +29,7 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
     use_cero: false, // پیش‌فرض
     use_crtsh: false, // پیش‌فرض
     use_puredns: false, // پیش‌فرض
+    use_abusedb: false,
     puredns_wordlists: [], // پیش‌فرض
   });
 
@@ -42,7 +43,7 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['targets'] });
       onClose();
-      setFormData({ name: '', root_domain: '', description: '', frequency: 720, modules: ['DISCOVERY', 'PROBING', 'CRAWLING'], use_alterx: true, use_waymore: false, use_portscan: false, use_cero: false, use_crtsh: false, use_puredns: false, puredns_wordlists: [] });
+      setFormData({ name: '', root_domain: '', description: '', frequency: 720, modules: ['DISCOVERY', 'PROBING', 'CRAWLING'], use_alterx: true, use_waymore: false, use_portscan: false, use_cero: false, use_crtsh: false, use_puredns: false, use_abusedb: false, puredns_wordlists: [] });
     },
   });
 
@@ -150,6 +151,22 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
               </label>
             </div>
             <p className="text-[8px] text-hack-dim leading-tight">Query crt.sh API for subdomains.</p>
+          </div>
+
+          <div className="p-3 border border-hack-border bg-black/30 flex flex-col justify-center gap-2">
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="use_abusedb"
+                checked={formData.use_abusedb || false}
+                onChange={e => setFormData({ ...formData, use_abusedb: e.target.checked })}
+                className="accent-hack-primary h-4 w-4"
+              />
+              <label htmlFor="use_abusedb" className="text-xs font-bold text-hack-text tracking-wide cursor-pointer flex items-center gap-1">
+                <Shield size={12} className="text-red-400" /> AbuseDB
+              </label>
+            </div>
+            <p className="text-[8px] text-hack-dim leading-tight">Scrape suspicious hostnames from AbuseIPDB.</p>
           </div>
 
           <div className="p-3 border border-hack-border bg-black/30 flex flex-col gap-3">

@@ -85,6 +85,7 @@ func CreateTarget(c *fiber.Ctx) error {
 		UseCero:         false,
 		UseCrtsh:        false,
 		UsePuredns:      false,
+		UseAbusedb:      false,
 		PurednsWordlists: "[]",
 	}
 
@@ -102,6 +103,9 @@ func CreateTarget(c *fiber.Ctx) error {
 	}
 	if req.UseCrtsh != nil {
 		target.UseCrtsh = *req.UseCrtsh
+	}
+	if req.UseAbusedb != nil {
+		target.UseAbusedb = *req.UseAbusedb
 	}
 	if req.UsePuredns != nil {
 		target.UsePuredns = *req.UsePuredns
@@ -172,6 +176,9 @@ func UpdateTarget(c *fiber.Ctx) error {
 	}
 	if req.UsePuredns != nil {
 		target.UsePuredns = *req.UsePuredns
+	}
+	if req.UseAbusedb != nil {
+		target.UseAbusedb = *req.UseAbusedb
 	}
 	if req.PurednsWordlists != nil && len(req.PurednsWordlists) > 0 {
 		wordlistsJSON, _ := json.Marshal(req.PurednsWordlists)
@@ -859,6 +866,7 @@ func toTargetResponse(t models.Target, assetCount int64) dto.TargetResponse {
 		UseCero:      t.UseCero,
 		UseCrtsh:     t.UseCrtsh,
 		UsePuredns:   t.UsePuredns,
+		UseAbusedb:   t.UseAbusedb,
 		PurednsWordlists: parseJSONToInterface(t.PurednsWordlists),
 		ScanModules:  t.ScanModules,
 	}
@@ -1059,6 +1067,7 @@ func ExportTarget(c *fiber.Ctx) error {
 			UseCero:     t.UseCero,
 			UseCrtsh:    t.UseCrtsh,
 			UsePuredns:  t.UsePuredns,
+			UseAbusedb:  t.UseAbusedb,
 			PurednsWordlists: wordlists,
 			Assets:      assetItems,
 			URLs:        urlItems,
@@ -1150,6 +1159,7 @@ func ImportTarget(c *fiber.Ctx) error {
 			UseCero:         item.UseCero,
 			UseCrtsh:        item.UseCrtsh,
 			UsePuredns:      item.UsePuredns,
+			UseAbusedb:      item.UseAbusedb,
 		}
 		// تنظیم PurednsWordlists
 		if len(item.PurednsWordlists) > 0 {

@@ -1919,6 +1919,7 @@ type SubdomainSource struct {
 	Source    string
 }
 
+// runPassiveCollection جمع‌آوری اطلاعات غیرفعال (Passive) از منابع مختلف
 func runPassiveCollection(targetID uint, domain string) ([]string, map[string][]string) {
 	// دریافت تنظیمات target
 	var target models.Target
@@ -1959,7 +1960,7 @@ func runPassiveCollection(targetID uint, domain string) ([]string, map[string][]
 		}
 	}
 
-	// ابزارهای همیشگی
+	// 1. ابزارهای همیشگی (Subfinder, Assetfinder)
 	wg.Add(2)
 	go func() {
 		args := []string{"-d", domain, "-silent", "-all"}
@@ -1970,7 +1971,7 @@ func runPassiveCollection(targetID uint, domain string) ([]string, map[string][]
 	}()
 	go runTool("assetfinder", "--subs-only", domain)
 
-	// ابزارهای انتخابی
+	// 2. ابزارهای انتخابی (Cero)
 	if target.UseCero {
 		wg.Add(1)
 		log.Printf("🔐 Starting CERO for %s (SSL certificate scraping)...\n", domain)
@@ -1989,6 +1990,7 @@ func runPassiveCollection(targetID uint, domain string) ([]string, map[string][]
 		log.Printf("⏩ Skipping CERO for %s (Disabled in settings)\n", domain)
 	}
 
+	// 3. ابزارهای انتخابی (Crt.sh)
 	if target.UseCrtsh {
 		wg.Add(1)
 		log.Printf("🔍 Starting CRT.SH API query for %s...\n", domain)
@@ -2007,9 +2009,28 @@ func runPassiveCollection(targetID uint, domain string) ([]string, map[string][]
 		log.Printf("⏩ Skipping CRT.SH for %s (Disabled in settings)\n", domain)
 	}
 
+	// 4. ابزار اختیاری (AbuseDB)
+	if target.UseAbusedb {
+		wg.Add(1)
+		log.Printf("😈 Starting AbuseDB scraping for %s...\n", domain)
+		go func() {
+			defer wg.Done()
+			abuseResults := runAbuseDB(domain)
+			for _, res := range abuseResults {
+				normalized := normalizeSubdomain(res, domain)
+				if normalized != "" {
+					results <- SubdomainSource{Subdomain: normalized, Source: "abusedb"}
+				}
+			}
+		}()
+	} else {
+		log.Printf("⏩ Skipping AbuseDB for %s (Disabled in settings)\n", domain)
+	}
+
+	// بستن کانال وقتی همه تمام شدند
 	go func() { wg.Wait(); close(results) }()
 
-	// Map برای نگه‌داری subdomain -> []sources
+	// جمع‌آوری نتایج در Map برای حذف تکراری‌ها و ادغام منابع
 	sourcesMap := make(map[string]map[string]bool)
 	var finalSlice []string
 
@@ -2025,7 +2046,7 @@ func runPassiveCollection(targetID uint, domain string) ([]string, map[string][]
 		}
 	}
 
-	// تبدیل map[string]bool به []string
+	// تبدیل map[string]bool به []string برای هر ساب‌دامین
 	sourcesListMap := make(map[string][]string)
 	for subdomain, sourcesSet := range sourcesMap {
 		var sources []string
@@ -2037,6 +2058,44 @@ func runPassiveCollection(targetID uint, domain string) ([]string, map[string][]
 	}
 
 	return finalSlice, sourcesListMap
+}
+
+// ---------------------------------------------------------
+// این تابع را در انتهای فایل runner.go اضافه کنید
+// ---------------------------------------------------------
+
+func runAbuseDB(rootDomain string) []string {
+	scriptPath := "/root/hunt-engine/backend/scripts/abusedb.sh"
+	// اطمینان از وجود فایل
+	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
+		log.Printf("❌ AbuseDB script not found at %s\n", scriptPath)
+		return []string{}
+	}
+
+	cmd := exec.Command("/bin/bash", scriptPath, rootDomain)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("❌ AbuseDB Script Error: %v\nOutput: %s\n", err, string(output))
+		return []string{}
+	}
+
+	var results []string
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			results = append(results, line)
+		}
+	}
+
+	if len(results) > 0 {
+		log.Printf("😈 AbuseDB script found %d subdomains for %s\n", len(results), rootDomain)
+	} else {
+		log.Printf("⏩ AbuseDB script produced no results for %s\n", rootDomain)
+	}
+
+	return results
 }
 
 // runCero اجرای ابزار cero برای scrape کردن domain names از SSL certificates

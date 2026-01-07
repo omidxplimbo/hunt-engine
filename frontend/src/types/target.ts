@@ -19,6 +19,7 @@ export interface Target {
   use_cero?: boolean;  // Scrape domain names from SSL certificates
   use_crtsh?: boolean; // Use crt.sh API for subdomain discovery
   use_puredns?: boolean; // Use puredns for bruteforce subdomain discovery
+  use_abusedb?: boolean;
   puredns_wordlists?: string[]; // Selected wordlists for puredns
   scan_modules: string;
 }

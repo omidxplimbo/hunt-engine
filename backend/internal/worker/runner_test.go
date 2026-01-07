@@ -1,6 +1,8 @@
 package worker
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestNormalizeSubdomain(t *testing.T) {
 	root := "example.com"
@@ -66,12 +68,12 @@ func TestParseCrtshJSON(t *testing.T) {
 
 	// We only assert a few key expectations; full normalization happens later via normalizeSubdomain.
 	wantSet := map[string]bool{
-		"api.example.com":     false,
-		"www.example.com":     false,
-		"dev.example.com":     false,
-		"shop.example.com":    false,
-		"foo.notexample.com":  false, // parseCrtshJSON only filters by suffix; boundary is enforced in normalizeSubdomain
-		"example.com":         false, // allowed here; normalizeSubdomain will drop root
+		"api.example.com":    false,
+		"www.example.com":    false,
+		"dev.example.com":    false,
+		"shop.example.com":   false,
+		"foo.notexample.com": false, // parseCrtshJSON only filters by suffix; boundary is enforced in normalizeSubdomain
+		"example.com":        false, // allowed here; normalizeSubdomain will drop root
 	}
 
 	for _, s := range got {
@@ -92,4 +94,30 @@ func TestParseCrtshJSON(t *testing.T) {
 	}
 }
 
+/*
+// TestRunAbuseDB_Real tests the actual shell script execution
+func TestRunAbuseDB_Real(t *testing.T) {
+    // Check if script exists first
+    scriptPath := "/root/hunt-engine/backend/scripts/abusedb.sh"
+    if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
+        t.Skipf("Script not found at %s, skipping real test", scriptPath)
+    }
 
+    domain := "varzesh3.com"
+    t.Logf("Running AbuseDB script for %s...", domain)
+
+    results := runAbuseDB(domain)
+
+    t.Logf("Found %d results", len(results))
+    for i, r := range results {
+        if i < 10 {
+            t.Logf(" - %s", r)
+        }
+    }
+
+    if len(results) == 0 {
+        t.Log("WARNING: No results found. This might be due to: 1. Network 2. Cookies expired 3. Parsing error")
+        // We don't fail the test because external dependencies might change, but we log it.
+    }
+}
+*/

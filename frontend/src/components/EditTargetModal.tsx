@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { updateTarget, type UpdateTargetPayload, getWordlists, type Wordlist } from '../api/targets';
 import type { Target } from '../types/target';
-import { X, Loader2, Settings, Zap, Globe, Network, FileText } from 'lucide-react';
+import { X, Loader2, Settings, Zap, Globe, Network, FileText, Shield } from 'lucide-react';
 import clsx from 'clsx';
 
 interface Props {
@@ -42,6 +42,7 @@ export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
         use_cero: (target as any).use_cero ?? false,
         use_crtsh: (target as any).use_crtsh ?? false,
         use_puredns: (target as any).use_puredns ?? false,
+        use_abusedb: (target as any).use_abusedb ?? false,
         puredns_wordlists: (target as any).puredns_wordlists || [],
         modules: existingModules,
       });
@@ -148,6 +149,18 @@ export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
             />
             <label className="block text-xs font-bold text-hack-text tracking-wide cursor-pointer flex items-center gap-1">
               <Globe size={12} className="text-purple-400" /> CRT.SH
+            </label>
+          </div>
+
+          <div className="p-3 border border-hack-border bg-black/30 flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={formData.use_abusedb ?? false}
+              onChange={e => setFormData({ ...formData, use_abusedb: e.target.checked })}
+              className="accent-hack-primary h-4 w-4"
+            />
+            <label className="block text-xs font-bold text-hack-text tracking-wide cursor-pointer flex items-center gap-1">
+              <Shield size={12} className="text-red-400" /> AbuseDB
             </label>
           </div>
 
