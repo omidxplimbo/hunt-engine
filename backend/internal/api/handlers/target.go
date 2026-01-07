@@ -70,22 +70,22 @@ func CreateTarget(c *fiber.Ctx) error {
 	modulesJSON, _ := json.Marshal(req.Modules)
 
 	target := models.Target{
-		CreatedByUserID: uid,
-		Name:            req.Name,
-		RootDomain:      req.RootDomain,
-		Description:     req.Description,
-		InScope:         true,
-		Frequency:       req.Frequency,
-		ScanModules:     string(modulesJSON),
-		Status:          "SCANNING",
-		CurrentPhase:    "QUEUED: STARTING...",
-		UseAlterx:       true,
-		UseWaymore:      false,
-		UsePortscan:     false,
-		UseCero:         false,
-		UseCrtsh:        false,
-		UsePuredns:      false,
-		UseAbusedb:      false,
+		CreatedByUserID:  uid,
+		Name:             req.Name,
+		RootDomain:       req.RootDomain,
+		Description:      req.Description,
+		InScope:          true,
+		Frequency:        req.Frequency,
+		ScanModules:      string(modulesJSON),
+		Status:           "SCANNING",
+		CurrentPhase:     "QUEUED: STARTING...",
+		UseAlterx:        true,
+		UseWaymore:       false,
+		UsePortscan:      false,
+		UseCero:          false,
+		UseCrtsh:         false,
+		UsePuredns:       false,
+		UseAbusedb:       false,
 		PurednsWordlists: "[]",
 	}
 
@@ -110,7 +110,7 @@ func CreateTarget(c *fiber.Ctx) error {
 	if req.UsePuredns != nil {
 		target.UsePuredns = *req.UsePuredns
 	}
-	if req.PurednsWordlists != nil && len(req.PurednsWordlists) > 0 {
+	if len(req.PurednsWordlists) > 0 {
 		wordlistsJSON, _ := json.Marshal(req.PurednsWordlists)
 		target.PurednsWordlists = string(wordlistsJSON)
 	}
@@ -180,7 +180,7 @@ func UpdateTarget(c *fiber.Ctx) error {
 	if req.UseAbusedb != nil {
 		target.UseAbusedb = *req.UseAbusedb
 	}
-	if req.PurednsWordlists != nil && len(req.PurednsWordlists) > 0 {
+	if len(req.PurednsWordlists) > 0 {
 		wordlistsJSON, _ := json.Marshal(req.PurednsWordlists)
 		target.PurednsWordlists = string(wordlistsJSON)
 	} else if req.PurednsWordlists != nil && len(req.PurednsWordlists) == 0 {
@@ -251,15 +251,15 @@ func StartDiscovery(c *fiber.Ctx) error {
 		newRunID := fmt.Sprintf("run_%d", time.Now().UnixNano())
 		if stErr != nil {
 			_ = database.DB.Create(&models.TargetScanState{
-				TargetID:        target.ID,
-				RunID:           newRunID,
-				Status:          "PAUSED",
-				CompletedSteps:  "[]",
-				Meta:            "{}",
-				CurrentModule:   "",
-				CurrentStep:     "",
-				HeartbeatAt:     nil,
-				LastError:       "",
+				TargetID:       target.ID,
+				RunID:          newRunID,
+				Status:         "PAUSED",
+				CompletedSteps: "[]",
+				Meta:           "{}",
+				CurrentModule:  "",
+				CurrentStep:    "",
+				HeartbeatAt:    nil,
+				LastError:      "",
 			}).Error
 		} else {
 			_ = database.DB.Model(&models.TargetScanState{}).
@@ -849,26 +849,26 @@ func GetTargetURLs(c *fiber.Ctx) error {
 // ... (Helper Functions DTO - اینا رو بذار همونطور که هستن بمونن یا اگه خواستی کپی کن از فایل قبلی)
 func toTargetResponse(t models.Target, assetCount int64) dto.TargetResponse {
 	return dto.TargetResponse{
-		ID:           t.ID,
-		Name:         t.Name,
-		RootDomain:   t.RootDomain,
-		Description:  t.Description,
-		InScope:      t.InScope,
-		CreatedAt:    t.CreatedAt,
-		AssetCount:   assetCount,
-		Frequency:    t.Frequency,
-		LastScanAt:   t.LastScanAt,
-		Status:       t.Status,
-		CurrentPhase: t.CurrentPhase,
-		UseAlterx:    t.UseAlterx,
-		UseWaymore:   t.UseWaymore,
-		UsePortscan:  t.UsePortscan,
-		UseCero:      t.UseCero,
-		UseCrtsh:     t.UseCrtsh,
-		UsePuredns:   t.UsePuredns,
-		UseAbusedb:   t.UseAbusedb,
+		ID:               t.ID,
+		Name:             t.Name,
+		RootDomain:       t.RootDomain,
+		Description:      t.Description,
+		InScope:          t.InScope,
+		CreatedAt:        t.CreatedAt,
+		AssetCount:       assetCount,
+		Frequency:        t.Frequency,
+		LastScanAt:       t.LastScanAt,
+		Status:           t.Status,
+		CurrentPhase:     t.CurrentPhase,
+		UseAlterx:        t.UseAlterx,
+		UseWaymore:       t.UseWaymore,
+		UsePortscan:      t.UsePortscan,
+		UseCero:          t.UseCero,
+		UseCrtsh:         t.UseCrtsh,
+		UsePuredns:       t.UsePuredns,
+		UseAbusedb:       t.UseAbusedb,
 		PurednsWordlists: parseJSONToInterface(t.PurednsWordlists),
-		ScanModules:  t.ScanModules,
+		ScanModules:      t.ScanModules,
 	}
 }
 
@@ -1055,22 +1055,22 @@ func ExportTarget(c *fiber.Ctx) error {
 		}
 
 		exportItems[i] = dto.TargetExportItem{
-			Name:        t.Name,
-			RootDomain:  t.RootDomain,
-			Description: t.Description,
-			InScope:     t.InScope,
-			Frequency:   t.Frequency,
-			Modules:     modules,
-			UseAlterx:   t.UseAlterx,
-			UseWaymore:  t.UseWaymore,
-			UsePortscan: t.UsePortscan,
-			UseCero:     t.UseCero,
-			UseCrtsh:    t.UseCrtsh,
-			UsePuredns:  t.UsePuredns,
-			UseAbusedb:  t.UseAbusedb,
+			Name:             t.Name,
+			RootDomain:       t.RootDomain,
+			Description:      t.Description,
+			InScope:          t.InScope,
+			Frequency:        t.Frequency,
+			Modules:          modules,
+			UseAlterx:        t.UseAlterx,
+			UseWaymore:       t.UseWaymore,
+			UsePortscan:      t.UsePortscan,
+			UseCero:          t.UseCero,
+			UseCrtsh:         t.UseCrtsh,
+			UsePuredns:       t.UsePuredns,
+			UseAbusedb:       t.UseAbusedb,
 			PurednsWordlists: wordlists,
-			Assets:      assetItems,
-			URLs:        urlItems,
+			Assets:           assetItems,
+			URLs:             urlItems,
 		}
 	}
 
