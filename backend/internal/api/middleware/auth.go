@@ -12,19 +12,24 @@ import (
 // Protected میدل‌ویری که چک می‌کند کاربر توکن معتبر دارد یا نه
 func Protected() fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		// گرفتن هدر Authorization
+		// 1. Try Authorization Header
+		tokenString := ""
 		authHeader := c.Get("Authorization")
-		if authHeader == "" {
+		if authHeader != "" {
+			parts := strings.Split(authHeader, " ")
+			if len(parts) == 2 && parts[0] == "Bearer" {
+				tokenString = parts[1]
+			}
+		}
+
+		// 2. If no header, try Query Param (for WebSockets)
+		if tokenString == "" {
+			tokenString = c.Query("token")
+		}
+
+		if tokenString == "" {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Missing authorization token"})
 		}
-
-		// فرمت باید "Bearer TOKEN" باشد
-		parts := strings.Split(authHeader, " ")
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid token format"})
-		}
-
-		tokenString := parts[1]
 
 		// اعتبارسنجی توکن
 		claims, err := utils.ValidateToken(tokenString)

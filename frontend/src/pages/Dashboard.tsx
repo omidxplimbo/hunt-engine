@@ -3,6 +3,7 @@ import { getDashboardStats } from '../api/stats';
 import { Target, Activity, Zap, Database, Cpu, Network } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import MonitoringServer from '../components/MonitoringServer';
+import SystemLogs from '../components/SystemLogs';
 import { useAuth } from '../context/AuthContext';
 
 const Dashboard = () => {
@@ -162,7 +163,21 @@ const Dashboard = () => {
       </div>
 
       {/* Monitoring Server Section (Admin Only) */}
-      {role === 'admin' && <MonitoringServer />}
+      {role === 'admin' && (
+        <div className="space-y-8">
+          <MonitoringServer />
+          
+          <div className="hack-box p-1">
+             <div className="p-3 border-b border-hack-border/30 flex justify-between items-center mb-0">
+                <h3 className="text-sm font-bold text-hack-primary tracking-widest uppercase flex items-center gap-2">
+                  <span className="w-1 h-4 bg-hack-primary"></span>
+                  System Logs (Live Stream)
+                </h3>
+             </div>
+             <SystemLogs />
+          </div>
+        </div>
+      )}
     </div>
   );
 };

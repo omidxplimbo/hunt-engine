@@ -19,6 +19,8 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/telegram"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/utils"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker"
+
+	"github.com/gofiber/contrib/websocket"
 )
 
 func main() {
@@ -106,6 +108,15 @@ func main() {
 
 	api.Get("/dashboard/stats", handlers.GetDashboardStats)
 	api.Get("/monitor/stats", handlers.GetMonitorData)
+
+	// WebSocket for System Logs (Admin Only)
+	api.Use("/monitor/logs", func(c *fiber.Ctx) error {
+		if websocket.IsWebSocketUpgrade(c) {
+			return c.Next()
+		}
+		return c.Status(fiber.StatusUpgradeRequired).SendString("Upgrade Required")
+	})
+	api.Get("/monitor/logs", websocket.New(handlers.StreamSystemLogs))
 
 	// Wordlists endpoint
 	api.Get("/wordlists", handlers.GetWordlists)
