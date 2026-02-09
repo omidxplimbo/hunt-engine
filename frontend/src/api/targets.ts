@@ -76,8 +76,8 @@ export const startDiscovery = async (id: number) => {
 
 // دریافت جزئیات کامل یک تارگت
 export const getTargetDetails = async (id: number) => {
-  const response = await apiClient.get<TargetDetails>(`/targets/${id}`);
-  return response.data;
+  const response = await apiClient.get<{ status: string; data: TargetDetails }>(`/targets/${id}`);
+  return response.data.data;
 };
 
 // --- بخش Assets ---
