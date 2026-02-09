@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -32,6 +33,32 @@ import (
 const workerTempRoot = "/tmp/hunt-engine"
 
 const DefaultBatchSize = 500
+
+// --- Monitor Logic ---
+type TaskInfo struct {
+	TargetID  uint      `json:"target_id"`
+	Command   string    `json:"command"`
+	StartTime time.Time `json:"start_time"`
+	PID       int       `json:"pid"`
+}
+
+var RunningProcesses sync.Map
+
+func GetRunningTasks() []TaskInfo {
+	var tasks []TaskInfo
+	RunningProcesses.Range(func(key, value interface{}) bool {
+		if task, ok := value.(TaskInfo); ok {
+			tasks = append(tasks, task)
+		}
+		return true
+	})
+	// Sort by start time (newest first)
+	sort.Slice(tasks, func(i, j int) bool {
+		return tasks[i].StartTime.After(tasks[j].StartTime)
+	})
+	return tasks
+}
+// ---------------------
 
 // subfinderProviderKeys is the default set of providers emitted by subfinder v2.11.0
 // when it generates /root/.config/subfinder/provider-config.yaml
@@ -1040,19 +1067,16 @@ func runToolAndCollect(targetID uint, inputFile string, results map[string]strin
 	var err error
 
 	if cmdName == "waybackurls" || cmdName == "gau" {
-		catCmd := exec.Command("cat", inputFile)
-		toolCmd := exec.Command(cmdName, cmdArgs...)
-		catCmd.Env = envWithTargetTmp(targetID)
-		toolCmd.Env = envWithTargetTmp(targetID)
+		// Open input file directly instead of using 'cat' command
+		f, err := os.Open(inputFile)
+		if err != nil {
+			log.Printf("⚠️ Failed to open input file for %s: %v\n", cmdName, err)
+			return
+		}
+		defer f.Close()
 
-		toolCmd.Stdin, _ = catCmd.StdoutPipe()
-		var outBuf bytes.Buffer
-		toolCmd.Stdout = &outBuf
-
-		_ = toolCmd.Start()
-		_ = catCmd.Run()
-		err = toolCmd.Wait()
-		output = outBuf.Bytes()
+		// Run tool with stdin from file, monitored by kill switch
+		output, err = runCommandWithStdinAndKillSwitch(targetID, f, cmdName, cmdArgs...)
 	} else {
 		output, err = runCommandWithKillSwitch(targetID, cmdName, cmdArgs...)
 	}
@@ -1448,13 +1472,33 @@ func UpdateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 
 // ... (Helper Functions)
 func runCommandWithKillSwitch(targetID uint, name string, args ...string) ([]byte, error) {
+	return runCommandWithStdinAndKillSwitch(targetID, nil, name, args...)
+}
+
+func runCommandWithStdinAndKillSwitch(targetID uint, stdin io.Reader, name string, args ...string) ([]byte, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Env = envWithTargetTmp(targetID)
+	
+	if stdin != nil {
+		cmd.Stdin = stdin
+	}
+
 	var outBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start command %s: %w", name, err)
 	}
+
+	// Register Task
+	taskKey := fmt.Sprintf("%d-%d", targetID, cmd.Process.Pid)
+	RunningProcesses.Store(taskKey, TaskInfo{
+		TargetID:  targetID,
+		Command:   name + " " + strings.Join(args, " "),
+		StartTime: time.Now(),
+		PID:       cmd.Process.Pid,
+	})
+	defer RunningProcesses.Delete(taskKey)
+
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	ticker := time.NewTicker(2 * time.Second)
@@ -1487,6 +1531,17 @@ func runCommandWithKillSwitchCombined(targetID uint, name string, args ...string
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start command %s: %w", name, err)
 	}
+
+	// Register Task
+	taskKey := fmt.Sprintf("%d-%d", targetID, cmd.Process.Pid)
+	RunningProcesses.Store(taskKey, TaskInfo{
+		TargetID:  targetID,
+		Command:   name + " " + strings.Join(args, " "),
+		StartTime: time.Now(),
+		PID:       cmd.Process.Pid,
+	})
+	defer RunningProcesses.Delete(taskKey)
+
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	ticker := time.NewTicker(2 * time.Second)

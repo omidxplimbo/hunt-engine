@@ -46,6 +46,7 @@ temp/
 
 # Node modules (for local development)
 node_modules/
+backend/hunt-engine-api
 
 # Go binaries
 *.exe

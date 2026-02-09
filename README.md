@@ -29,6 +29,7 @@ The system is built on a modern, containerized microservice-like architecture:
 * **State Management:** TanStack Query (React Query) for efficient API caching and real-time syncing.
 * **Features:**
     * **Dashboard:** Live analytics and charts (Recharts).
+    * **Monitoring Server:** (Admin Only) Real-time CPU/RAM usage charts and active process list.
     * **Target Management:** Create, Edit, Delete, **Stop/Resume** scans.
     * **Configurable Scans:** Toggle modules like `Alterx`, `Waymore` or `Crawling` per target.
     * **Asset Explorer:** Advanced data grid with Filtering, Search, **Tabs for Assets vs URLs**.
@@ -154,6 +155,14 @@ We are following a multi-phase development roadmap.
 * [x] **Smart Filtering:** Only queries live subdomains to minimize API usage and noise.
 * [x] **Source Merging:** Automatically merges VirusTotal findings with other sources (e.g., `gau, virustotal`) for the same URL.
 * [x] **Frontend Integration:** Added "VIRUSTOTAL" tag and filter in the URLs tab.
+
+### ✅ Phase 5: System Monitoring & V2 Upgrade (COMPLETED)
+**Goal:** Provide real-time server health monitoring and enhanced admin visibility.
+* [x] **Monitoring Server:** Added a dedicated, admin-only dashboard section for real-time system metrics.
+* [x] **Live Charts:** Interactive Area Charts displaying real-time CPU and RAM usage.
+* [x] **Process Tracking:** Detailed table showing all active background scanning processes (PID, Command, Duration).
+* [x] **V2 Architecture:** Upgraded core engine to **Hunt Engine v2.0** with optimized concurrency handling.
+* [x] **Kill Switch V2:** Enhanced process management to reliably track and terminate complex tool chains (pipes, sub-processes).
 
 ---
 

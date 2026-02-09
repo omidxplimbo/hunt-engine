@@ -34,7 +34,7 @@ func main() {
 	go worker.Start()
 
 	app := fiber.New(fiber.Config{
-		AppName: "Hunt Engine API v0.4 (Secured)",
+		AppName: "Hunt Engine API v2.0 (Secured)",
 	})
 
 	app.Use(cors.New(cors.Config{
@@ -105,6 +105,7 @@ func main() {
 	adminUsers.Delete("/:id", handlers.DeleteUser)
 
 	api.Get("/dashboard/stats", handlers.GetDashboardStats)
+	api.Get("/monitor/stats", handlers.GetMonitorData)
 
 	// Wordlists endpoint
 	api.Get("/wordlists", handlers.GetWordlists)

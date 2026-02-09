@@ -2,8 +2,11 @@ import { useQuery } from '@tanstack/react-query';
 import { getDashboardStats } from '../api/stats';
 import { Target, Activity, Zap, Database, Cpu, Network } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import MonitoringServer from '../components/MonitoringServer';
+import { useAuth } from '../context/AuthContext';
 
 const Dashboard = () => {
+  const { role } = useAuth();
   const { data, isLoading, isError } = useQuery({
     queryKey: ['dashboard-stats'],
     queryFn: getDashboardStats,
@@ -157,6 +160,9 @@ const Dashboard = () => {
           </div>
         </div>
       </div>
+
+      {/* Monitoring Server Section (Admin Only) */}
+      {role === 'admin' && <MonitoringServer />}
     </div>
   );
 };
