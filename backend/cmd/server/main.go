@@ -36,7 +36,7 @@ func main() {
 	go worker.Start()
 
 	app := fiber.New(fiber.Config{
-		AppName: "Hunt Engine API v2.0 (Secured)",
+		AppName: "Hunt Engine API v2.1.0 (Secured)",
 	})
 
 	app.Use(cors.New(cors.Config{

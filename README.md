@@ -147,7 +147,6 @@ We are following a multi-phase development roadmap.
 * [x] **Export Assets:** Download filtered subdomains list as `.txt` (Live, Dead, No CDN, etc.) with smart filenames.
 * [x] **Export URLs:** Download filtered URL lists as `.txt` (JS only, Specific Sources, etc.).
 * [x] **Export IPs:** Download unique IPs of a target as `.txt` for port scanning.
-* [x] **UI Integration:** Export buttons integrated directly into the Asset and URL tables with matching styles.
 
 ### ✅ Phase 4.9: VirusTotal Integration (COMPLETED)
 **Goal:** Enhance intelligence gathering by integrating VirusTotal's API.
@@ -161,8 +160,10 @@ We are following a multi-phase development roadmap.
 * [x] **Monitoring Server:** Added a dedicated, admin-only dashboard section for real-time system metrics.
 * [x] **Live Charts:** Interactive Area Charts displaying real-time CPU and RAM usage.
 * [x] **Process Tracking:** Detailed table showing all active background scanning processes (PID, Command, Duration).
+* [x] **System Logs:** Live terminal-like log viewer (WebSocket) to stream Docker logs directly in the dashboard.
 * [x] **V2 Architecture:** Upgraded core engine to **Hunt Engine v2.0** with optimized concurrency handling.
 * [x] **Kill Switch V2:** Enhanced process management to reliably track and terminate complex tool chains (pipes, sub-processes).
+* [x] **UI Integration:** Export buttons integrated directly into the Asset and URL tables with matching styles.
 
 ---
 

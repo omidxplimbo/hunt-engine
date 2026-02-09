@@ -319,6 +319,9 @@ func Start() {
 
 	log.Println("👷 Worker started. Waiting for jobs...", redisq.QueueName)
 
+	// Clear stale locks from previous crashes/restarts
+	clearAllLocks()
+
 	// Best-effort cleanup of legacy temp dirs created by tools (e.g. httpxXXXX) under /tmp.
 	// With TMPDIR redirected to per-target workspace, new ones should not be created.
 	cleanupLegacyToolTmp()
@@ -361,6 +364,15 @@ func cleanupLegacyToolTmp() {
 		if fi.ModTime().Before(cutoff) {
 			_ = os.RemoveAll(full)
 		}
+	}
+}
+
+func clearAllLocks() {
+	lockDir := filepath.Join(workerTempRoot, "locks")
+	if err := os.RemoveAll(lockDir); err != nil {
+		log.Printf("⚠️ Failed to clear locks: %v\n", err)
+	} else {
+		log.Println("🧹 Cleared all stale locks on startup.")
 	}
 }
 
