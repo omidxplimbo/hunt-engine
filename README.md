@@ -141,6 +141,13 @@ We are following a multi-phase development roadmap.
 * [x] **Smart Source Merging:** When a subdomain is found by multiple tools, all sources are tracked and merged automatically.
 * [x] **Fresh Asset Fix:** Improved notification logic to prevent spam - only truly new live subdomains trigger fresh asset alerts.
 
+### ✅ Phase 4.8: Data Export Enhancements (COMPLETED)
+**Goal:** Provide flexible data extraction for external tools.
+* [x] **Export Assets:** Download filtered subdomains list as `.txt` (Live, Dead, No CDN, etc.) with smart filenames.
+* [x] **Export URLs:** Download filtered URL lists as `.txt` (JS only, Specific Sources, etc.).
+* [x] **Export IPs:** Download unique IPs of a target as `.txt` for port scanning.
+* [x] **UI Integration:** Export buttons integrated directly into the Asset and URL tables with matching styles.
+
 ---
 
 ## 🚀 Quick Start

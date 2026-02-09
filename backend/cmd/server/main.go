@@ -80,7 +80,9 @@ func main() {
 
 	// Asset Routes
 	api.Get("/targets/:id/assets", handlers.GetTargetAssets)
-	api.Get("/targets/:id/urls", handlers.GetTargetURLs) // 👈 این خط جدید است
+	api.Get("/targets/:id/assets/download", handlers.DownloadTargetAssets) // 👈 Download filtered assets
+	api.Get("/targets/:id/urls", handlers.GetTargetURLs)
+	api.Get("/targets/:id/urls/download", handlers.DownloadTargetURLs) // 👈 Download filtered URLs
 	api.Get("/targets/:id/ips", handlers.ExportTargetIPs) // Export IPs به صورت txt
 	api.Get("/targets/:id/scan-state", handlers.GetTargetScanState)
 

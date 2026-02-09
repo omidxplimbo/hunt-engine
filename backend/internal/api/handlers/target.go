@@ -1425,3 +1425,201 @@ func GetWordlists(c *fiber.Ctx) error {
 		"data":   wordlists,
 	})
 }
+
+// DownloadTargetAssets downloads the filtered assets as a text file
+func DownloadTargetAssets(c *fiber.Ctx) error {
+	id := c.Params("id")
+	targetID := uint(0)
+	fmt.Sscanf(id, "%d", &targetID)
+
+	// Access control
+	if _, err := getAccessibleTarget(c, targetID); err != nil {
+		return err
+	}
+
+	// Filters
+	isLive := c.Query("is_live")
+	isNew := c.Query("is_new")
+	search := c.Query("search")
+	hasHttpx := c.Query("has_httpx")
+	dnsOnly := c.Query("dns_only")
+	hasPorts := c.Query("has_ports")
+	noCdn := c.Query("no_cdn")
+	hasCdn := c.Query("has_cdn")
+	hasWaf := c.Query("has_waf")
+	hasCloud := c.Query("has_cloud")
+	statusCodeFilter := strings.TrimSpace(c.Query("status_code"))
+
+	var sources []string
+	if c.Context() != nil && c.Context().QueryArgs() != nil {
+		if multi := c.Context().QueryArgs().PeekMulti("sources"); len(multi) > 0 {
+			for _, v := range multi {
+				s := strings.TrimSpace(string(v))
+				if s != "" {
+					sources = append(sources, s)
+				}
+			}
+		}
+	}
+	if len(sources) == 0 {
+		if raw := strings.TrimSpace(c.Query("sources")); raw != "" {
+			for _, part := range strings.Split(raw, ",") {
+				part = strings.TrimSpace(part)
+				if part != "" {
+					sources = append(sources, part)
+				}
+			}
+		}
+	}
+
+	db := database.DB.Model(&models.Asset{}).Where("target_id = ?", targetID)
+
+	if isLive != "" {
+		db = db.Where("is_live = ?", isLive == "true")
+	}
+	if isNew != "" {
+		db = db.Where("is_new = ?", isNew == "true")
+	}
+	if search != "" {
+		db = db.Where("value LIKE ?", "%"+search+"%")
+	}
+
+	if statusCodeFilter != "" {
+		raw := strings.ToLower(statusCodeFilter)
+		if len(raw) == 3 && raw[1:] == "xx" && raw[0] >= '1' && raw[0] <= '5' {
+			start := int(raw[0]-'0') * 100
+			db = db.Where("status_code >= ? AND status_code < ?", start, start+100)
+		} else {
+			if n, err := strconv.Atoi(raw); err == nil {
+				db = db.Where("status_code = ?", n)
+			}
+		}
+	}
+
+	if len(sources) > 0 {
+		var conds []string
+		var args []interface{}
+		for _, s := range sources {
+			b, _ := json.Marshal([]string{s})
+			conds = append(conds, "sources @> ?::jsonb")
+			args = append(args, string(b))
+		}
+		db = db.Where("("+strings.Join(conds, " OR ")+")", args...)
+	}
+
+	if hasHttpx == "true" {
+		db = db.Where("jsonb_array_length(host_ip) > 0")
+	}
+
+	if dnsOnly == "true" {
+		db = db.Where("jsonb_array_length(dnsx_ip) > 0 AND jsonb_array_length(host_ip) = 0")
+	}
+
+	if hasPorts == "true" {
+		db = db.Where(`
+jsonb_typeof(open_ports) = 'object'
+AND EXISTS (
+SELECT 1
+FROM jsonb_each(open_ports) e
+WHERE jsonb_typeof(e.value) = 'array'
+  AND jsonb_array_length(e.value) > 0
+			)
+		`)
+	}
+
+	if hasCdn == "true" {
+		db = db.Where("( (cdn_name IS NOT NULL AND cdn_name != '' AND cdn_name != 'null') OR cdncheck = true OR (cdncheck_name IS NOT NULL AND cdncheck_name != '' AND cdncheck_name != 'null') )")
+	}
+	if hasWaf == "true" {
+		db = db.Where("( wafcheck = true OR (wafcheck_name IS NOT NULL AND wafcheck_name != '' AND wafcheck_name != 'null') )")
+	}
+	if hasCloud == "true" {
+		db = db.Where("( cloudcheck = true OR (cloudcheck_name IS NOT NULL AND cloudcheck_name != '' AND cloudcheck_name != 'null') )")
+	}
+
+	if noCdn == "true" {
+		db = db.
+			Where("(cdn_name IS NULL OR cdn_name = '' OR cdn_name = 'null')").
+			Where("cdncheck = ?", false).
+			Where("(cdncheck_name IS NULL OR cdncheck_name = '' OR cdncheck_name = 'null')")
+	}
+
+	// Sorting
+	sortBy := c.Query("sort_by", "value")
+	order := c.Query("order", "asc")
+	validSortFields := map[string]bool{
+		"value": true, "status_code": true, "content_length": true, "title": true, "created_at": true,
+	}
+	if !validSortFields[sortBy] {
+		sortBy = "value"
+	}
+	if order != "asc" && order != "desc" {
+		order = "asc"
+	}
+	orderClause := fmt.Sprintf("%s %s", sortBy, order)
+
+	var results []string
+	if err := db.Order(orderClause).Pluck("value", &results).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	content := strings.Join(results, "\n")
+	c.Set("Content-Type", "text/plain")
+	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"assets_%d.txt\"", targetID))
+	return c.SendString(content)
+}
+
+// DownloadTargetURLs downloads the filtered URLs as a text file
+func DownloadTargetURLs(c *fiber.Ctx) error {
+	id := c.Params("id")
+	targetID := uint(0)
+	fmt.Sscanf(id, "%d", &targetID)
+
+	if _, err := getAccessibleTarget(c, targetID); err != nil {
+		return err
+	}
+
+	search := c.Query("search")
+	onlyJS := c.Query("only_js")
+	sources := c.Query("sources")
+
+	db := database.DB.Model(&models.FoundURL{}).Where("target_id = ?", targetID)
+
+	if search != "" {
+		db = db.Where("value LIKE ?", "%"+search+"%")
+	}
+
+	if onlyJS == "true" {
+		db = db.Where("value LIKE ?", "%.js")
+	}
+
+	if sources != "" {
+		sourceList := strings.Split(sources, ",")
+		if len(sourceList) > 0 {
+			db = db.Where("source IN ?", sourceList)
+		}
+	}
+
+	sortBy := c.Query("sort_by", "created_at")
+	order := c.Query("order", "desc")
+	validSortFields := map[string]bool{
+		"value": true, "source": true, "created_at": true,
+	}
+	if !validSortFields[sortBy] {
+		sortBy = "created_at"
+	}
+	if order != "asc" && order != "desc" {
+		order = "desc"
+	}
+	orderClause := fmt.Sprintf("%s %s", sortBy, order)
+
+	var results []string
+	if err := db.Order(orderClause).Pluck("value", &results).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	content := strings.Join(results, "\n")
+	c.Set("Content-Type", "text/plain")
+	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"urls_%d.txt\"", targetID))
+	return c.SendString(content)
+}
