@@ -804,6 +804,7 @@ func runProbingPhase(targetID uint, rootDomain string) {
 			"-o", probingOutputFile,
 			"-silent",
 			"-threads", "50",
+			"-tech-detect",
 			"-follow-redirects",
 		)
 		if err != nil {
