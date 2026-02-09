@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { getTargetAssets, getTargetDetails, getTargetURLs, exportTargetIPs } from '../api/targets';
+import { getTargetAssets, getTargetDetails, getTargetURLs, exportTargetIPs, downloadAssets, downloadURLs } from '../api/targets';
 import { ArrowLeft, Globe, CheckCircle, XCircle, Search, Monitor, Loader2, Network, ArrowUp, ArrowDown, Link2, FileText, Database, FileCode, Shield, Download, Cloud, Terminal } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -178,6 +178,40 @@ const TargetAssets = () => {
     enabled: !!targetId && activeTab === 'urls'
   });
 
+  const handleDownloadAssets = async () => {
+    await downloadAssets(
+      targetId,
+      targetQuery.data?.root_domain || 'target',
+      {
+        is_live: filterLive,
+        search: debouncedSearch,
+        has_httpx: filterHttpx,
+        dns_only: filterDnsOnly,
+        has_ports: filterHasPorts,
+        no_cdn: filterNoCdn,
+        has_cdn: filterHasCdn,
+        has_waf: filterHasWaf,
+        has_cloud: filterHasCloud,
+        status_code: filterStatusCode || undefined,
+        sources: filterAssetProvider ? [filterAssetProvider] : undefined,
+      },
+      sortBy,
+      sortOrder
+    );
+  };
+
+  const handleDownloadURLs = async () => {
+    await downloadURLs(
+      targetId,
+      targetQuery.data?.root_domain || 'target',
+      debouncedSearch,
+      filterJsOnly,
+      sortBy,
+      sortOrder,
+      filterSources
+    );
+  };
+
   const currentData = activeTab === 'assets' ? assetsQuery.data : urlsQuery.data;
   const isFetching = activeTab === 'assets' ? assetsQuery.isFetching : urlsQuery.isFetching;
 
@@ -213,14 +247,35 @@ const TargetAssets = () => {
           <Link2 size={14} /> Intel / URLs
         </button>
         {activeTab === 'assets' && targetQuery.data && (
-          <button
-            onClick={() => exportTargetIPs(targetId, targetQuery.data.root_domain)}
-            className="hack-btn-ghost border border-hack-border flex items-center gap-2 px-3"
-            title="Download all unique IPs as TXT file"
-          >
-            <Download size={14} />
-            <span className="hidden md:inline">Export IPs</span>
-          </button>
+          <>
+            <button
+              onClick={() => exportTargetIPs(targetId, targetQuery.data.root_domain)}
+              className="hack-btn-ghost border border-hack-border flex items-center gap-2 px-3"
+              title="Download all unique IPs as TXT file"
+            >
+              <Download size={14} />
+              <span className="hidden md:inline">Export IPs</span>
+            </button>
+            <button
+              onClick={handleDownloadAssets}
+              className="hack-btn-ghost border border-hack-border flex items-center gap-2 px-3"
+              title="Download Filtered Assets"
+            >
+              <Download size={14} />
+              <span className="hidden md:inline">Export Assets</span>
+            </button>
+          </>
+        )}
+
+        {activeTab === 'urls' && (
+            <button
+              onClick={handleDownloadURLs}
+              className="hack-btn-ghost border border-hack-border flex items-center gap-2 px-3"
+              title="Download Filtered URLs"
+            >
+              <Download size={14} />
+              <span className="hidden md:inline">Export URLs</span>
+            </button>
         )}
       </div>
 
@@ -324,6 +379,7 @@ const TargetAssets = () => {
                 )}
               </div>
             </div>
+            <div className="hidden md:block w-px bg-hack-border h-4"></div>
           </div>
         )}
 
@@ -559,7 +615,7 @@ const TargetAssets = () => {
         </div>
 
         <div className="border-t border-hack-border p-2 flex justify-between items-center bg-black/60 text-xs font-mono sticky bottom-0">
-          <span className="text-hack-dim px-2">PAGE {page} // RECORDS: {currentData?.total_count?.toLocaleString() || 0}</span>
+          <span className="text-hack-dim px-2">PAGE {page} // RECORDS: {((currentData as any)?.total ?? (currentData as any)?.total_count ?? 0).toLocaleString()}</span>
           <div className="flex gap-1">
             <button disabled={page === 1 || isFetching} onClick={() => setPage(p => Math.max(1, p - 1))} className="hack-btn-ghost hover:bg-white/5 disabled:opacity-30">PREV</button>
             <button disabled={!currentData?.data || currentData.data.length < 50 || isFetching} onClick={() => setPage(p => p + 1)} className="hack-btn-ghost hover:bg-white/5 disabled:opacity-30">NEXT</button>

@@ -37,13 +37,13 @@ export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
         frequency: target.frequency,
         in_scope: target.in_scope,
         use_alterx: target.use_alterx,
-        use_waymore: target.use_waymore, // 👈 مقداردهی اولیه
-        use_portscan: (target as any).use_portscan ?? false,
-        use_cero: (target as any).use_cero ?? false,
-        use_crtsh: (target as any).use_crtsh ?? false,
-        use_puredns: (target as any).use_puredns ?? false,
-        use_abusedb: (target as any).use_abusedb ?? false,
-        puredns_wordlists: (target as any).puredns_wordlists || [],
+        use_waymore: target.use_waymore,
+        use_portscan: target.use_portscan ?? false,
+        use_cero: target.use_cero ?? false,
+        use_crtsh: target.use_crtsh ?? false,
+        use_puredns: target.use_puredns ?? false,
+        use_abusedb: target.use_abusedb ?? false,
+        puredns_wordlists: target.puredns_wordlists || [],
         modules: existingModules,
       });
     }

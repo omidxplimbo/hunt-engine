@@ -24,6 +24,8 @@ export interface Target {
   scan_modules: string;
 }
 
+export type TargetDetails = Target;
+
 export interface TargetResponse {
   status: string;
   data: Target[];
