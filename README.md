@@ -148,6 +148,13 @@ We are following a multi-phase development roadmap.
 * [x] **Export IPs:** Download unique IPs of a target as `.txt` for port scanning.
 * [x] **UI Integration:** Export buttons integrated directly into the Asset and URL tables with matching styles.
 
+### ✅ Phase 4.9: VirusTotal Integration (COMPLETED)
+**Goal:** Enhance intelligence gathering by integrating VirusTotal's API.
+* [x] **New Source:** Added VirusTotal as a URL discovery source.
+* [x] **Smart Filtering:** Only queries live subdomains to minimize API usage and noise.
+* [x] **Source Merging:** Automatically merges VirusTotal findings with other sources (e.g., `gau, virustotal`) for the same URL.
+* [x] **Frontend Integration:** Added "VIRUSTOTAL" tag and filter in the URLs tab.
+
 ---
 
 ## 🚀 Quick Start

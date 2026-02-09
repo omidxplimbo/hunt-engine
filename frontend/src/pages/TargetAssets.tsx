@@ -10,6 +10,7 @@ const KNOWN_SOURCES = [
   { id: 'gau', label: 'GAU' },
   { id: 'katana', label: 'Katana' },
   { id: 'waymore', label: 'Waymore' },
+  { id: 'virustotal', label: 'VirusTotal' }, // <--- اضافه شده
 ];
 
 const KNOWN_ASSET_PROVIDERS = [
@@ -603,6 +604,7 @@ const TargetAssets = () => {
                     <span className={clsx("text-[10px] px-1.5 py-0.5 border uppercase tracking-wider",
                       url.source === 'waymore' ? "border-blue-500 text-blue-400 bg-blue-900/20" :
                         url.source?.includes('katana') ? "border-hack-danger text-hack-danger bg-hack-danger/10" :
+                          url.source?.includes('virustotal') ? "border-yellow-500 text-yellow-400 bg-yellow-900/20" :
                           "border-hack-border text-hack-dim")}>
                       {url.source || 'UNKNOWN'}
                     </span>

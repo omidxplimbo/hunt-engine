@@ -992,6 +992,28 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 		scanMarkStepDone(targetID, "CRAWLING", "KATANA")
 	}
 
+	// 5. VirusTotal
+	if len(liveAssets) > 0 {
+		if scanIsStepDone(targetID, "CRAWLING", "VIRUSTOTAL") {
+			log.Printf("⏩ Resume: skipping VIRUSTOTAL\n")
+		} else {
+			if checkStopRequest(targetID) {
+				return
+			}
+			scanMarkRunning(targetID, "CRAWLING", "VIRUSTOTAL")
+			updateTargetPhase(targetID, "PHASE 3: RUNNING VIRUSTOTAL")
+			log.Printf("🦠 Running VirusTotal URL discovery for %d live assets...\n", len(liveAssets))
+			
+			tmp := make(map[string]string)
+			runVirusTotalCollection(targetID, liveAssets, tmp)
+			saveCrawledURLs(targetID, rootDomain, tmp, true)
+			
+			scanMarkStepDone(targetID, "CRAWLING", "VIRUSTOTAL")
+		}
+	} else {
+		scanMarkStepDone(targetID, "CRAWLING", "VIRUSTOTAL")
+	}
+
 	// Filtering & Saving
 	if scanIsStepDone(targetID, "CRAWLING", "FILTER_SAVE") {
 		log.Printf("⏩ Resume: skipping FILTER/SAVE\n")
@@ -1065,6 +1087,7 @@ func saveCrawledURLs(targetID uint, rootDomain string, urls map[string]string, s
 	var newUrls []models.FoundURL
 	countSkippedCache := 0
 	countSkippedExt := 0
+	countUpdatedSource := 0
 
 	// کلید ردیس برای جلوگیری از تکرار در دفعات بعد (Continuous Monitoring)
 	redisKey := fmt.Sprintf("target:%d:crawled_urls", targetID)
@@ -1084,19 +1107,43 @@ func saveCrawledURLs(targetID uint, rootDomain string, urls map[string]string, s
 		}
 
 		// 👇 چک کردن کش ردیس (Deduplication)
-		exists, err := redisq.Client.SIsMember(context.Background(), redisKey, u).Result()
-		if err == nil && exists {
+		// برای هر URL، بررسی می‌کنیم آیا قبلاً در دیتابیس وجود دارد یا خیر تا source را مرج کنیم
+		var existingURL models.FoundURL
+		result := database.DB.Where("target_id = ? AND value = ?", targetID, u).First(&existingURL)
+		
+		if result.Error == nil {
+			// URL already exists, check/update source
+			currentSources := strings.Split(existingURL.Source, ", ")
+			newSource := source
+			
+			// Check if new source is already present
+			sourceExists := false
+			for _, s := range currentSources {
+				if s == newSource {
+					sourceExists = true
+					break
+				}
+			}
+			
+			if !sourceExists {
+				// Append new source
+				existingURL.Source = existingURL.Source + ", " + newSource
+				database.DB.Save(&existingURL)
+				countUpdatedSource++
+			}
+			
 			countSkippedCache++
 			continue
 		}
 
+		// URL is new
 		newUrls = append(newUrls, models.FoundURL{
 			TargetID: targetID,
 			Value:    u,
 			Source:   source,
 		})
 
-		// 👇 افزودن به کش ردیس
+		// 👇 افزودن به کش ردیس (اگرچه منطق بالا دیتابیس را چک می‌کند، ردیس هم برای سرعت خوب است اما اینجا منطق اصلی دیتابیس شد)
 		redisq.Client.SAdd(context.Background(), redisKey, u)
 
 		// 👇 ارسال نوتیفیکیشن فقط اگر silent نباشد
@@ -1122,8 +1169,12 @@ func saveCrawledURLs(targetID uint, rootDomain string, urls map[string]string, s
 	} else {
 		log.Println("✅ No new URLs to save.")
 	}
+	
+	if countUpdatedSource > 0 {
+		log.Printf("🔄 Updated sources for %d existing URLs.", countUpdatedSource)
+	}
 
-	log.Printf("📊 Stats: Total Found: %d | Ignored (Ext): %d | Cached (Skip): %d | New: %d",
+	log.Printf("📊 Stats: Total Found: %d | Ignored (Ext): %d | Exists/Skipped: %d | New: %d",
 		len(urls), countSkippedExt, countSkippedCache, len(newUrls))
 }
 
@@ -1912,6 +1963,68 @@ func runPuredns(targetID uint, rootDomain string, wordlists []string) (map[strin
 	_ = os.Remove(resolversFile)
 
 	return results, nil
+}
+
+// runVirusTotalCollection collects URLs from VirusTotal API for live subdomains
+func runVirusTotalCollection(targetID uint, subdomains []string, results map[string]string) {
+	apiKey := "183e25c8551f61932c61c190f8d2fc4667b82e954ada72ccef145cb4075a005e" // TODO: Move to config
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	for _, domain := range subdomains {
+		if checkStopRequest(targetID) {
+			return
+		}
+
+		url := fmt.Sprintf("https://virustotal.com/vtapi/v2/domain/report?apikey=%s&domain=%s", apiKey, domain)
+		resp, err := client.Get(url)
+		if err != nil {
+			log.Printf("⚠️ VirusTotal API error for %s: %v\n", domain, err)
+			continue
+		}
+
+		if resp.StatusCode != 200 {
+			// Don't log 404s/204s too noisily, but other errors might be interesting
+			if resp.StatusCode != 204 { // 204 = quota exceeded
+				log.Printf("⚠️ VirusTotal API status %d for %s\n", resp.StatusCode, domain)
+			}
+			resp.Body.Close()
+			continue
+		}
+
+		var vtResp struct {
+			DetectedUrls   []interface{} `json:"detected_urls"`
+			UndetectedUrls []interface{} `json:"undetected_urls"`
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&vtResp); err != nil {
+			log.Printf("⚠️ Failed to decode VT response for %s: %v\n", domain, err)
+			resp.Body.Close()
+			continue
+		}
+		resp.Body.Close()
+
+		// Helper to extract URLs from the nested arrays
+		// detected_urls structure: [ [url, sha256, positives, total, date], ... ]
+		processUrls := func(list []interface{}) {
+			for _, item := range list {
+				if arr, ok := item.([]interface{}); ok && len(arr) > 0 {
+					if u, ok := arr[0].(string); ok && u != "" {
+						u = strings.TrimSpace(u)
+						if _, exists := results[u]; !exists {
+							results[u] = "virustotal"
+						}
+					}
+				}
+			}
+		}
+
+		processUrls(vtResp.DetectedUrls)
+		processUrls(vtResp.UndetectedUrls)
+		
+		// Respect rate limits - VT public API has 4 req/min limit usually, but key provided might be premium or standard.
+		// Adding a small sleep just in case to be safe, though parallel workers might be better handled globally.
+		time.Sleep(500 * time.Millisecond) 
+	}
 }
 
 // SubdomainSource نگه‌داری subdomain و source آن
