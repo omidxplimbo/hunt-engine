@@ -74,6 +74,7 @@ func main() {
 
 	// Operations
 	api.Post("/targets/:id/probe", handlers.StartProbing)
+	api.Post("/targets/:id/scan", handlers.StartDiscovery) // 👈 Restore scan endpoint
 	api.Post("/targets/:id/discovery", handlers.StartDiscovery)
 	api.Post("/targets/:id/resume", handlers.ResumeTargetScan)
 	api.Post("/targets/:id/stop", handlers.StopScan)

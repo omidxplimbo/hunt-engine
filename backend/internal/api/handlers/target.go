@@ -813,12 +813,15 @@ func GetTargetURLs(c *fiber.Ctx) error {
 	}
 
 	if sources != "" {
-		sourceList := strings.Split(sources, ",") // اصلاح شد: نیاز به strings.Split نیست چون قبلا استفاده نکردیم
-		// نه صبر کن، بالا استفاده نکرده بودیم اینجا باید strings اضافه بشه به ایمپورت ها
-		// چون strings توی ایمپورت ها نیست، اینجا کد ساده تر میزنم یا باید strings رو اضافه کنی
-		// بذار یه کار تمیزتر کنیم، strings رو دستی به ایمپورت ها اضافه کردم (بالا).
+		sourceList := strings.Split(sources, ",")
 		if len(sourceList) > 0 {
-			db = db.Where("source IN ?", sourceList)
+			var conditions []string
+			var args []interface{}
+			for _, s := range sourceList {
+				conditions = append(conditions, "source LIKE ?")
+				args = append(args, "%"+s+"%")
+			}
+			db = db.Where(strings.Join(conditions, " OR "), args...)
 		}
 	}
 
@@ -1596,7 +1599,13 @@ func DownloadTargetURLs(c *fiber.Ctx) error {
 	if sources != "" {
 		sourceList := strings.Split(sources, ",")
 		if len(sourceList) > 0 {
-			db = db.Where("source IN ?", sourceList)
+			var conditions []string
+			var args []interface{}
+			for _, s := range sourceList {
+				conditions = append(conditions, "source LIKE ?")
+				args = append(args, "%"+s+"%")
+			}
+			db = db.Where(strings.Join(conditions, " OR "), args...)
 		}
 	}
 
