@@ -155,13 +155,13 @@ We are following a multi-phase development roadmap.
 * [x] **Source Merging:** Automatically merges VirusTotal findings with other sources (e.g., `gau, virustotal`) for the same URL.
 * [x] **Frontend Integration:** Added "VIRUSTOTAL" tag and filter in the URLs tab.
 
-### ✅ Phase 5: System Monitoring & V2 Upgrade (COMPLETED)
-**Goal:** Provide real-time server health monitoring and enhanced admin visibility.
+### ✅ Phase 5: System Monitoring & V2.1 Upgrade (COMPLETED)
+**Goal:** Provide real-time server health monitoring, enhanced stability, and admin visibility.
 * [x] **Monitoring Server:** Added a dedicated, admin-only dashboard section for real-time system metrics.
 * [x] **Live Charts:** Interactive Area Charts displaying real-time CPU and RAM usage.
 * [x] **Process Tracking:** Detailed table showing all active background scanning processes (PID, Command, Duration).
 * [x] **System Logs:** Live terminal-like log viewer (WebSocket) to stream Docker logs directly in the dashboard.
-* [x] **V2 Architecture:** Upgraded core engine to **Hunt Engine v2.0** with optimized concurrency handling.
+* [x] **V2.1 Architecture:** Upgraded core engine to **Hunt Engine v2.1** with optimized concurrency, panic recovery, and auto-healing locks.
 * [x] **Kill Switch V2:** Enhanced process management to reliably track and terminate complex tool chains (pipes, sub-processes).
 * [x] **UI Integration:** Export buttons integrated directly into the Asset and URL tables with matching styles.
 

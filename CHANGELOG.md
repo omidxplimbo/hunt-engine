@@ -5,6 +5,13 @@ All notable changes to the **Hunt Engine** project will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v2.1.0] - 2026-02-10
+### Added
+- **Stability:** Added `Panic Recovery` mechanism in the worker dispatcher to prevent the entire worker process from crashing if a single job fails.
+- **Reliability:** Implemented `clearAllLocks` on worker startup to automatically clean up stale lock files from previous crashes (fixing the "QUEUED forever" issue).
+- **Intelligence:** Improved `VirusTotal` collection module with a proper User-Agent to mimic browser behavior and avoid potential API throttling or incomplete data.
+- **Debugging:** Added detailed logging for VirusTotal URL discovery counts per domain.
+
 ## [v2.0.0] - 2026-02-09
 ### Added
 - **Monitoring Server:** A new real-time monitoring dashboard exclusively for Admin users.

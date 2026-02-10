@@ -406,6 +406,15 @@ func processJobDispatcher(payload string) {
 	}
 	defer releaseLock()
 
+	// Panic Recovery: جلوگیری از کرش کامل ورکر در صورت بروز خطا در تسک
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("🔥 CRITICAL PANIC in job dispatcher for target %d: %v\n", targetID, r)
+			// می‌توانیم وضعیت اسکن را به FAILED تغییر دهیم یا فقط لاگ کنیم
+			// فعلاً لاگ می‌کنیم تا ورکر زنده بماند و تسک‌های بعدی را بگیرد
+		}
+	}()
+
 	switch jobType {
 	case "DISCOVERY":
 		runDiscoveryPhase(targetID, rootDomain)
@@ -2043,7 +2052,15 @@ func runVirusTotalCollection(targetID uint, subdomains []string, results map[str
 		}
 
 		url := fmt.Sprintf("https://virustotal.com/vtapi/v2/domain/report?apikey=%s&domain=%s", apiKey, domain)
-		resp, err := client.Get(url)
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			log.Printf("⚠️ Failed to create VT request for %s: %v\n", domain, err)
+			continue
+		}
+		// تنظیم User-Agent برای جلوگیری از بلاک شدن توسط فایروال‌های VT
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+
+		resp, err := client.Do(req)
 		if err != nil {
 			log.Printf("⚠️ VirusTotal API error for %s: %v\n", domain, err)
 			continue
@@ -2070,6 +2087,7 @@ func runVirusTotalCollection(targetID uint, subdomains []string, results map[str
 		}
 		resp.Body.Close()
 
+		foundCount := 0
 		// Helper to extract URLs from the nested arrays
 		// detected_urls structure: [ [url, sha256, positives, total, date], ... ]
 		processUrls := func(list []interface{}) {
@@ -2079,6 +2097,7 @@ func runVirusTotalCollection(targetID uint, subdomains []string, results map[str
 						u = strings.TrimSpace(u)
 						if _, exists := results[u]; !exists {
 							results[u] = "virustotal"
+							foundCount++
 						}
 					}
 				}
@@ -2088,6 +2107,8 @@ func runVirusTotalCollection(targetID uint, subdomains []string, results map[str
 		processUrls(vtResp.DetectedUrls)
 		processUrls(vtResp.UndetectedUrls)
 		
+		log.Printf("🦠 VirusTotal found %d new URLs for %s\n", foundCount, domain)
+
 		// Respect rate limits - VT public API has 4 req/min limit usually, but key provided might be premium or standard.
 		// Adding a small sleep just in case to be safe, though parallel workers might be better handled globally.
 		time.Sleep(500 * time.Millisecond) 
