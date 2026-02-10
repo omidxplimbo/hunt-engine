@@ -2046,6 +2046,8 @@ func runVirusTotalCollection(targetID uint, subdomains []string, results map[str
 	apiKey := "183e25c8551f61932c61c190f8d2fc4667b82e954ada72ccef145cb4075a005e" // TODO: Move to config
 	client := &http.Client{Timeout: 30 * time.Second}
 
+	log.Printf("🦠 Starting VT Collection for %d subdomains.", len(subdomains))
+
 	for _, domain := range subdomains {
 		if checkStopRequest(targetID) {
 			return
@@ -2067,8 +2069,10 @@ func runVirusTotalCollection(targetID uint, subdomains []string, results map[str
 		}
 
 		if resp.StatusCode != 200 {
-			// Don't log 404s/204s too noisily, but other errors might be interesting
-			if resp.StatusCode != 204 { // 204 = quota exceeded
+			// Don't log 404s too noisily, but warn on 204 (Rate Limit)
+			if resp.StatusCode == 204 {
+				log.Printf("⚠️ VirusTotal Rate Limit Exceeded (204) for %s. Slowing down.\n", domain)
+			} else if resp.StatusCode != 404 {
 				log.Printf("⚠️ VirusTotal API status %d for %s\n", resp.StatusCode, domain)
 			}
 			resp.Body.Close()
@@ -2107,12 +2111,21 @@ func runVirusTotalCollection(targetID uint, subdomains []string, results map[str
 		processUrls(vtResp.DetectedUrls)
 		processUrls(vtResp.UndetectedUrls)
 		
-		log.Printf("🦠 VirusTotal found %d new URLs for %s\n", foundCount, domain)
+		if foundCount > 0 {
+			log.Printf("🦠 VirusTotal found %d new URLs for %s\n", foundCount, domain)
+		}
 
-		// Respect rate limits - VT public API has 4 req/min limit usually, but key provided might be premium or standard.
-		// Adding a small sleep just in case to be safe, though parallel workers might be better handled globally.
-		time.Sleep(500 * time.Millisecond) 
+		// Respect rate limits - VT public API has 4 req/min limit usually.
+		// We sleep 15 seconds to be safe (60s / 4 = 15s).
+		time.Sleep(15 * time.Second) 
 	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // SubdomainSource نگه‌داری subdomain و source آن
