@@ -953,6 +953,7 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 		updateTargetPhase(targetID, "PHASE 3: RUNNING WAYBACK")
 		tmp := make(map[string]string)
 		runToolAndCollect(targetID, crawlingRootFile, tmp, "wayback", "waybackurls")
+		updateTargetPhase(targetID, "PHASE 3: SAVING WAYBACK")
 		saveCrawledURLs(targetID, rootDomain, tmp, true)
 		scanMarkStepDone(targetID, "CRAWLING", "WAYBACK")
 	}
@@ -969,6 +970,7 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 			updateTargetPhase(targetID, "PHASE 3: RUNNING GAU")
 			tmp := make(map[string]string)
 			runToolAndCollect(targetID, crawlingAssetsFile, tmp, "gau", "gau", "--threads", "10")
+			updateTargetPhase(targetID, "PHASE 3: SAVING GAU")
 			saveCrawledURLs(targetID, rootDomain, tmp, true)
 			scanMarkStepDone(targetID, "CRAWLING", "GAU")
 		}
@@ -1012,6 +1014,7 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 				}
 				_ = os.Remove(waymoreOutputFile)
 			}
+			updateTargetPhase(targetID, "PHASE 3: SAVING WAYMORE")
 			saveCrawledURLs(targetID, rootDomain, tmp, true)
 			scanMarkStepDone(targetID, "CRAWLING", "WAYMORE")
 		}
@@ -1033,6 +1036,7 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 			updateTargetPhase(targetID, "PHASE 3: RUNNING KATANA")
 			tmp := make(map[string]string)
 			runToolAndCollect(targetID, crawlingAssetsFile, tmp, "katana", "katana", "-list", crawlingAssetsFile, "-jc", "-kf", "-silent", "-c", "10")
+			updateTargetPhase(targetID, "PHASE 3: SAVING KATANA")
 			saveCrawledURLs(targetID, rootDomain, tmp, true)
 			scanMarkStepDone(targetID, "CRAWLING", "KATANA")
 		}
@@ -1054,6 +1058,7 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 			
 			tmp := make(map[string]string)
 			runVirusTotalCollection(targetID, liveAssets, tmp)
+			updateTargetPhase(targetID, "PHASE 3: SAVING VIRUSTOTAL")
 			saveCrawledURLs(targetID, rootDomain, tmp, true)
 			
 			scanMarkStepDone(targetID, "CRAWLING", "VIRUSTOTAL")
@@ -2230,7 +2235,7 @@ func runPassiveCollection(targetID uint, domain string) ([]string, map[string][]
 		log.Printf("😈 Starting AbuseDB scraping for %s...\n", domain)
 		go func() {
 			defer wg.Done()
-			abuseResults := runAbuseDB(domain)
+			abuseResults := runAbuseDB(targetID, domain)
 			for _, res := range abuseResults {
 				normalized := normalizeSubdomain(res, domain)
 				if normalized != "" {
@@ -2279,7 +2284,7 @@ func runPassiveCollection(targetID uint, domain string) ([]string, map[string][]
 // این تابع را در انتهای فایل runner.go اضافه کنید
 // ---------------------------------------------------------
 
-func runAbuseDB(rootDomain string) []string {
+func runAbuseDB(targetID uint, rootDomain string) []string {
 	scriptPath := "/root/hunt-engine/backend/scripts/abusedb.sh"
 	// اطمینان از وجود فایل
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
@@ -2287,9 +2292,7 @@ func runAbuseDB(rootDomain string) []string {
 		return []string{}
 	}
 
-	cmd := exec.Command("/bin/bash", scriptPath, rootDomain)
-
-	output, err := cmd.CombinedOutput()
+	output, err := runCommandWithKillSwitchCombined(targetID, "/bin/bash", scriptPath, rootDomain)
 	if err != nil {
 		log.Printf("❌ AbuseDB Script Error: %v\nOutput: %s\n", err, string(output))
 		return []string{}
