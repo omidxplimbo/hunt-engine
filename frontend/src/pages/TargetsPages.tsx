@@ -127,6 +127,8 @@ const TargetsPage = () => {
                         <span className={`inline-flex items-center w-fit px-2 py-0.5 border text-[10px] font-bold uppercase tracking-wider ${
                         target.status === 'SCANNING' 
                             ? 'bg-hack-warning/10 text-hack-warning border-hack-warning/50 animate-pulse' 
+                            : target.status === 'QUEUED'
+                            ? 'bg-blue-500/10 text-blue-400 border-blue-500/50 animate-pulse'
                             : target.status === 'PAUSED'
                             ? 'bg-hack-danger/10 text-hack-danger border-hack-danger/50'
                             : 'bg-hack-primary/10 text-hack-primary border-hack-primary/50'
@@ -136,7 +138,7 @@ const TargetsPage = () => {
                         
                         {target.current_phase && target.current_phase !== "IDLE" && (
                             <span className="text-[10px] font-mono text-hack-dim flex items-center gap-1.5 truncate max-w-[200px]">
-                                {target.status === 'SCANNING' && <Activity size={10} className="animate-spin text-hack-primary" />}
+                                {(target.status === 'SCANNING' || target.status === 'QUEUED') && <Activity size={10} className="animate-spin text-hack-primary" />}
                                 {target.current_phase}
                             </span>
                         )}
@@ -145,7 +147,7 @@ const TargetsPage = () => {
 
                     <td className="px-6 py-4 text-right">
                     <div className="flex items-center justify-end gap-2">
-                        {target.status === 'SCANNING' && (
+                        {(target.status === 'SCANNING' || target.status === 'QUEUED') && (
                         <button onClick={() => handleStop(target.id)} className="p-2 hover:text-hack-warning transition-colors" title="HALT">
                             <Square size={16} fill="currentColor" />
                         </button>

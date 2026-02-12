@@ -65,9 +65,9 @@ func triggerScan(t models.Target) {
 	}
 	firstJob := modules[0]
 
-	// 👇👇👇 قفل کردن تارگت (تغییر وضعیت به SCANNING)
+	// 👇👇👇 قفل کردن تارگت (تغییر وضعیت به QUEUED)
 	// این کار رو قبل از ارسال به صف انجام میدیم
-	tx := database.DB.Model(&models.Target{}).Where("id = ?", t.ID).Update("status", "SCANNING")
+	tx := database.DB.Model(&models.Target{}).Where("id = ?", t.ID).Updates(map[string]interface{}{"status": "QUEUED", "stop_requested": false})
 	if tx.Error != nil {
 		log.Printf("❌ Failed to lock target %s: %v\n", t.RootDomain, tx.Error)
 		return

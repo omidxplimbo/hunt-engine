@@ -28,7 +28,9 @@ The system is built on a modern, containerized microservice-like architecture:
 * **Styling:** Tailwind CSS for a professional dark-mode UI.
 * **State Management:** TanStack Query (React Query) for efficient API caching and real-time syncing.
 * **Features:**
-    * **Dashboard:** Live analytics and charts (Recharts).
+    * **Dashboard:**
+        * Live analytics and charts (Recharts).
+        * **Active Scan Queue:** Real-time view of queued targets with controls to **Reorder**, **Remove**, or **Purge** the queue.
     * **Monitoring Server:** (Admin Only) Real-time CPU/RAM usage charts and active process list.
     * **Target Management:** Create, Edit, Delete, **Stop/Resume** scans.
     * **Configurable Scans:** Toggle modules like `Alterx`, `Waymore` or `Crawling` per target.

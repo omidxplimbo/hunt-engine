@@ -31,6 +31,17 @@ func main() {
 	seedAdminUser()
 
 	redisq.Connect()
+	
+	// Check for queued items consistency
+	// We need to fetch Redis items first.
+	ctx := redisq.Ctx
+	items, err := redisq.Client.LRange(ctx, redisq.QueueName, 0, -1).Result()
+	if err == nil {
+		database.CleanupZombieQueuedItems(items)
+	} else {
+		log.Println("⚠️ Failed to fetch queue for zombie check:", err)
+	}
+
 	telegram.Init()
 	go scheduler.Start()
 	go worker.Start()
@@ -58,6 +69,16 @@ func main() {
 	// --- Protected Routes (محافظت شده) ---
 	// همه روت‌های زیر نیاز به توکن دارند
 	api.Use(middleware.Protected())
+
+	// --- System Configuration & Queue ---
+	api.Get("/config", handlers.GetSystemConfig)
+	api.Put("/config/:key", handlers.UpdateSystemConfig)
+
+	api.Get("/queue", handlers.GetQueueList)
+	api.Delete("/queue", handlers.ClearQueue)
+	api.Delete("/queue/:index", handlers.RemoveFromQueue)
+	api.Post("/queue/:index/move-top", handlers.MoveItemToTop)
+	api.Post("/queue/:index/move-bottom", handlers.MoveItemToBottom)
 
 	// Target Routes
 	// ⚠️ مهم: route‌های static باید قبل از route‌های dynamic قرار بگیرند

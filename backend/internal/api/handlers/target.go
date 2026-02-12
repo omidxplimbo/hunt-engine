@@ -77,8 +77,8 @@ func CreateTarget(c *fiber.Ctx) error {
 		InScope:          true,
 		Frequency:        req.Frequency,
 		ScanModules:      string(modulesJSON),
-		Status:           "SCANNING",
-		CurrentPhase:     "QUEUED: STARTING...",
+		Status:           "QUEUED",
+		CurrentPhase:     "QUEUED",
 		UseAlterx:        true,
 		UseWaymore:       false,
 		UsePortscan:      false,
@@ -237,10 +237,10 @@ func StartDiscovery(c *fiber.Ctx) error {
 	var st models.TargetScanState
 	stErr := database.DB.Where("target_id = ?", target.ID).First(&st).Error
 
-	// If the target is marked SCANNING, only allow "resume" when heartbeat is stale (crash).
-	if target.Status == "SCANNING" {
+	// If the target is marked SCANNING or QUEUED, only allow "resume" when heartbeat is stale (crash).
+	if target.Status == "SCANNING" || target.Status == "QUEUED" {
 		if stErr == nil && st.HeartbeatAt != nil && time.Since(*st.HeartbeatAt) < 2*time.Minute {
-			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"status": "error", "message": "Target is already being scanned."})
+			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"status": "error", "message": "Target is already being scanned or queued."})
 		}
 		// stale heartbeat -> allow user to re-queue and continue from checkpoint
 	}
@@ -298,8 +298,9 @@ func StartDiscovery(c *fiber.Ctx) error {
 	}
 
 	database.DB.Model(target).Updates(map[string]interface{}{
-		"status":        "SCANNING",
-		"current_phase": fmt.Sprintf("QUEUED: STARTING %s...", resumeModule),
+		"status":         "QUEUED",
+		"current_phase":  fmt.Sprintf("QUEUED: STARTING %s...", resumeModule),
+		"stop_requested": false,
 	})
 
 	taskPayload := fmt.Sprintf("%s:%d:%s", resumeModule, target.ID, target.RootDomain)
@@ -674,13 +675,14 @@ func StartProbing(c *fiber.Ctx) error {
 		return err
 	}
 
-	if target.Status == "SCANNING" {
-		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"status": "error", "message": "Target is already being scanned."})
+	if target.Status == "SCANNING" || target.Status == "QUEUED" {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"status": "error", "message": "Target is already being scanned or queued."})
 	}
 
 	database.DB.Model(target).Updates(map[string]interface{}{
-		"status":        "SCANNING",
-		"current_phase": "QUEUED: STARTING PHASE 2...",
+		"status":         "QUEUED",
+		"current_phase":  "QUEUED: STARTING PHASE 2...",
+		"stop_requested": false,
 	})
 
 	taskPayload := fmt.Sprintf("PROBING:%d:%s", target.ID, target.RootDomain)

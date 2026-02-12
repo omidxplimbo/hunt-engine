@@ -6,6 +6,8 @@ import { User, Plus, Edit2, Trash2, Shield, Power } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Navigate } from 'react-router-dom';
 
+import { ConcurrencyConfig } from '../components/ConcurrencyConfig';
+
 const Settings = () => {
   const { role } = useAuth();
   if (role !== 'admin') return <Navigate to="/" replace />;
@@ -112,6 +114,10 @@ const Settings = () => {
       </div>
 
       <UserModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} user={editingUser} />
+      
+      <div className="grid grid-cols-1 gap-6">
+        <ConcurrencyConfig />
+      </div>
     </div>
   );
 };

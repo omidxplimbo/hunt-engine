@@ -5,6 +5,18 @@ All notable changes to the **Hunt Engine** project will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v2.2.0] - 2026-02-12
+### Added
+- **Queue Management:**
+    - **Active Scan Queue** widget moved to the main **Dashboard** for better visibility.
+    - **Queue Control:** Added ability to **Purge** the entire queue, **Remove** individual items, and **Reorder** priorities directly from the UI.
+    - **Concurrency Control:** `Max Concurrent Scans` setting is now strictly enforced with a new synchronous locking mechanism to prevent race conditions.
+- **System Stability:**
+    - **Zombie Cleanup:** Implemented a self-healing mechanism on startup to detect and reset targets stuck in `QUEUED` state if they are missing from Redis.
+    - **Database Reconciliation:** `ClearQueue` action now properly resets target statuses in the database from `QUEUED` to `READY`.
+- **UX Improvements:**
+    - **Error Feedback:** Enhanced error handling in the UI to display precise server-side error messages (e.g., "Cannot decrease limit while scans are active") via Toast notifications.
+
 ## [v2.1.0] - 2026-02-10
 ### Added
 - **Stability:** Added `Panic Recovery` mechanism in the worker dispatcher to prevent the entire worker process from crashing if a single job fails.

@@ -23,9 +23,11 @@ import (
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/cache"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/config"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/telegram"
+	"github.com/redis/go-redis/v9"
 	"gopkg.in/yaml.v3"
 	"gorm.io/gorm"
 )
@@ -327,14 +329,53 @@ func Start() {
 	cleanupLegacyToolTmp()
 
 	for {
-		result, err := redisq.Client.BLPop(context.Background(), 0*time.Second, redisq.QueueName).Result()
+		// 1. Check Max Concurrent
+		max := config.GetMaxConcurrentScans()
+		current := countActiveScans()
+
+		if current >= int64(max) {
+			// If max reached, wait a bit before checking again
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		// 2. Pop from Redis (with timeout to allow re-checking concurrency)
+		result, err := redisq.Client.BLPop(context.Background(), 5*time.Second, redisq.QueueName).Result()
+		if err == redis.Nil {
+			// Timeout (no jobs or just timeout), loop back
+			continue
+		}
 		if err != nil {
 			log.Printf("❌ Error popping from Redis: %v\n", err)
 			time.Sleep(5 * time.Second)
 			continue
 		}
-		go processJobDispatcher(result[1])
+		
+		payload := result[1]
+		
+		// CRITICAL FIX: Update status to SCANNING *synchronously* before spawning goroutine.
+		// This prevents the race condition where the loop continues and pops another item
+		// before the goroutine has a chance to update the DB status.
+		parts := strings.Split(payload, ":")
+		if len(parts) >= 2 {
+			targetIDStr := parts[1]
+			var tid uint64
+			// Use Sscanf to be safe
+			fmt.Sscanf(targetIDStr, "%d", &tid)
+			if tid > 0 {
+				database.DB.Model(&models.Target{}).Where("id = ?", tid).Update("status", "SCANNING")
+			}
+		}
+
+		go processJobDispatcher(payload)
 	}
+}
+
+func countActiveScans() int64 {
+	var count int64
+	// We count targets that are in 'SCANNING' status.
+	database.DB.Model(&models.Target{}).Where("status = ?", "SCANNING").Count(&count)
+	return count
 }
 
 func cleanupLegacyToolTmp() {
@@ -405,6 +446,9 @@ func processJobDispatcher(payload string) {
 		}
 	}
 	defer releaseLock()
+
+	// Update status to SCANNING (Already done in Start() loop synchronously to fix race condition)
+	// database.DB.Model(&models.Target{}).Where("id = ?", targetID).Update("status", "SCANNING")
 
 	// Panic Recovery: جلوگیری از کرش کامل ورکر در صورت بروز خطا در تسک
 	defer func() {
@@ -479,7 +523,11 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		}
 		scanMarkRunning(targetID, "DISCOVERY", "PASSIVE_ENUM")
 		updateTargetPhase(targetID, "PHASE 1: PASSIVE ENUM")
-		passiveResults, passiveSources = runPassiveCollection(targetID, rootDomain)
+		var err error
+		passiveResults, passiveSources, err = runPassiveCollection(targetID, rootDomain)
+		if err != nil && err.Error() == "process killed by user request" {
+			return
+		}
 		_ = writeSliceToFile(passiveResultsFile, passiveResults)
 		_ = writeJSONToFile(passiveSourcesFile, passiveSources)
 		scanMarkStepDone(targetID, "DISCOVERY", "PASSIVE_ENUM")
@@ -1775,6 +1823,10 @@ func triggerNextModule(targetID uint, rootDomain, currentModule string) {
 	if currentIndex != -1 && currentIndex+1 < len(modules) {
 		nextModule := modules[currentIndex+1]
 		log.Printf("🔗 Chaining: Phase '%s' done. Starting '%s'\n", currentModule, nextModule)
+		
+		// Update status to QUEUED so it doesn't count towards concurrency limit while waiting
+		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{"status": "QUEUED", "stop_requested": false})
+		
 		payload := fmt.Sprintf("%s:%d:%s", nextModule, targetID, rootDomain)
 		redisq.Client.RPush(context.Background(), redisq.QueueName, payload)
 	} else {
@@ -2140,7 +2192,7 @@ type SubdomainSource struct {
 }
 
 // runPassiveCollection جمع‌آوری اطلاعات غیرفعال (Passive) از منابع مختلف
-func runPassiveCollection(targetID uint, domain string) ([]string, map[string][]string) {
+func runPassiveCollection(targetID uint, domain string) ([]string, map[string][]string, error) {
 	// دریافت تنظیمات target
 	var target models.Target
 	if err := database.DB.First(&target, targetID).Error; err != nil {
@@ -2277,7 +2329,14 @@ func runPassiveCollection(targetID uint, domain string) ([]string, map[string][]
 		sourcesListMap[subdomain] = sources
 	}
 
-	return finalSlice, sourcesListMap
+	// Check if process was paused/stopped during execution
+	var t models.Target
+	database.DB.Select("status").First(&t, targetID)
+	if t.Status == "PAUSED" {
+		return finalSlice, sourcesListMap, fmt.Errorf("process killed by user request")
+	}
+
+	return finalSlice, sourcesListMap, nil
 }
 
 // ---------------------------------------------------------

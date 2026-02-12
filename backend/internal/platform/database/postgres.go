@@ -54,6 +54,7 @@ func Connect() {
 		&models.FoundURL{},
 		&models.SubfinderProviderConfig{},
 		&models.TargetScanState{},
+		&models.SystemConfig{},
 	)
 
 	if err != nil {
@@ -97,5 +98,87 @@ func CleanupZombieScans() {
 		log.Printf("✅ Cleaned up %d interrupted scans. They are now PAUSED (resumable).\n", result.RowsAffected)
 	} else {
 		log.Println("✅ No zombie scans found. System is clean.")
+	}
+}
+
+// CleanupZombieQueuedItems resets targets stuck in QUEUED state if they are not in the provided Redis list
+func CleanupZombieQueuedItems(activePayloads []string) {
+	log.Println("🧹 Checking for zombie QUEUED items...")
+
+	var queuedTargets []models.Target
+	if err := DB.Where("status = ?", "QUEUED").Find(&queuedTargets).Error; err != nil {
+		log.Printf("⚠️ Failed to fetch queued targets: %v\n", err)
+		return
+	}
+
+	if len(queuedTargets) == 0 {
+		return
+	}
+
+	// Create a map of active target IDs in Redis
+	// Payload format: "module:targetID:domain"
+	activeMap := make(map[uint]bool)
+	for _, p := range activePayloads {
+		var module, domain string
+		// Try parsing. Assuming format "module:id:domain"
+		// We use Sscanf or Split
+		// Let's use Split as it is safer if domain contains ':' (though domain shouldn't)
+		// Actually, standard format used in handlers is "%s:%d:%s"
+		var idInt int
+		n, _ := fmt.Sscanf(p, "%s:%d:%s", &module, &idInt, &domain)
+		// Sscanf might fail if domain has spaces etc, but domain is root domain.
+		// Let's rely on middle part being ID.
+		if n < 2 {
+			// Try manual split
+			// Just finding the ID is enough
+			// TODO: Robust parsing
+			continue 
+		}
+		activeMap[uint(idInt)] = true
+	}
+
+	// Double check with simpler parsing if Sscanf failed for some
+	// Or just better parsing:
+	for _, p := range activePayloads {
+		// module:id:domain
+		// Find first and second colon
+		first := -1
+		second := -1
+		for i, c := range p {
+			if c == ':' {
+				if first == -1 {
+					first = i
+				} else {
+					second = i
+					break
+				}
+			}
+		}
+		if first != -1 && second != -1 {
+			idStr := p[first+1 : second]
+			var id uint64
+			fmt.Sscanf(idStr, "%d", &id)
+			if id > 0 {
+				activeMap[uint(id)] = true
+			}
+		}
+	}
+
+	count := 0
+	for _, t := range queuedTargets {
+		if !activeMap[t.ID] {
+			// This target is QUEUED in DB but not in Redis -> Zombie
+			DB.Model(&t).Updates(map[string]interface{}{
+				"status":        "READY",
+				"current_phase": "IDLE",
+			})
+			count++
+		}
+	}
+
+	if count > 0 {
+		log.Printf("✅ Fixed %d zombie QUEUED targets (reset to READY).\n", count)
+	} else {
+		log.Println("✅ Queue integrity check passed.")
 	}
 }

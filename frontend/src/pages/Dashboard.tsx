@@ -4,6 +4,7 @@ import { Target, Activity, Zap, Database, Cpu, Network } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import MonitoringServer from '../components/MonitoringServer';
 import SystemLogs from '../components/SystemLogs';
+import { QueueManager } from '../components/QueueManager';
 import { useAuth } from '../context/AuthContext';
 
 const Dashboard = () => {
@@ -165,6 +166,11 @@ const Dashboard = () => {
       {/* Monitoring Server Section (Admin Only) */}
       {role === 'admin' && (
         <div className="space-y-8">
+          
+          <div className="w-full">
+            <QueueManager />
+          </div>
+
           <MonitoringServer />
           
           <div className="hack-box p-1">
