@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { Toaster } from 'react-hot-toast';
 import { MainLayout } from './layouts/MainLayout';
 import { AuthProvider } from './context/AuthContext'; // 👈
 import { ProtectedRoute } from './components/ProtectedRoute'; // 👈
@@ -27,6 +28,35 @@ function App() {
       {/* 👇 کل برنامه رو توی AuthProvider می‌پیچیم */}
       <AuthProvider>
         <BrowserRouter>
+          <Toaster 
+            position="bottom-right"
+            toastOptions={{
+              className: 'font-mono text-sm',
+              style: {
+                background: '#050505',
+                color: '#e0e0e0',
+                border: '1px solid #333',
+              },
+              success: {
+                iconTheme: {
+                  primary: '#00ff41',
+                  secondary: '#050505',
+                },
+                style: {
+                  border: '1px solid #00ff41',
+                }
+              },
+              error: {
+                iconTheme: {
+                  primary: '#ff003c',
+                  secondary: '#050505',
+                },
+                style: {
+                  border: '1px solid #ff003c',
+                }
+              },
+            }}
+          />
           <Routes>
             {/* روت عمومی لاگین */}
             <Route path="/login" element={<Login />} />

@@ -5,6 +5,10 @@ All notable changes to the **Hunt Engine** project will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v2.2.1] - 2026-02-12
+### Fixed
+- **UI/UX:** Fixed an issue where system notifications (Toasts) were not displaying in the frontend application. Added `Toaster` component to `App.tsx` with a custom cyberpunk theme to ensure error messages and success alerts are visible to the user.
+
 ## [v2.2.0] - 2026-02-12
 ### Added
 - **Queue Management:**
