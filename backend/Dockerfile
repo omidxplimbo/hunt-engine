@@ -45,7 +45,7 @@ LABEL maintainer="Omid Security Researcher"
 
 # 👇 نصب پایتون و ابزارهای بیلد مورد نیاز برای Waymore (gcc, headers, etc)
 # اضافه شدن: gcc python3-dev musl-dev linux-headers libffi-dev + nmap + bash
-RUN apk --no-cache add ca-certificates bind-tools jq curl python3 py3-pip git gcc python3-dev musl-dev linux-headers libffi-dev nmap bash
+RUN apk --no-cache add ca-certificates bind-tools jq curl python3 py3-pip git gcc python3-dev musl-dev linux-headers libffi-dev nmap bash unzip
 
 # نصب Waymore
 # نکته: Waymore نیاز به پایتون دارد. ما آن را از طریق pip نصب می‌کنیم.
@@ -76,8 +76,13 @@ COPY --from=go_builder /app/hunt-engine-api .
 COPY --from=go_builder /app/scripts /root/hunt-engine/backend/scripts/
 RUN chmod +x /root/hunt-engine/backend/scripts/*.sh
 
-# کپی Amass
-COPY --from=caffix/amass:latest /bin/amass /usr/local/bin/amass
+# Fetch latest amass release URL from GitHub API
+RUN AMASS_URL=$(wget -qO- https://api.github.com/repos/owasp-amass/amass/releases/latest | grep "browser_download_url.*linux_amd64.tar.gz" | cut -d '"' -f 4) && \
+    mkdir -p /tmp/amass_extracted && \
+    wget -qO /tmp/amass.tar.gz "$AMASS_URL" && \
+    tar -xzf /tmp/amass.tar.gz -C /tmp/amass_extracted && \
+    mv /tmp/amass_extracted/amass_linux_amd64/amass /usr/local/bin/amass && \
+    rm -rf /tmp/amass.tar.gz /tmp/amass_extracted
 
 # دانلود وردلیست‌ها
 RUN mkdir -p /wordlists

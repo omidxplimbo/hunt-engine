@@ -444,8 +444,8 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	var passiveResults []string
 	passiveSources := make(map[string][]string)
 	if scanIsStepDone(targetID, "DISCOVERY", "PASSIVE_ENUM") {
-		passiveResults, _ = readSliceFromFile(passiveResultsFile)
-		_ = readJSONFromFile(passiveSourcesFile, &passiveSources)
+		passiveResults, _ = utils.ReadSliceFromFile(passiveResultsFile)
+		_ = utils.ReadJSONFromFile(passiveSourcesFile, &passiveSources)
 		log.Printf("⏩ Resume: skipping PASSIVE ENUM (loaded %d results from checkpoint)\n", len(passiveResults))
 	} else {
 		if checkStopRequest(targetID) {
@@ -458,8 +458,7 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		if err != nil && err.Error() == "process killed by user request" {
 			return
 		}
-		_ = writeSliceToFile(passiveResultsFile, passiveResults)
-		_ = writeJSONToFile(passiveSourcesFile, passiveSources)
+		_ = utils.WriteJSONToFile(passiveSourcesFile, passiveSources)
 		scanMarkStepDone(targetID, "DISCOVERY", "PASSIVE_ENUM")
 	}
 
@@ -467,8 +466,8 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	var mutatedResults []string
 	mutatedSources := make(map[string][]string)
 	if scanIsStepDone(targetID, "DISCOVERY", "ALTERX") {
-		mutatedResults, _ = readSliceFromFile(alterxResultsFile)
-		_ = readJSONFromFile(alterxSourcesFile, &mutatedSources)
+		mutatedResults, _ = utils.ReadSliceFromFile(alterxResultsFile)
+		_ = utils.ReadJSONFromFile(alterxSourcesFile, &mutatedSources)
 		log.Printf("⏩ Resume: skipping ALTERX (loaded %d results from checkpoint)\n", len(mutatedResults))
 	} else if targetConf.UseAlterx {
 		if checkStopRequest(targetID) {
@@ -476,7 +475,7 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		}
 		scanMarkRunning(targetID, "DISCOVERY", "ALTERX")
 		updateTargetPhase(targetID, "PHASE 1: MUTATION (ALTERX)")
-		_ = writeSliceToFile(allFoundFile, passiveResults)
+		_ = utils.WriteSliceToFile(allFoundFile, passiveResults)
 
 		var err error
 		mutatedResults, err = runAlterx(targetID, allFoundFile, rootDomain)
@@ -491,8 +490,7 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 				mutatedSources[subdomain] = []string{"alterx"}
 			}
 		}
-		_ = writeSliceToFile(alterxResultsFile, mutatedResults)
-		_ = writeJSONToFile(alterxSourcesFile, mutatedSources)
+		_ = utils.WriteJSONToFile(alterxSourcesFile, mutatedSources)
 		scanMarkStepDone(targetID, "DISCOVERY", "ALTERX")
 	} else {
 		log.Printf("⏩ Skipping Alterx (Mutation) for %s based on target config.\n", rootDomain)
@@ -504,7 +502,7 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	purednsSources := make(map[string][]string)
 	if scanIsStepDone(targetID, "DISCOVERY", "PUREDNS") {
 		purednsResults = map[string][]string{}
-		_ = readJSONFromFile(purednsResultsFile, &purednsResults)
+		_ = utils.ReadJSONFromFile(purednsResultsFile, &purednsResults)
 		for subdomain := range purednsResults {
 			purednsSources[subdomain] = []string{"puredns"}
 		}
@@ -544,12 +542,12 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		} else {
 			log.Printf("⏩ Skipping Puredns for %s (no wordlists selected)\n", rootDomain)
 		}
-		_ = writeJSONToFile(purednsResultsFile, purednsResults)
+		_ = utils.WriteJSONToFile(purednsResultsFile, purednsResults)
 		scanMarkStepDone(targetID, "DISCOVERY", "PUREDNS")
 	} else {
 		log.Printf("⏩ Skipping Puredns for %s (disabled in target config)\n", rootDomain)
 		purednsResults = map[string][]string{}
-		_ = writeJSONToFile(purednsResultsFile, purednsResults)
+		_ = utils.WriteJSONToFile(purednsResultsFile, purednsResults)
 		scanMarkStepDone(targetID, "DISCOVERY", "PUREDNS")
 	}
 
@@ -557,8 +555,8 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	var masterList []string
 	allSources := make(map[string][]string)
 	if scanIsStepDone(targetID, "DISCOVERY", "MERGE") {
-		masterList, _ = readSliceFromFile(allFoundFile)
-		_ = readJSONFromFile(allSourcesFile, &allSources)
+		masterList, _ = utils.ReadSliceFromFile(allFoundFile)
+		_ = utils.ReadJSONFromFile(allSourcesFile, &allSources)
 		log.Printf("⏩ Resume: skipping MERGE (loaded %d items from checkpoint)\n", len(masterList))
 	} else {
 		scanMarkRunning(targetID, "DISCOVERY", "MERGE")
@@ -617,8 +615,7 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 			}
 		}
 
-		_ = writeSliceToFile(allFoundFile, masterList)
-		_ = writeJSONToFile(allSourcesFile, allSources)
+		_ = utils.WriteJSONToFile(allSourcesFile, allSources)
 		scanMarkStepDone(targetID, "DISCOVERY", "MERGE")
 	}
 
@@ -628,7 +625,7 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	var dnsxResults map[string][]string
 	if scanIsStepDone(targetID, "DISCOVERY", "DNSX") {
 		dnsxResults = map[string][]string{}
-		_ = readJSONFromFile(dnsxResultsFile, &dnsxResults)
+		_ = utils.ReadJSONFromFile(dnsxResultsFile, &dnsxResults)
 		log.Printf("⏩ Resume: skipping DNSX (loaded %d live subdomains from checkpoint)\n", len(dnsxResults))
 	} else {
 		if checkStopRequest(targetID) {
@@ -669,7 +666,7 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 			}
 		}
 
-		_ = writeJSONToFile(dnsxResultsFile, dnsxResults)
+		_ = utils.WriteJSONToFile(dnsxResultsFile, dnsxResults)
 		scanMarkStepDone(targetID, "DISCOVERY", "DNSX")
 	}
 
@@ -715,7 +712,7 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		scanMarkRunning(targetID, "DISCOVERY", "NMAP")
 		updateTargetPhase(targetID, "PHASE 1: PORT SCAN (NMAP)")
 		log.Printf("🔎 Starting optional port scan (nmap) for target %d...\n", targetID)
-		runPortScanForLiveNoCDNAssets(targetID, nmapInputFile)
+		discovery.RunNmapScan(targetID, nmapInputFile, runCommandWithKillSwitchCombined)
 		_ = os.Remove(nmapInputFile)
 		scanMarkStepDone(targetID, "DISCOVERY", "NMAP")
 	} else {
@@ -819,7 +816,7 @@ func runProbingPhase(targetID uint, rootDomain string) {
 		for _, asset := range batchAssets {
 			hosts = append(hosts, asset.Value)
 		}
-		if err := writeSliceToFile(probingInputFile, hosts); err != nil {
+		if err := utils.WriteSliceToFile(probingInputFile, hosts); err != nil {
 			log.Printf("❌ Error writing batch input file: %v\n", err)
 			break
 		}
@@ -908,14 +905,14 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 
 	crawlingAssetsFile := filepath.Join(tempDir, "crawling_assets.txt")
 	if len(liveAssets) > 0 {
-		if err := writeSliceToFile(crawlingAssetsFile, liveAssets); err != nil {
+		if err := utils.WriteSliceToFile(crawlingAssetsFile, liveAssets); err != nil {
 			log.Printf("❌ Failed to write crawling assets input: %v\n", err)
 			return
 		}
 	}
 
 	crawlingRootFile := filepath.Join(tempDir, "crawling_root.txt")
-	if err := writeSliceToFile(crawlingRootFile, []string{rootDomain}); err != nil {
+	if err := utils.WriteSliceToFile(crawlingRootFile, []string{rootDomain}); err != nil {
 		log.Printf("❌ Failed to write crawling root input: %v\n", err)
 		return
 	}
@@ -1867,7 +1864,7 @@ func runPuredns(targetID uint, rootDomain string, wordlists []string) (map[strin
 			cleanResolvers = append(cleanResolvers, r)
 		}
 	}
-	if err := writeSliceToFile(resolversFile, cleanResolvers); err != nil {
+	if err := utils.WriteSliceToFile(resolversFile, cleanResolvers); err != nil {
 		return nil, fmt.Errorf("failed to write resolvers file: %v", err)
 	}
 
@@ -1906,7 +1903,7 @@ func runPuredns(targetID uint, rootDomain string, wordlists []string) (map[strin
 	}
 
 	// نوشتن وردلیست ترکیبی
-	if err := writeSliceToFile(combinedWordlistFile, allWords); err != nil {
+	if err := utils.WriteSliceToFile(combinedWordlistFile, allWords); err != nil {
 		return nil, fmt.Errorf("failed to write combined wordlist: %v", err)
 	}
 
@@ -1940,7 +1937,7 @@ func runPuredns(targetID uint, rootDomain string, wordlists []string) (map[strin
 	if len(subdomains) > 0 {
 		// ساخت فایل موقت برای dnsx
 		purednsInputFile := filepath.Join(tempDir, "puredns_dnsx_input.txt")
-		if err := writeSliceToFile(purednsInputFile, subdomains); err != nil {
+		if err := utils.WriteSliceToFile(purednsInputFile, subdomains); err != nil {
 			log.Printf("⚠️ Failed to write puredns input for dnsx: %v\n", err)
 			// در صورت خطا، subdomain‌ها را بدون IP برمی‌گردانیم
 			for _, subdomain := range subdomains {
@@ -2483,43 +2480,6 @@ func mergeUnique(slice1, slice2 []string) []string {
 	return final
 }
 
-func writeSliceToFile(filename string, data []string) error {
-	content := strings.Join(data, "\n")
-	return ioutil.WriteFile(filename, []byte(content), 0644)
-}
-
-func readSliceFromFile(filename string) ([]string, error) {
-	b, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, err
-	}
-	lines := strings.Split(string(b), "\n")
-	var out []string
-	for _, l := range lines {
-		l = strings.TrimSpace(l)
-		if l != "" {
-			out = append(out, l)
-		}
-	}
-	return out, nil
-}
-
-func writeJSONToFile(filename string, v interface{}) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filename, b, 0o644)
-}
-
-func readJSONFromFile(filename string, v interface{}) error {
-	b, err := os.ReadFile(filename)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(b, v)
-}
-
 // CdnCheckResult ساختار نتیجه cdncheck
 type CdnCheckResult struct {
 	IP        string `json:"ip"`
@@ -2668,7 +2628,7 @@ func runCdnCheck(targetID uint, ips []string, inputFile string) map[string]CdnCh
 	}
 
 	// نوشتن IPها در فایل
-	if err := writeSliceToFile(inputFile, ips); err != nil {
+	if err := utils.WriteSliceToFile(inputFile, ips); err != nil {
 		log.Printf("❌ Error writing cdncheck input file: %v\n", err)
 		return make(map[string]CdnCheckResult)
 	}
@@ -2781,208 +2741,3 @@ func runCdnCheck(targetID uint, ips []string, inputFile string) map[string]CdnCh
 // Optional Port Scan (Nmap) - PHASE 1
 // =================================================================
 
-// runPortScanForLiveNoCDNAssets فقط روی IPهای DNSX برای assetهای لایو و بدون CDN پورت‌اسکن انجام می‌دهد
-// و نتیجه را روی فیلد open_ports هر Asset (به صورت map[ip][]ports) ذخیره می‌کند.
-func runPortScanForLiveNoCDNAssets(targetID uint, inputFile string) {
-	// معیار بدون CDN (همان منطق no_cdn در API)
-	var assets []models.Asset
-	if err := database.DB.Model(&models.Asset{}).
-		Where("target_id = ?", targetID).
-		Where("is_live = ?", true).
-		Where("jsonb_array_length(dnsx_ip) > 0").
-		Where("(cdn_name IS NULL OR cdn_name = '' OR cdn_name = 'null')").
-		Where("cdncheck = ?", false).
-		Where("(cdncheck_name IS NULL OR cdncheck_name = '' OR cdncheck_name = 'null')").
-		Find(&assets).Error; err != nil {
-		log.Printf("❌ Port scan: failed to fetch eligible assets: %v\n", err)
-		return
-	}
-
-	if len(assets) == 0 {
-		log.Printf("ℹ️ Port scan: no eligible assets (live + dnsx + no CDN).\n")
-		return
-	}
-
-	// collect unique IPs from dnsx_ip
-	ipSet := make(map[string]struct{})
-	for _, a := range assets {
-		if a.DnsxIP == "" || a.DnsxIP == "[]" || a.DnsxIP == "null" {
-			continue
-		}
-		var ips []string
-		if err := json.Unmarshal([]byte(a.DnsxIP), &ips); err != nil {
-			continue
-		}
-		for _, ip := range ips {
-			ip = strings.TrimSpace(ip)
-			if ip == "" {
-				continue
-			}
-			// فعلاً فقط IPv4
-			if strings.Contains(ip, ":") {
-				continue
-			}
-			ipSet[ip] = struct{}{}
-		}
-	}
-
-	if len(ipSet) == 0 {
-		log.Printf("ℹ️ Port scan: no IPv4 IPs extracted from dnsx.\n")
-		return
-	}
-
-	ipList := make([]string, 0, len(ipSet))
-	for ip := range ipSet {
-		ipList = append(ipList, ip)
-	}
-	sort.Strings(ipList)
-
-	results, err := runNmapTopPorts(targetID, ipList, inputFile)
-	if err != nil {
-		if err.Error() == "process killed by user request" {
-			return
-		}
-		log.Printf("⚠️ Port scan: nmap finished with error: %v\n", err)
-	}
-
-	updated := 0
-	// update assets with per-ip ports mapping
-	for i := range assets {
-		a := &assets[i]
-		var ips []string
-		_ = json.Unmarshal([]byte(a.DnsxIP), &ips)
-		m := make(map[string][]int)
-		for _, ip := range ips {
-			ip = strings.TrimSpace(ip)
-			if ip == "" || strings.Contains(ip, ":") {
-				continue
-			}
-			if ports, ok := results[ip]; ok && len(ports) > 0 {
-				m[ip] = ports
-			}
-		}
-
-		// store {} if nothing found
-		b, _ := json.Marshal(m)
-		openPortsJSON := string(b)
-		if openPortsJSON == "" || openPortsJSON == "null" {
-			openPortsJSON = "{}"
-		}
-
-		if a.OpenPorts != openPortsJSON {
-			if err := database.DB.Model(&models.Asset{}).Where("id = ?", a.ID).Update("open_ports", openPortsJSON).Error; err == nil {
-				updated++
-			}
-		}
-	}
-
-	if updated > 0 {
-		cache.IncrementTargetVersion(targetID)
-	}
-
-	log.Printf("✅ Port scan completed. Updated %d assets with open ports.\n", updated)
-}
-
-// runNmapTopPorts یک اسکن سریع و بهینه برای top ports انجام می‌دهد و فقط پورت‌های open را برمی‌گرداند.
-func runNmapTopPorts(targetID uint, ips []string, inputFile string) (map[string][]int, error) {
-	results := make(map[string][]int)
-	if len(ips) == 0 {
-		return results, nil
-	}
-	if err := writeSliceToFile(inputFile, ips); err != nil {
-		return results, err
-	}
-
-	// Nmap command (optimized):
-	// -n: no DNS, -Pn: skip host discovery, --open: only open ports
-	// --top-ports 1000: fast/common ports, -T4: speed
-	// --max-retries 2, --host-timeout 45s: bound runtime, --min-rate 300: push packets
-	// -oG -: greppable output to stdout for easy parsing
-	out, err := runCommandWithKillSwitchCombined(targetID, "nmap",
-		"-n", "-Pn",
-		"-sT",
-		"--open",
-		"--top-ports", "1000",
-		"-T4",
-		"--max-retries", "2",
-		"--host-timeout", "45s",
-		"--min-rate", "300",
-		"-iL", inputFile,
-		"-oG", "-",
-	)
-	if len(out) > 0 {
-		results = parseNmapGreppable(out)
-	}
-	// nmap may return non-zero if some hosts down; we still keep parsed results
-	return results, err
-}
-
-func parseNmapGreppable(out []byte) map[string][]int {
-	results := make(map[string][]int)
-	scanner := bufio.NewScanner(bytes.NewReader(out))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if !strings.HasPrefix(line, "Host:") {
-			continue
-		}
-		// Example:
-		// Host: 1.2.3.4 ()	Ports: 80/open/tcp//http///, 443/open/tcp//https///
-		parts := strings.Fields(line)
-		if len(parts) < 2 {
-			continue
-		}
-		ip := parts[1]
-		if ip == "" {
-			continue
-		}
-		portsIdx := strings.Index(line, "Ports:")
-		if portsIdx == -1 {
-			continue
-		}
-		portsPart := strings.TrimSpace(line[portsIdx+len("Ports:"):])
-		if portsPart == "" {
-			continue
-		}
-		// cut off trailing metadata
-		if i := strings.Index(portsPart, "Ignored"); i != -1 {
-			portsPart = strings.TrimSpace(portsPart[:i])
-		}
-		if i := strings.Index(portsPart, "OS:"); i != -1 {
-			portsPart = strings.TrimSpace(portsPart[:i])
-		}
-		portItems := strings.Split(portsPart, ",")
-		portSet := make(map[int]struct{})
-		for _, item := range portItems {
-			item = strings.TrimSpace(item)
-			if item == "" {
-				continue
-			}
-			// "80/open/tcp//http///"
-			s := strings.Split(item, "/")
-			if len(s) < 2 {
-				continue
-			}
-			if s[1] != "open" {
-				continue
-			}
-			p, err := strconv.Atoi(s[0])
-			if err != nil || p <= 0 {
-				continue
-			}
-			portSet[p] = struct{}{}
-		}
-		if len(portSet) == 0 {
-			continue
-		}
-		ports := make([]int, 0, len(portSet))
-		for p := range portSet {
-			ports = append(ports, p)
-		}
-		sort.Ints(ports)
-		results[ip] = ports
-	}
-	return results
-}
