@@ -27,12 +27,11 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/telegram"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/discovery"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/utils"
 	"github.com/redis/go-redis/v9"
-	"gopkg.in/yaml.v3"
 	"gorm.io/gorm"
 )
-
-const workerTempRoot = "/tmp/hunt-engine"
 
 const DefaultBatchSize = 500
 
@@ -60,6 +59,7 @@ func GetRunningTasks() []TaskInfo {
 	})
 	return tasks
 }
+
 // ---------------------
 
 // subfinderProviderKeys is the default set of providers emitted by subfinder v2.11.0
@@ -104,78 +104,8 @@ var subfinderProviderKeys = []string{
 	"zoomeyeapi",
 }
 
-func sanitizePathComponent(s string) string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return "unknown"
-	}
-	var b strings.Builder
-	b.Grow(len(s))
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z':
-			b.WriteRune(r)
-		case r >= 'A' && r <= 'Z':
-			b.WriteRune(r)
-		case r >= '0' && r <= '9':
-			b.WriteRune(r)
-		case r == '-' || r == '_' || r == '.':
-			b.WriteRune(r)
-		default:
-			b.WriteRune('_')
-		}
-	}
-	out := strings.Trim(b.String(), "._-")
-	if out == "" {
-		return "unknown"
-	}
-	return out
-}
-
-func targetFolderName(rootDomain string, targetID uint) string {
-	rootDomain = strings.TrimSpace(rootDomain)
-	if rootDomain == "" {
-		return fmt.Sprintf("target_%d", targetID)
-	}
-	// مطابق مثال: test.com => test
-	label := strings.Split(rootDomain, ".")[0]
-	label = strings.TrimSpace(label)
-	if label == "" {
-		label = rootDomain
-	}
-	return sanitizePathComponent(label)
-}
-
-func getTargetTempDir(targetID uint) (string, string, error) {
-	var t models.Target
-	if err := database.DB.Select("id", "root_domain", "created_by_user_id").First(&t, targetID).Error; err != nil {
-		return "", "", err
-	}
-
-	username := "admin"
-	isAdminOwner := true
-	if t.CreatedByUserID != 0 {
-		var u models.User
-		if err := database.DB.Select("id", "username", "role").First(&u, t.CreatedByUserID).Error; err == nil {
-			username = u.Username
-			isAdminOwner = strings.ToLower(strings.TrimSpace(u.Role)) == "admin"
-		}
-	}
-
-	baseDir := filepath.Join(workerTempRoot, "admin")
-	if !isAdminOwner {
-		baseDir = filepath.Join(workerTempRoot, sanitizePathComponent(username))
-	}
-
-	td := filepath.Join(baseDir, targetFolderName(t.RootDomain, targetID))
-	if err := os.MkdirAll(td, 0o755); err != nil {
-		return "", "", err
-	}
-	return td, username, nil
-}
-
 func getTargetToolTmpDir(targetID uint) string {
-	td, _, err := getTargetTempDir(targetID)
+	td, _, err := utils.GetTargetTempDir(targetID)
 	if err != nil || td == "" {
 		// fallback to default OS tmp; best-effort
 		return ""
@@ -201,7 +131,7 @@ func envWithTargetTmp(targetID uint) []string {
 }
 
 func cleanupTargetTempDir(targetID uint) {
-	td, _, err := getTargetTempDir(targetID)
+	td, _, err := utils.GetTargetTempDir(targetID)
 	if err != nil {
 		return
 	}
@@ -210,7 +140,7 @@ func cleanupTargetTempDir(targetID uint) {
 }
 
 func acquireTargetLock(targetID uint) (func(), bool) {
-	lockDir := filepath.Join(workerTempRoot, "locks")
+	lockDir := filepath.Join(utils.WorkerTempRoot, "locks")
 	_ = os.MkdirAll(lockDir, 0o755)
 	lockPath := filepath.Join(lockDir, fmt.Sprintf("target_%d.lock", targetID))
 
@@ -350,9 +280,9 @@ func Start() {
 			time.Sleep(5 * time.Second)
 			continue
 		}
-		
+
 		payload := result[1]
-		
+
 		// CRITICAL FIX: Update status to SCANNING *synchronously* before spawning goroutine.
 		// This prevents the race condition where the loop continues and pops another item
 		// before the goroutine has a chance to update the DB status.
@@ -395,7 +325,7 @@ func cleanupLegacyToolTmp() {
 		}
 		full := filepath.Join("/tmp", name)
 		// safety: do not touch our workspace root
-		if strings.HasPrefix(full, workerTempRoot) {
+		if strings.HasPrefix(full, utils.WorkerTempRoot) {
 			continue
 		}
 		fi, err := e.Info()
@@ -409,7 +339,7 @@ func cleanupLegacyToolTmp() {
 }
 
 func clearAllLocks() {
-	lockDir := filepath.Join(workerTempRoot, "locks")
+	lockDir := filepath.Join(utils.WorkerTempRoot, "locks")
 	if err := os.RemoveAll(lockDir); err != nil {
 		log.Printf("⚠️ Failed to clear locks: %v\n", err)
 	} else {
@@ -477,7 +407,7 @@ func processJobDispatcher(payload string) {
 func runDiscoveryPhase(targetID uint, rootDomain string) {
 	log.Printf("🚀 Starting PHASE 1 (DISCOVERY) for: %s (ID: %d)\n", rootDomain, targetID)
 
-	tempDir, username, err := getTargetTempDir(targetID)
+	tempDir, username, err := utils.GetTargetTempDir(targetID)
 	if err != nil {
 		log.Printf("❌ Failed to init temp dir for target %d: %v\n", targetID, err)
 		return
@@ -809,7 +739,7 @@ func runProbingPhase(targetID uint, rootDomain string) {
 		return
 	}
 
-	tempDir, username, err := getTargetTempDir(targetID)
+	tempDir, username, err := utils.GetTargetTempDir(targetID)
 	if err != nil {
 		log.Printf("❌ Failed to init temp dir for target %d: %v\n", targetID, err)
 		return
@@ -947,7 +877,7 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 		return
 	}
 
-	tempDir, username, err := getTargetTempDir(targetID)
+	tempDir, username, err := utils.GetTargetTempDir(targetID)
 	if err != nil {
 		log.Printf("❌ Failed to init temp dir for target %d: %v\n", targetID, err)
 		return
@@ -1103,12 +1033,12 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 			scanMarkRunning(targetID, "CRAWLING", "VIRUSTOTAL")
 			updateTargetPhase(targetID, "PHASE 3: RUNNING VIRUSTOTAL")
 			log.Printf("🦠 Running VirusTotal URL discovery for %d live assets...\n", len(liveAssets))
-			
+
 			tmp := make(map[string]string)
 			runVirusTotalCollection(targetID, liveAssets, tmp)
 			updateTargetPhase(targetID, "PHASE 3: SAVING VIRUSTOTAL")
 			saveCrawledURLs(targetID, rootDomain, tmp, true)
-			
+
 			scanMarkStepDone(targetID, "CRAWLING", "VIRUSTOTAL")
 		}
 	} else {
@@ -1208,12 +1138,12 @@ func saveCrawledURLs(targetID uint, rootDomain string, urls map[string]string, s
 		// برای هر URL، بررسی می‌کنیم آیا قبلاً در دیتابیس وجود دارد یا خیر تا source را مرج کنیم
 		var existingURL models.FoundURL
 		result := database.DB.Where("target_id = ? AND value = ?", targetID, u).First(&existingURL)
-		
+
 		if result.Error == nil {
 			// URL already exists, check/update source
 			currentSources := strings.Split(existingURL.Source, ", ")
 			newSource := source
-			
+
 			// Check if new source is already present
 			sourceExists := false
 			for _, s := range currentSources {
@@ -1222,14 +1152,14 @@ func saveCrawledURLs(targetID uint, rootDomain string, urls map[string]string, s
 					break
 				}
 			}
-			
+
 			if !sourceExists {
 				// Append new source
 				existingURL.Source = existingURL.Source + ", " + newSource
 				database.DB.Save(&existingURL)
 				countUpdatedSource++
 			}
-			
+
 			countSkippedCache++
 			continue
 		}
@@ -1267,7 +1197,7 @@ func saveCrawledURLs(targetID uint, rootDomain string, urls map[string]string, s
 	} else {
 		log.Println("✅ No new URLs to save.")
 	}
-	
+
 	if countUpdatedSource > 0 {
 		log.Printf("🔄 Updated sources for %d existing URLs.", countUpdatedSource)
 	}
@@ -1552,7 +1482,7 @@ func runCommandWithKillSwitch(targetID uint, name string, args ...string) ([]byt
 func runCommandWithStdinAndKillSwitch(targetID uint, stdin io.Reader, name string, args ...string) ([]byte, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Env = envWithTargetTmp(targetID)
-	
+
 	if stdin != nil {
 		cmd.Stdin = stdin
 	}
@@ -1823,10 +1753,10 @@ func triggerNextModule(targetID uint, rootDomain, currentModule string) {
 	if currentIndex != -1 && currentIndex+1 < len(modules) {
 		nextModule := modules[currentIndex+1]
 		log.Printf("🔗 Chaining: Phase '%s' done. Starting '%s'\n", currentModule, nextModule)
-		
+
 		// Update status to QUEUED so it doesn't count towards concurrency limit while waiting
 		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{"status": "QUEUED", "stop_requested": false})
-		
+
 		payload := fmt.Sprintf("%s:%d:%s", nextModule, targetID, rootDomain)
 		redisq.Client.RPush(context.Background(), redisq.QueueName, payload)
 	} else {
@@ -1910,62 +1840,6 @@ func normalizeSubdomain(subdomain, rootDomain string) string {
 	return subdomainLower
 }
 
-// writeSubfinderProviderConfigFile builds a per-user provider-config.yaml for subfinder and writes it
-// into the current target temp directory. Returns empty string if the user has no provider entries.
-func writeSubfinderProviderConfigFile(targetID uint, userID uint) (string, error) {
-	if userID == 0 {
-		return "", nil
-	}
-
-	var rows []models.SubfinderProviderConfig
-	if err := database.DB.
-		Where("user_id = ?", userID).
-		Order("provider asc").
-		Find(&rows).Error; err != nil {
-		return "", err
-	}
-	if len(rows) == 0 {
-		return "", nil
-	}
-
-	tempDir, _, err := getTargetTempDir(targetID)
-	if err != nil {
-		return "", err
-	}
-
-	// Start from subfinder defaults so unknown providers don't break anything and we keep a stable schema.
-	cfg := make(map[string]interface{}, len(subfinderProviderKeys)+len(rows))
-	for _, k := range subfinderProviderKeys {
-		cfg[k] = []interface{}{}
-	}
-
-	for _, r := range rows {
-		p := strings.ToLower(strings.TrimSpace(r.Provider))
-		if p == "" {
-			continue
-		}
-		var entries []interface{}
-		if strings.TrimSpace(r.Entries) != "" {
-			_ = json.Unmarshal([]byte(r.Entries), &entries)
-		}
-		if entries == nil {
-			entries = []interface{}{}
-		}
-		cfg[p] = entries
-	}
-
-	yml, err := yaml.Marshal(cfg)
-	if err != nil {
-		return "", err
-	}
-
-	outPath := filepath.Join(tempDir, fmt.Sprintf("subfinder_provider-config_u%d.yaml", userID))
-	if err := os.WriteFile(outPath, yml, 0600); err != nil {
-		return "", err
-	}
-	return outPath, nil
-}
-
 // runPuredns اجرای puredns برای bruteforce subdomain discovery
 // این تابع subdomain‌های لایو (resolve شده) با IP‌هایشان را برمی‌گرداند
 // خروجی: map[string][]string که key=subdomain و value=[]IP
@@ -1974,7 +1848,7 @@ func runPuredns(targetID uint, rootDomain string, wordlists []string) (map[strin
 		return map[string][]string{}, nil
 	}
 
-	tempDir, _, err := getTargetTempDir(targetID)
+	tempDir, _, err := utils.GetTargetTempDir(targetID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get temp dir: %v", err)
 	}
@@ -2167,14 +2041,14 @@ func runVirusTotalCollection(targetID uint, subdomains []string, results map[str
 
 		processUrls(vtResp.DetectedUrls)
 		processUrls(vtResp.UndetectedUrls)
-		
+
 		if foundCount > 0 {
 			log.Printf("🦠 VirusTotal found %d new URLs for %s\n", foundCount, domain)
 		}
 
 		// Respect rate limits - VT public API has 4 req/min limit usually.
 		// We sleep 15 seconds to be safe (60s / 4 = 15s).
-		time.Sleep(15 * time.Second) 
+		time.Sleep(15 * time.Second)
 	}
 }
 
@@ -2203,7 +2077,7 @@ func runPassiveCollection(targetID uint, domain string) ([]string, map[string][]
 	}
 
 	// Build per-owner subfinder provider-config (API keys) if present
-	subfinderPC, err := writeSubfinderProviderConfigFile(targetID, target.CreatedByUserID)
+	subfinderPC, err := discovery.WriteSubfinderProviderConfigFile(targetID, target.CreatedByUserID)
 	if err != nil {
 		log.Printf("⚠️ Failed to build subfinder provider-config (user_id=%d): %v\n", target.CreatedByUserID, err)
 		subfinderPC = ""
