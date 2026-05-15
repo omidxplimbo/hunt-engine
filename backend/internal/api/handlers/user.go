@@ -51,7 +51,10 @@ func AddUser(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request"})
 	}
 
-	hashedPassword, _ := utils.HashPassword(req.Password)
+	hashedPassword, err := utils.HashPassword(req.Password)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to hash password"})
+	}
 	user := models.User{
 		Username: req.Username,
 		Password: hashedPassword,
@@ -108,7 +111,10 @@ func UpdateUser(c *fiber.Ctx) error {
 		user.Role = newRole
 	}
 	if req.Password != nil && *req.Password != "" {
-		hash, _ := utils.HashPassword(*req.Password)
+		hash, err := utils.HashPassword(*req.Password)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to hash password"})
+		}
 		user.Password = hash
 	}
 	if req.IsActive != nil {

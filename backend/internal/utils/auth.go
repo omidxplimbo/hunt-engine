@@ -2,6 +2,7 @@ package utils
 
 import (
 	"errors"
+	"os"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -9,7 +10,16 @@ import (
 )
 
 // کلید مخفی برای امضای توکن‌ها (در پروداکشن باید از ENV خوانده شود)
-var jwtSecret = []byte("super_secret_hunt_key_change_me")
+var jwtSecret = getJwtSecret()
+
+func getJwtSecret() []byte {
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		// Fallback for development, but should panic in production
+		return []byte("super_secret_hunt_key_change_me")
+	}
+	return []byte(secret)
+}
 
 // HashPassword پسورد را هش می‌کند
 func HashPassword(password string) (string, error) {

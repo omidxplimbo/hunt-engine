@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 	"sync"
 
@@ -83,7 +84,8 @@ func StreamSystemLogs(c *websocket.Conn) {
 					if err == io.EOF {
 						return
 					}
-					// If strict reading fails, maybe break
+					log.Printf("Error reading log header for %s: %v\n", name, err)
+					msgChan <- fmt.Sprintf("Error reading log header for %s: %v", name, err)
 					return
 				}
 
@@ -94,6 +96,8 @@ func StreamSystemLogs(c *websocket.Conn) {
 					buf := make([]byte, size)
 					_, err = io.ReadFull(reader, buf)
 					if err != nil {
+						log.Printf("Error reading log payload for %s: %v\n", name, err)
+						msgChan <- fmt.Sprintf("Error reading log payload for %s: %v", name, err)
 						return
 					}
 

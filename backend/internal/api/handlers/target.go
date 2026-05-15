@@ -126,6 +126,7 @@ func CreateTarget(c *fiber.Ctx) error {
 	if err := redisq.Client.RPush(redisq.Ctx, redisq.QueueName, taskPayload).Err(); err != nil {
 		database.DB.Model(&target).Update("status", "READY")
 		log.Printf("⚠️ Failed to enqueue task: %v\n", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to enqueue task", "error": err.Error()})
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"status": "success", "message": "Target created & started!", "data": target})
@@ -718,13 +719,13 @@ func DeleteTarget(c *fiber.Ctx) error {
 			return err
 		}
 
-		if err := tx.Exec("DELETE FROM asset_histories WHERE asset_id IN (SELECT id FROM assets WHERE target_id = ?)", id).Error; err != nil {
+		if err := tx.Exec("DELETE FROM asset_histories WHERE asset_id IN (SELECT id FROM assets WHERE target_id = ?)", targetID).Error; err != nil {
 			return err
 		}
-		if err := tx.Exec("DELETE FROM assets WHERE target_id = ?", id).Error; err != nil {
+		if err := tx.Exec("DELETE FROM assets WHERE target_id = ?", targetID).Error; err != nil {
 			return err
 		}
-		if err := tx.Exec("DELETE FROM found_urls WHERE target_id = ?", id).Error; err != nil {
+		if err := tx.Exec("DELETE FROM found_urls WHERE target_id = ?", targetID).Error; err != nil {
 			return err
 		}
 
