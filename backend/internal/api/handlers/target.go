@@ -282,7 +282,10 @@ func StartDiscovery(c *fiber.Ctx) error {
 
 	// Choose resume module: first module in order that doesn't have <MODULE>:DONE in scan state.
 	resumeModule := modules[0]
-	if stErr == nil && st.CompletedSteps != "" && st.CompletedSteps != "[]" {
+	// Fresh runs already reset completed_steps in DB above. Do not use the old
+	// in-memory st value that was loaded before the reset, otherwise a READY target
+	// can skip DISCOVERY and start directly at PROBING.
+	if !isNewRun && stErr == nil && st.CompletedSteps != "" && st.CompletedSteps != "[]" {
 		var completed []string
 		if json.Unmarshal([]byte(st.CompletedSteps), &completed) == nil {
 			set := make(map[string]bool)

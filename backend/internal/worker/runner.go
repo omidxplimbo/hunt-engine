@@ -458,7 +458,16 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		if err != nil && err.Error() == "process killed by user request" {
 			return
 		}
-		_ = utils.WriteJSONToFile(passiveSourcesFile, passiveSources)
+		if err := utils.WriteSliceToFile(passiveResultsFile, passiveResults); err != nil {
+			log.Printf("❌ Failed to write passive results checkpoint: %v\n", err)
+			scanMarkFailed(targetID, fmt.Sprintf("passive checkpoint failed: %v", err))
+			return
+		}
+		if err := utils.WriteJSONToFile(passiveSourcesFile, passiveSources); err != nil {
+			log.Printf("❌ Failed to write passive sources checkpoint: %v\n", err)
+			scanMarkFailed(targetID, fmt.Sprintf("passive sources checkpoint failed: %v", err))
+			return
+		}
 		scanMarkStepDone(targetID, "DISCOVERY", "PASSIVE_ENUM")
 	}
 
@@ -490,10 +499,21 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 				mutatedSources[subdomain] = []string{"alterx"}
 			}
 		}
-		_ = utils.WriteJSONToFile(alterxSourcesFile, mutatedSources)
+		if err := utils.WriteSliceToFile(alterxResultsFile, mutatedResults); err != nil {
+			log.Printf("❌ Failed to write alterx results checkpoint: %v\n", err)
+			scanMarkFailed(targetID, fmt.Sprintf("alterx checkpoint failed: %v", err))
+			return
+		}
+		if err := utils.WriteJSONToFile(alterxSourcesFile, mutatedSources); err != nil {
+			log.Printf("❌ Failed to write alterx sources checkpoint: %v\n", err)
+			scanMarkFailed(targetID, fmt.Sprintf("alterx sources checkpoint failed: %v", err))
+			return
+		}
 		scanMarkStepDone(targetID, "DISCOVERY", "ALTERX")
 	} else {
 		log.Printf("⏩ Skipping Alterx (Mutation) for %s based on target config.\n", rootDomain)
+		_ = utils.WriteSliceToFile(alterxResultsFile, []string{})
+		_ = utils.WriteJSONToFile(alterxSourcesFile, mutatedSources)
 		scanMarkStepDone(targetID, "DISCOVERY", "ALTERX")
 	}
 
@@ -554,11 +574,21 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	// 3. Merge & History (creates master list + allSources map)
 	var masterList []string
 	allSources := make(map[string][]string)
-	if scanIsStepDone(targetID, "DISCOVERY", "MERGE") {
-		masterList, _ = utils.ReadSliceFromFile(allFoundFile)
+	mergeDone := scanIsStepDone(targetID, "DISCOVERY", "MERGE")
+	if mergeDone {
+		var readErr error
+		masterList, readErr = utils.ReadSliceFromFile(allFoundFile)
 		_ = utils.ReadJSONFromFile(allSourcesFile, &allSources)
-		log.Printf("⏩ Resume: skipping MERGE (loaded %d items from checkpoint)\n", len(masterList))
-	} else {
+		if readErr != nil || len(masterList) == 0 {
+			log.Printf("⚠️ MERGE checkpoint artifact is missing or empty; rebuilding MERGE before DNSX. err=%v\n", readErr)
+			mergeDone = false
+			allSources = make(map[string][]string)
+		} else {
+			log.Printf("⏩ Resume: skipping MERGE (loaded %d items from checkpoint)\n", len(masterList))
+		}
+	}
+
+	if !mergeDone {
 		scanMarkRunning(targetID, "DISCOVERY", "MERGE")
 
 		var existingAssets []string
@@ -615,7 +645,18 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 			}
 		}
 
-		_ = utils.WriteJSONToFile(allSourcesFile, allSources)
+		// DNSX reads allFoundFile. This file must contain the final merged list
+		// from passive + alterx + optional puredns + existing assets.
+		if err := utils.WriteSliceToFile(allFoundFile, masterList); err != nil {
+			log.Printf("❌ Failed to write DNSX input file: %v\n", err)
+			scanMarkFailed(targetID, fmt.Sprintf("merge checkpoint failed: %v", err))
+			return
+		}
+		if err := utils.WriteJSONToFile(allSourcesFile, allSources); err != nil {
+			log.Printf("❌ Failed to write merged sources checkpoint: %v\n", err)
+			scanMarkFailed(targetID, fmt.Sprintf("merged sources checkpoint failed: %v", err))
+			return
+		}
 		scanMarkStepDone(targetID, "DISCOVERY", "MERGE")
 	}
 
@@ -2740,4 +2781,3 @@ func runCdnCheck(targetID uint, ips []string, inputFile string) map[string]CdnCh
 // =================================================================
 // Optional Port Scan (Nmap) - PHASE 1
 // =================================================================
-
