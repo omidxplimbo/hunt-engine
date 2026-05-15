@@ -1,13 +1,15 @@
 # ================================================
 # Stage 1: Golang Builder (کامپایل ابزارهای Go و برنامه اصلی)
 # ================================================
-FROM golang:1.24-alpine AS go_builder
+FROM golang:1.25.7-alpine AS go_builder
 RUN apk add --no-cache git build-base
 WORKDIR /app
 
 # --- نصب ابزارهای شکار (Recon Tools) ---
 
 # فاز ۱: کشف
+ENV GOPROXY=https://goproxy.io,direct
+RUN apk add --no-cache git
 RUN go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
 RUN go install -v github.com/tomnomnom/assetfinder@latest
 RUN go install -v github.com/projectdiscovery/alterx/cmd/alterx@latest

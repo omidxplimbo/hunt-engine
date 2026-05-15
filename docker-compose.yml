@@ -46,7 +46,7 @@ services:
       dockerfile: Dockerfile
       args:
         # Dynamic API URL based on domain
-        - VITE_API_URL=https://${DOMAIN_NAME:-localhost}/api
+        - VITE_API_URL=/api
     # Ports removed - only accessible through nginx reverse proxy
     expose:
       - "80"
@@ -63,8 +63,8 @@ services:
     container_name: hunt-nginx
     image: nginx:alpine
     ports:
-      - "80:80"
-      - "443:443"
+      - "8888:80"
+      - "4443:443"
       - "4000:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/templates/default.conf.template:ro
