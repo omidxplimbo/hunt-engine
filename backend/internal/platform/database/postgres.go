@@ -67,7 +67,40 @@ func Connect() {
 	_ = DB.Exec("ALTER TABLE users ALTER COLUMN is_active SET DEFAULT true").Error
 	_ = DB.Exec("UPDATE users SET is_active = true WHERE is_active IS NULL").Error
 
+	if err := migrateTenantScopedUniqueIndexes(DB); err != nil {
+		log.Fatal("❌ Tenant-scoped index migration failed! \n", err)
+	}
+
 	log.Println("✅ Auto-migration completed successfully! Tables are ready.")
+}
+
+// migrateTenantScopedUniqueIndexes converts legacy global uniqueness into tenant-scoped uniqueness.
+//
+// AutoMigrate creates missing indexes, but it does not remove obsolete indexes. Older versions
+// created global unique indexes on targets.root_domain and assets.value, which blocked two users
+// from creating/scanning the same domain independently. This migration is idempotent and safe to
+// run on every startup.
+func migrateTenantScopedUniqueIndexes(db *gorm.DB) error {
+	statements := []string{
+		// Create the new multi-tenant uniqueness rules first.
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_targets_owner_root_domain ON targets (created_by_user_id, root_domain)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_target_value ON assets (target_id, value)`,
+
+		// Drop legacy global uniqueness rules. Depending on how they were created,
+		// PostgreSQL may expose them as constraints, indexes, or both.
+		`ALTER TABLE targets DROP CONSTRAINT IF EXISTS idx_targets_root_domain`,
+		`DROP INDEX IF EXISTS idx_targets_root_domain`,
+		`ALTER TABLE assets DROP CONSTRAINT IF EXISTS idx_assets_value`,
+		`DROP INDEX IF EXISTS idx_assets_value`,
+	}
+
+	for _, stmt := range statements {
+		if err := db.Exec(stmt).Error; err != nil {
+			return fmt.Errorf("failed to run tenant-scoped index migration statement %q: %w", stmt, err)
+		}
+	}
+
+	return nil
 }
 
 // CleanupZombieScans تارگت‌هایی که در حالت SCANNING گیر کرده‌اند را آزاد می‌کند
@@ -132,7 +165,7 @@ func CleanupZombieQueuedItems(activePayloads []string) {
 			// Try manual split
 			// Just finding the ID is enough
 			// TODO: Robust parsing
-			continue 
+			continue
 		}
 		activeMap[uint(idInt)] = true
 	}

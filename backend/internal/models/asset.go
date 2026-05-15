@@ -16,10 +16,10 @@ type Target struct {
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 
 	// مالک تارگت (برای جداسازی دسترسی‌ها)
-	CreatedByUserID uint `gorm:"index;not null;default:0" json:"created_by_user_id"`
+	CreatedByUserID uint `gorm:"index;not null;default:0;uniqueIndex:idx_targets_owner_root_domain,priority:1" json:"created_by_user_id"`
 
 	Name        string `gorm:"size:100;not null" json:"name"`
-	RootDomain  string `gorm:"size:255;not null;uniqueIndex" json:"root_domain"`
+	RootDomain  string `gorm:"size:255;not null;uniqueIndex:idx_targets_owner_root_domain,priority:2" json:"root_domain"`
 	Description string `json:"description"`
 	InScope     bool   `gorm:"default:true" json:"in_scope"`
 
@@ -40,10 +40,10 @@ type Target struct {
 	UsePortscan bool `gorm:"default:false" json:"use_portscan"`
 
 	// 👇 ابزارهای جدید برای فاز اول (Discovery)
-	UseCero  bool `gorm:"default:false" json:"use_cero"`  // Scrape domain names from SSL certificates
-	UseCrtsh bool `gorm:"default:false" json:"use_crtsh"` // Use crt.sh API for subdomain discovery
-	UsePuredns bool `gorm:"default:false" json:"use_puredns"` // Use puredns for bruteforce subdomain discovery
-	UseAbusedb bool `gorm:"default:false" json:"use_abusedb"`
+	UseCero          bool   `gorm:"default:false" json:"use_cero"`    // Scrape domain names from SSL certificates
+	UseCrtsh         bool   `gorm:"default:false" json:"use_crtsh"`   // Use crt.sh API for subdomain discovery
+	UsePuredns       bool   `gorm:"default:false" json:"use_puredns"` // Use puredns for bruteforce subdomain discovery
+	UseAbusedb       bool   `gorm:"default:false" json:"use_abusedb"`
 	PurednsWordlists string `gorm:"type:jsonb;default:'[]'" json:"puredns_wordlists"` // Selected wordlists for puredns (e.g. ["wordlist1.txt", "wordlist2.txt"])
 
 	ScanModules string `gorm:"type:jsonb;default:'[\"DISCOVERY\", \"PROBING\"]'" json:"scan_modules"`
@@ -60,8 +60,8 @@ type Asset struct {
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 
-	TargetID uint   `gorm:"not null;index" json:"target_id"`
-	Value    string `gorm:"size:255;uniqueIndex;not null" json:"value"`
+	TargetID uint   `gorm:"not null;index;uniqueIndex:idx_assets_target_value,priority:1" json:"target_id"`
+	Value    string `gorm:"size:255;not null;uniqueIndex:idx_assets_target_value,priority:2" json:"value"`
 	Type     string `gorm:"size:50" json:"type"`
 
 	IsNew  bool `gorm:"default:true;index" json:"is_new"`

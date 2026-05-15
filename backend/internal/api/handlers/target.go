@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"log"
 	"os"
@@ -48,6 +49,33 @@ func sortScanModules(modules []string) []string {
 	return modules
 }
 
+func normalizeRootDomain(value string) string {
+	v := strings.ToLower(strings.TrimSpace(value))
+	v = strings.TrimPrefix(v, "http://")
+	v = strings.TrimPrefix(v, "https://")
+	v = strings.TrimPrefix(v, "*.")
+
+	if idx := strings.IndexAny(v, "/?#"); idx >= 0 {
+		v = v[:idx]
+	}
+	if idx := strings.Index(v, ":"); idx >= 0 {
+		v = v[:idx]
+	}
+
+	return strings.Trim(v, ". ")
+}
+
+func isDuplicateTargetError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "idx_targets_owner_root_domain") ||
+		strings.Contains(msg, "idx_targets_root_domain") ||
+		strings.Contains(msg, "duplicate key")
+}
+
 // CreateTarget هندلر ساخت یک هدف جدید
 func CreateTarget(c *fiber.Ctx) error {
 	req := new(dto.CreateTargetRequest)
@@ -58,6 +86,33 @@ func CreateTarget(c *fiber.Ctx) error {
 	uid, err := currentUserID(c)
 	if err != nil {
 		return err
+	}
+
+	req.RootDomain = normalizeRootDomain(req.RootDomain)
+	if req.RootDomain == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Root domain is required",
+		})
+	}
+
+	var existingTarget models.Target
+	lookupErr := database.DB.
+		Where("created_by_user_id = ? AND root_domain = ?", uid, req.RootDomain).
+		First(&existingTarget).Error
+
+	if lookupErr == nil {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Target already exists for this user",
+		})
+	}
+	if lookupErr != nil && !stderrors.Is(lookupErr, gorm.ErrRecordNotFound) {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Failed to check existing target",
+			"error":   lookupErr.Error(),
+		})
 	}
 
 	// 👇 مرتب‌سازی ماژول‌ها قبل از ذخیره
@@ -116,6 +171,14 @@ func CreateTarget(c *fiber.Ctx) error {
 	}
 
 	if err := database.DB.Create(&target).Error; err != nil {
+		if isDuplicateTargetError(err) {
+			return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+				"status":  "error",
+				"message": "Target already exists for this user",
+				"error":   err.Error(),
+			})
+		}
+
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Could not save target", "error": err.Error()})
 	}
 
@@ -1129,15 +1192,28 @@ func ImportTarget(c *fiber.Ctx) error {
 	var errors []string
 
 	for _, item := range req.Data.Targets {
-		// بررسی وجود تارگت با root_domain یکسان
+		rootDomain := normalizeRootDomain(item.RootDomain)
+		if rootDomain == "" {
+			errors = append(errors, "Target root_domain is empty")
+			continue
+		}
+
+		// Check duplicate only inside the current user's tenant scope.
 		var existing models.Target
-		if err := database.DB.Where("root_domain = ?", item.RootDomain).First(&existing).Error; err == nil {
+		lookupErr := database.DB.
+			Where("created_by_user_id = ? AND root_domain = ?", uid, rootDomain).
+			First(&existing).Error
+
+		if lookupErr == nil {
 			if req.SkipExisting {
-				skipped = append(skipped, item.RootDomain)
+				skipped = append(skipped, rootDomain)
 				continue
 			}
-			// اگر skip_existing false باشد، خطا می‌دهیم
-			errors = append(errors, fmt.Sprintf("Target with root_domain '%s' already exists", item.RootDomain))
+			errors = append(errors, fmt.Sprintf("Target with root_domain '%s' already exists for this user", rootDomain))
+			continue
+		}
+		if lookupErr != nil && !stderrors.Is(lookupErr, gorm.ErrRecordNotFound) {
+			errors = append(errors, fmt.Sprintf("Failed to check target '%s': %v", rootDomain, lookupErr))
 			continue
 		}
 
@@ -1155,7 +1231,7 @@ func ImportTarget(c *fiber.Ctx) error {
 		target := models.Target{
 			CreatedByUserID: uid,
 			Name:            item.Name,
-			RootDomain:      item.RootDomain,
+			RootDomain:      rootDomain,
 			Description:     item.Description,
 			InScope:         item.InScope,
 			Frequency:       item.Frequency,
@@ -1179,7 +1255,11 @@ func ImportTarget(c *fiber.Ctx) error {
 		}
 
 		if err := database.DB.Create(&target).Error; err != nil {
-			errors = append(errors, fmt.Sprintf("Failed to create target '%s': %v", item.RootDomain, err))
+			if isDuplicateTargetError(err) {
+				errors = append(errors, fmt.Sprintf("Target with root_domain '%s' already exists for this user", rootDomain))
+			} else {
+				errors = append(errors, fmt.Sprintf("Failed to create target '%s': %v", rootDomain, err))
+			}
 			continue
 		}
 
@@ -1226,13 +1306,16 @@ func ImportTarget(c *fiber.Ctx) error {
 			if len(assets) > 0 {
 				// استفاده از ON CONFLICT DO NOTHING برای skip کردن duplicate ها
 				if err := database.DB.Clauses(clause.OnConflict{
-					Columns:   []clause.Column{{Name: "value"}},
+					Columns: []clause.Column{
+						{Name: "target_id"},
+						{Name: "value"},
+					},
 					DoNothing: true,
 				}).CreateInBatches(assets, 500).Error; err != nil {
-					log.Printf("⚠️ Warning: Failed to import some assets for target '%s': %v\n", item.RootDomain, err)
-					errors = append(errors, fmt.Sprintf("Failed to import assets for '%s': %v", item.RootDomain, err))
+					log.Printf("⚠️ Warning: Failed to import some assets for target '%s': %v\n", rootDomain, err)
+					errors = append(errors, fmt.Sprintf("Failed to import assets for '%s': %v", rootDomain, err))
 				} else {
-					log.Printf("✅ Imported %d assets for target '%s'\n", len(assets), item.RootDomain)
+					log.Printf("✅ Imported %d assets for target '%s'\n", len(assets), rootDomain)
 				}
 			}
 		}
@@ -1282,13 +1365,13 @@ func ImportTarget(c *fiber.Ctx) error {
 
 				if len(newURLs) > 0 {
 					if err := database.DB.CreateInBatches(newURLs, 500).Error; err != nil {
-						log.Printf("⚠️ Warning: Failed to import some URLs for target '%s': %v\n", item.RootDomain, err)
-						errors = append(errors, fmt.Sprintf("Failed to import URLs for '%s': %v", item.RootDomain, err))
+						log.Printf("⚠️ Warning: Failed to import some URLs for target '%s': %v\n", rootDomain, err)
+						errors = append(errors, fmt.Sprintf("Failed to import URLs for '%s': %v", rootDomain, err))
 					} else {
-						log.Printf("✅ Imported %d URLs for target '%s' (%d skipped as duplicates)\n", len(newURLs), item.RootDomain, len(urls)-len(newURLs))
+						log.Printf("✅ Imported %d URLs for target '%s' (%d skipped as duplicates)\n", len(newURLs), rootDomain, len(urls)-len(newURLs))
 					}
 				} else if len(urls) > 0 {
-					log.Printf("ℹ️ All URLs for target '%s' already exist, skipping\n", item.RootDomain)
+					log.Printf("ℹ️ All URLs for target '%s' already exist, skipping\n", rootDomain)
 				}
 			}
 		}
