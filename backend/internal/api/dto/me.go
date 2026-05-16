@@ -2,10 +2,11 @@ package dto
 
 // MeResponse اطلاعات کاربر فعلی
 type MeResponse struct {
-	ID        uint   `json:"id"`
-	Username  string `json:"username"`
-	Role      string `json:"role"`
-	CreatedAt string `json:"created_at"`
+	ID                 uint   `json:"id"`
+	Username           string `json:"username"`
+	Role               string `json:"role"`
+	CreatedAt          string `json:"created_at"`
+	MaxConcurrentScans int    `json:"max_concurrent_scans"`
 }
 
 type UpdateMeRequest struct {
@@ -34,6 +35,3 @@ type PutMySubfinderProvidersRequest struct {
 	// Replace mode: the provided list becomes the full set for the current user.
 	Providers []SubfinderProviderItem `json:"providers"`
 }
-
-
-

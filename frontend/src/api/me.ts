@@ -5,6 +5,7 @@ export interface MeData {
   username: string;
   role: string;
   createdAt: string;
+  max_concurrent_scans?: number;
 }
 
 export const getMe = async () => {
@@ -25,7 +26,6 @@ export const changeMyPassword = async (payload: ChangePasswordPayload) => {
 // -----------------------------
 // Subfinder provider config (per-user)
 // -----------------------------
-
 export interface SubfinderProviderItem {
   provider: string;
   entries: any[];
@@ -48,5 +48,3 @@ export const deleteMySubfinderProvider = async (provider: string) => {
   const res = await apiClient.delete<{ status: string; message: string }>(`/me/subfinder/providers/${p}`);
   return res.data;
 };
-
-

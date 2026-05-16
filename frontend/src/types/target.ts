@@ -11,17 +11,16 @@ export interface Target {
   status: string;
   current_phase?: string;
   use_alterx: boolean;
-  // 👇 اضافه شد
   use_waymore: boolean;
-  // 👇 optional port scan during discovery
   use_portscan: boolean;
-  // 👇 ابزارهای جدید برای فاز اول (Discovery)
-  use_cero?: boolean;  // Scrape domain names from SSL certificates
-  use_crtsh?: boolean; // Use crt.sh API for subdomain discovery
-  use_puredns?: boolean; // Use puredns for bruteforce subdomain discovery
+  use_cero?: boolean;
+  use_crtsh?: boolean;
+  use_puredns?: boolean;
   use_abusedb?: boolean;
-  puredns_wordlists?: string[]; // Selected wordlists for puredns
+  puredns_wordlists?: string[];
   scan_modules: string;
+  created_by_user_id?: number;
+  owner_username?: string;
 }
 
 export type TargetDetails = Target;

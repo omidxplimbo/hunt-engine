@@ -72,6 +72,3 @@ func getAccessibleTarget(c *fiber.Ctx, targetID uint) (*models.Target, error) {
 	}
 	return &t, nil
 }
-
-
-

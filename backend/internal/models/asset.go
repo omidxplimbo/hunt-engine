@@ -49,7 +49,8 @@ type Target struct {
 	ScanModules string `gorm:"type:jsonb;default:'[\"DISCOVERY\", \"PROBING\"]'" json:"scan_modules"`
 
 	Assets []Asset `json:"-"`
-}
+
+	CreatedByUser User `gorm:"foreignKey:CreatedByUserID" json:"-"`}
 
 // ==========================================
 // Asset Model

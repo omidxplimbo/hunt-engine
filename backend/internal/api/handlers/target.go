@@ -186,7 +186,7 @@ func CreateTarget(c *fiber.Ctx) error {
 	firstModule := req.Modules[0]
 	taskPayload := fmt.Sprintf("%s:%d:%s", firstModule, target.ID, target.RootDomain)
 
-	if err := redisq.Client.RPush(redisq.Ctx, redisq.QueueName, taskPayload).Err(); err != nil {
+	if err := redisq.Client.RPush(redisq.Ctx, redisq.QueueNameForUser(target.CreatedByUserID), taskPayload).Err(); err != nil {
 		database.DB.Model(&target).Update("status", "READY")
 		log.Printf("⚠️ Failed to enqueue task: %v\n", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to enqueue task", "error": err.Error()})
@@ -372,7 +372,7 @@ func StartDiscovery(c *fiber.Ctx) error {
 
 	taskPayload := fmt.Sprintf("%s:%d:%s", resumeModule, target.ID, target.RootDomain)
 
-	if err := redisq.Client.RPush(redisq.Ctx, redisq.QueueName, taskPayload).Err(); err != nil {
+	if err := redisq.Client.RPush(redisq.Ctx, redisq.QueueNameForUser(target.CreatedByUserID), taskPayload).Err(); err != nil {
 		database.DB.Model(&target).Update("status", "READY")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to enqueue job"})
 	}
@@ -444,7 +444,7 @@ func GetTargets(c *fiber.Ctx) error {
 	}
 
 	var targets []models.Target
-	db := scopedDB.Order("created_at desc")
+	db := scopedDB.Preload("CreatedByUser").Order("created_at desc")
 	if withPortsOnly {
 		// open_ports is jsonb (default '{}'); we consider "has ports" when it's a non-empty JSON object
 		db = db.Where(`
@@ -753,7 +753,7 @@ func StartProbing(c *fiber.Ctx) error {
 	})
 
 	taskPayload := fmt.Sprintf("PROBING:%d:%s", target.ID, target.RootDomain)
-	if err := redisq.Client.RPush(redisq.Ctx, redisq.QueueName, taskPayload).Err(); err != nil {
+	if err := redisq.Client.RPush(redisq.Ctx, redisq.QueueNameForUser(target.CreatedByUserID), taskPayload).Err(); err != nil {
 		database.DB.Model(target).Update("status", "READY")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to enqueue job"})
 	}
@@ -919,8 +919,28 @@ func GetTargetURLs(c *fiber.Ctx) error {
 }
 
 // ... (Helper Functions DTO - اینا رو بذار همونطور که هستن بمونن یا اگه خواستی کپی کن از فایل قبلی)
+
+func targetOwnerUsername(t models.Target) string {
+	if strings.TrimSpace(t.CreatedByUser.Username) != "" {
+		return t.CreatedByUser.Username
+	}
+
+	if t.CreatedByUserID == 0 {
+		return ""
+	}
+
+	var user models.User
+	if err := database.DB.Select("username").First(&user, t.CreatedByUserID).Error; err != nil {
+		return ""
+	}
+
+	return user.Username
+}
+
 func toTargetResponse(t models.Target, assetCount int64) dto.TargetResponse {
 	return dto.TargetResponse{
+		OwnerUsername:    targetOwnerUsername(t),
+		CreatedByUserID:  t.CreatedByUserID,
 		ID:               t.ID,
 		Name:             t.Name,
 		RootDomain:       t.RootDomain,

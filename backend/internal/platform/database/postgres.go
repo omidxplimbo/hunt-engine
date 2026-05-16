@@ -66,6 +66,8 @@ func Connect() {
 	_ = DB.Exec("UPDATE users SET role = 'viewer' WHERE role IS NULL OR role = ''").Error
 	_ = DB.Exec("ALTER TABLE users ALTER COLUMN is_active SET DEFAULT true").Error
 	_ = DB.Exec("UPDATE users SET is_active = true WHERE is_active IS NULL").Error
+	_ = DB.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS max_concurrent_scans integer DEFAULT 1").Error
+	_ = DB.Exec("UPDATE users SET max_concurrent_scans = 1 WHERE max_concurrent_scans IS NULL OR max_concurrent_scans < 1").Error
 
 	if err := migrateTenantScopedUniqueIndexes(DB); err != nil {
 		log.Fatal("❌ Tenant-scoped index migration failed! \n", err)

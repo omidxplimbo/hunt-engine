@@ -13,10 +13,10 @@ type CreateTargetRequest struct {
 	// 👇 PHASE 1 optional port scan (nmap)
 	UsePortscan *bool `json:"use_portscan"`
 	// 👇 ابزارهای جدید برای فاز اول (Discovery)
-	UseCero  *bool    `json:"use_cero"`  // Scrape domain names from SSL certificates
-	UseCrtsh *bool    `json:"use_crtsh"` // Use crt.sh API for subdomain discovery
-	UsePuredns *bool   `json:"use_puredns"` // Use puredns for bruteforce subdomain discovery
-	UseAbusedb *bool   `json:"use_abusedb"`
+	UseCero          *bool    `json:"use_cero"`    // Scrape domain names from SSL certificates
+	UseCrtsh         *bool    `json:"use_crtsh"`   // Use crt.sh API for subdomain discovery
+	UsePuredns       *bool    `json:"use_puredns"` // Use puredns for bruteforce subdomain discovery
+	UseAbusedb       *bool    `json:"use_abusedb"`
 	PurednsWordlists []string `json:"puredns_wordlists"` // Selected wordlists for puredns
 }
 
@@ -33,10 +33,10 @@ type UpdateTargetRequest struct {
 	// 👇 PHASE 1 optional port scan (nmap)
 	UsePortscan *bool `json:"use_portscan"`
 	// 👇 ابزارهای جدید برای فاز اول (Discovery)
-	UseCero  *bool    `json:"use_cero"`  // Scrape domain names from SSL certificates
-	UseCrtsh *bool    `json:"use_crtsh"` // Use crt.sh API for subdomain discovery
-	UsePuredns *bool   `json:"use_puredns"` // Use puredns for bruteforce subdomain discovery
-	UseAbusedb *bool   `json:"use_abusedb"`
+	UseCero          *bool    `json:"use_cero"`    // Scrape domain names from SSL certificates
+	UseCrtsh         *bool    `json:"use_crtsh"`   // Use crt.sh API for subdomain discovery
+	UsePuredns       *bool    `json:"use_puredns"` // Use puredns for bruteforce subdomain discovery
+	UseAbusedb       *bool    `json:"use_abusedb"`
 	PurednsWordlists []string `json:"puredns_wordlists"` // Selected wordlists for puredns
 }
 
@@ -51,19 +51,19 @@ type TargetExportData struct {
 // TargetExportItem اطلاعات یک تارگت برای Export/Import (شامل تمام داده‌های مرتبط)
 type TargetExportItem struct {
 	// اطلاعات تارگت
-	Name        string   `json:"name" validate:"required,min=3,max=100"`
-	RootDomain  string   `json:"root_domain" validate:"required,hostname"`
-	Description string   `json:"description"`
-	InScope     bool     `json:"in_scope"`
-	Frequency   int      `json:"frequency"`
-	Modules     []string `json:"modules"`
-	UseAlterx   bool     `json:"use_alterx"`
-	UseWaymore  bool     `json:"use_waymore"`
-	UsePortscan bool     `json:"use_portscan"`
-	UseCero     bool     `json:"use_cero"`
-	UseCrtsh    bool     `json:"use_crtsh"`
-	UsePuredns  bool     `json:"use_puredns"`
-	UseAbusedb  bool     `json:"use_abusedb"`
+	Name             string   `json:"name" validate:"required,min=3,max=100"`
+	RootDomain       string   `json:"root_domain" validate:"required,hostname"`
+	Description      string   `json:"description"`
+	InScope          bool     `json:"in_scope"`
+	Frequency        int      `json:"frequency"`
+	Modules          []string `json:"modules"`
+	UseAlterx        bool     `json:"use_alterx"`
+	UseWaymore       bool     `json:"use_waymore"`
+	UsePortscan      bool     `json:"use_portscan"`
+	UseCero          bool     `json:"use_cero"`
+	UseCrtsh         bool     `json:"use_crtsh"`
+	UsePuredns       bool     `json:"use_puredns"`
+	UseAbusedb       bool     `json:"use_abusedb"`
 	PurednsWordlists []string `json:"puredns_wordlists"`
 
 	// داده‌های مرتبط

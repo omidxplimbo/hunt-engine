@@ -74,7 +74,7 @@ func triggerScan(t models.Target) {
 	}
 
 	taskPayload := fmt.Sprintf("%s:%d:%s", firstJob, t.ID, t.RootDomain)
-	err := redisq.Client.RPush(redisq.Ctx, redisq.QueueName, taskPayload).Err()
+	err := redisq.Client.RPush(redisq.Ctx, redisq.QueueNameForUser(t.CreatedByUserID), taskPayload).Err()
 
 	if err != nil {
 		log.Printf("⚠️ Scheduler failed to enqueue %s: %v\n", t.RootDomain, err)

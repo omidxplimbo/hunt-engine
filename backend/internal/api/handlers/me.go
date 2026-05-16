@@ -28,10 +28,11 @@ func GetMe(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"status": "success",
 		"data": dto.MeResponse{
-			ID:        user.ID,
-			Username:  user.Username,
-			Role:      user.Role,
-			CreatedAt: user.CreatedAt.Format(time.RFC3339),
+			ID:                 user.ID,
+			Username:           user.Username,
+			Role:               user.Role,
+			CreatedAt:          user.CreatedAt.Format(time.RFC3339),
+			MaxConcurrentScans: user.MaxConcurrentScans,
 		},
 	})
 }
@@ -276,6 +277,3 @@ func DeleteMySubfinderProvider(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{"status": "success", "message": "Provider deleted"})
 }
-
-
-

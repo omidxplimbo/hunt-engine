@@ -31,7 +31,7 @@ func main() {
 	seedAdminUser()
 
 	redisq.Connect()
-	
+
 	// Check for queued items consistency
 	// We need to fetch Redis items first.
 	ctx := redisq.Ctx
@@ -107,7 +107,7 @@ func main() {
 	api.Get("/targets/:id/assets/download", handlers.DownloadTargetAssets) // 👈 Download filtered assets
 	api.Get("/targets/:id/urls", handlers.GetTargetURLs)
 	api.Get("/targets/:id/urls/download", handlers.DownloadTargetURLs) // 👈 Download filtered URLs
-	api.Get("/targets/:id/ips", handlers.ExportTargetIPs) // Export IPs به صورت txt
+	api.Get("/targets/:id/ips", handlers.ExportTargetIPs)              // Export IPs به صورت txt
 	api.Get("/targets/:id/scan-state", handlers.GetTargetScanState)
 
 	// 👇 Self-service (کاربر روی اکانت خودش)

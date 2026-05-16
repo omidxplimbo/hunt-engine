@@ -18,7 +18,7 @@ The system is built on a modern, containerized microservice-like architecture:
 ### 🧠 Backend (The Engine)
 * **Core:** Golang (Fiber Framework) for high-performance APIs and concurrent workers.
 * **Persistence:** PostgreSQL with GORM for structured data storage and JSONB for flexible raw data.
-* **Job Queue:** Redis for managing long-running background reconnaissance tasks asynchronously.
+* **Job Queue:** Redis-backed per-user scan queues for long-running reconnaissance tasks, with configurable concurrent scan slots per user.
 * **Notification System:** Buffered Go Channels with rate-limiting to prevent data loss and API blocking (Telegram).
 * **Security:** JWT Authentication & Role-Based Access Control (RBAC).
 * **Infrastructure:** Fully Dockerized environment with multi-stage builds.
@@ -30,15 +30,15 @@ The system is built on a modern, containerized microservice-like architecture:
 * **Features:**
     * **Dashboard:**
         * Live analytics and charts (Recharts).
-        * **Active Scan Queue:** Real-time view of queued targets with controls to **Reorder**, **Remove**, or **Purge** the queue.
+        * **Active Scan Queue:** Real-time view of queued targets. Each user can **Reorder**, **Remove**, or **Clear** only their own scan queue.
     * **Monitoring Server:** (Admin Only) Real-time CPU/RAM usage charts and active process list.
-    * **Target Management:** Create, Edit, Delete, **Stop/Resume** scans.
+    * **Target Management:** Create, Edit, Delete, **Stop/Resume** scans, with target owner visibility for admins.
     * **Configurable Scans:** Toggle modules like `Alterx`, `Waymore` or `Crawling` per target.
     * **Asset Explorer:** Advanced data grid with Filtering, Search, **Tabs for Assets vs URLs**.
     * **Intel Filtering:** Specific **JS Filtering** and **Multi-Source Filtering** (Wayback, Gau, Katana, Waymore) with **Sorting** capabilities.
     * **Data Import/Export:** Export targets with all related data (Assets, URLs) and import them back with duplicate handling.
-    * **User Management:** Admin-only panel to manage team access.
-    * **Account:** Self-service account page (view profile + change password).
+    * **User Management:** Admin-only panel to manage team access, roles, status, and per-user scan slot limits.
+    * **Account:** Self-service account page (view profile, change password, subfinder provider keys, and personal scan queue controls).
 
 ---
 
@@ -48,18 +48,41 @@ The platform enforces **Role-Based Access Control** across the API and UI.
 
 ### Roles
 - **admin**
-  - Full access to all targets and operations.
+  - Full visibility across all targets, users, and system-level data.
   - **Only role allowed** to manage users (`/api/users/*`).
+  - Can create and manage their own targets and personal queue.
+  - Admin-owned scans are not limited by the per-user scan slot cap, but the global engine capacity still applies.
 - **viewer** (default)
   - Can only see and operate on targets **created by the same user**.
   - Can manage their own account via `/api/me` (view profile, change password, delete account).
+  - Can view and reorder only their own scan queue.
 
 ### Target Ownership
 Each `Target` has a `created_by_user_id` owner.
-- **admin**: can access all targets
-- **viewer**: can access only targets where `created_by_user_id == current_user_id`
+- **admin**: can access all targets and sees the target owner in the Targets table.
+- **viewer**: can access only targets where `created_by_user_id == current_user_id`.
+
+Target uniqueness is tenant-scoped:
+- The same `root_domain` can exist under different users.
+- The same user cannot create the same `root_domain` twice.
+- Assets are unique per target (`target_id + value`) instead of globally unique.
 
 > Note: targets created before this feature may have `created_by_user_id = 0`. Those targets are only visible to **admin** until you backfill ownership.
+
+### Per-User Queues & Scan Slots
+The scanner uses Redis-backed queues isolated per account:
+
+```text
+discovery_tasks:user:<user_id>
+```
+
+Each user has a configurable `max_concurrent_scans` value managed by admins from the user management UI.
+
+Example:
+- If a viewer has `max_concurrent_scans = 3` and starts 5 scans, 3 scans can run immediately and 2 remain queued.
+- The viewer can reorder, remove, or clear only their own queued jobs from the Account page.
+- Admins can edit each user's slot limit from the Add/Edit User modal.
+- Admins still have global target visibility, but queue controls in the Account page operate on the current admin user's own queue.
 
 ## 🛠️ Arsenal (Toolchain)
 
@@ -69,7 +92,7 @@ The platform integrates industry-standard security tools within its isolated env
   * `subfinder`, `assetfinder` (Always enabled)
   * `cero` (**Optional per target**) - Scrape domain names from SSL certificates
   * `crtsh` (**Optional per target**) - Query crt.sh API for subdomain discovery
-  * `puredns` (**Optional per target**) - Subdomain bruteforce (wordlist-based) using trusted resolvers (**only live/resolved** results are stored)
+  * `puredns` (**Optional per target**) - Subdomain bruteforce (wordlist-based) using trusted resolvers (**only live/resolved** results are stored). Puredns is an optional Discovery step and does not gate Probing.
 * **Permutation/Mutation:** `alterx` (Optional per target)
 * **Validation/Resolution:** `dnsx` (w/ fixed resolvers)
 * **Probing:** `httpx` (Rich JSON output, WAF/CDN detection)
@@ -166,6 +189,16 @@ We are following a multi-phase development roadmap.
 * [x] **V2.1 Architecture:** Upgraded core engine to **Hunt Engine v2.1** with optimized concurrency, panic recovery, and auto-healing locks.
 * [x] **Kill Switch V2:** Enhanced process management to reliably track and terminate complex tool chains (pipes, sub-processes).
 * [x] **UI Integration:** Export buttons integrated directly into the Asset and URL tables with matching styles.
+
+### ✅ Phase 5.1: SaaS Multi-Tenant Queue Isolation (COMPLETED)
+**Goal:** Prepare the platform for multi-user commercial deployment with isolated workspaces and controlled scan capacity.
+* [x] **Per-User Queues:** Moved scan scheduling from one shared Redis list to user-specific queues (`discovery_tasks:user:<id>`).
+* [x] **Scan Slot Limits:** Added `max_concurrent_scans` to users so admins can define how many scans each viewer can run concurrently.
+* [x] **Self-Service Queue Control:** Users can reorder, remove, or clear their own queued scan jobs from the Account page.
+* [x] **Admin User Controls:** Admins can set and edit scan slot limits when creating or updating users.
+* [x] **Target Owner Visibility:** Admin target views show which user owns each target.
+* [x] **Tenant-Scoped Uniqueness:** Targets are unique per user, and assets are unique per target, enabling different users to scan the same root domain independently.
+* [x] **Puredns/Probing Fix:** Puredns remains an optional discovery enhancer and no longer affects whether Probing can run.
 
 ---
 
@@ -337,6 +370,29 @@ This platform lets **each user** manage their own subfinder provider keys **from
 > Note: UI currently supports **one API key string per provider** (it maps to `provider: ["API_KEY"]` in subfinder).  
 > Some providers support more complex entries; we can extend the UI later if needed.
 
+### 👥 User Management & Scan Slots
+Admins manage users from **System Config → Users**.
+
+When creating or editing a user, admins can configure:
+- **Username**
+- **Password** (on create, or when changing credentials)
+- **Role** (`admin` or `viewer`)
+- **Account status** (`active` / inactive)
+- **Scan Queue Slots** (`max_concurrent_scans`)
+
+`max_concurrent_scans` controls how many scans a non-admin user can run at the same time. Extra scan requests remain in that user's Redis queue until capacity is available.
+
+### 📋 Personal Scan Queue
+Each user can manage their own scan queue from the **Account** page.
+
+Available actions:
+- Move a queued scan to the top of the user's queue
+- Move a queued scan to the bottom of the user's queue
+- Remove a queued scan
+- Clear the user's queued scans
+
+Queue operations are tenant-scoped. A viewer cannot see or mutate another user's queue. Admins can see all targets globally, but Account queue controls apply to the currently logged-in admin user's own queue.
+
 #### Exporting Targets
 1. Click **Export** button on Targets page
 2. Select targets to export (or leave empty to export all)
@@ -399,7 +455,7 @@ The platform automatically ensures scan modules execute in the correct order:
 2. **PROBING** - HTTP probing and fingerprinting
 3. **CRAWLING** - URL and endpoint discovery
 
-This order is enforced automatically, even if modules are specified in a different order.
+This order is enforced automatically, even if modules are specified in a different order. Optional Discovery tools such as `puredns` enrich the Discovery phase only; they do not control whether `PROBING` or `CRAWLING` can run.
 
 ### Crash-Safe Resume (Persistent Checkpoints)
 
@@ -431,6 +487,11 @@ Each target scan is **checkpointed** into the database so you can safely **Pause
 * `GET /api/me/subfinder/providers` - List current user's subfinder provider configs
 * `PUT /api/me/subfinder/providers` - Replace current user's provider list (used by UI Save)
 * `DELETE /api/me/subfinder/providers/:provider` - Remove a single provider for current user
+* `GET /api/queue` - List the current user's queued scan jobs
+* `DELETE /api/queue` - Clear the current user's queued scan jobs
+* `DELETE /api/queue/:index` - Remove a queued scan job owned by the current user
+* `POST /api/queue/:index/move-top` - Move a queued scan to the top of the current user's queue
+* `POST /api/queue/:index/move-bottom` - Move a queued scan to the bottom of the current user's queue
 
 ### Targets
 * `GET /api/targets` - List all targets (paginated)
@@ -459,8 +520,8 @@ Each target scan is **checkpointed** into the database so you can safely **Pause
 
 ### Users (Admin Only)
 * `GET /api/users` - List users
-* `POST /api/users` - Create user
-* `PATCH /api/users/:id` - Update user
+* `POST /api/users` - Create user, including role, status, and `max_concurrent_scans`
+* `PATCH /api/users/:id` - Update user, including role, status, and `max_concurrent_scans`
 * `DELETE /api/users/:id` - Delete user
 
 #### Assets Filters (Query Params)
@@ -503,8 +564,8 @@ You can combine these query params on `GET /api/targets/:id/assets`:
 ```
 
 ### Import Options
-* **Skip Existing:** If enabled, targets with matching `root_domain` are skipped
-* **Duplicate Handling:** Assets and URLs are automatically deduplicated during import
+* **Skip Existing:** If enabled, targets with matching `root_domain` for the same user are skipped
+* **Duplicate Handling:** Assets and URLs are automatically deduplicated during import using tenant/target-scoped uniqueness
 
 ## 🏗️ Infrastructure Components
 
@@ -530,11 +591,11 @@ You can combine these query params on `GET /api/targets/:id/assets`:
 * Auto-renewal via cron job
 * Certificate monitoring and alerts
 
-## 🔜 Next Steps (Phase 5)
+## 🔜 Next Steps (Phase 6)
 
 We are now transitioning to **Vulnerability Scanning**.
 
-**Phase 5: Vulnerability Scanning (Backend)**
+**Phase 6: Vulnerability Scanning (Backend)**
 * Integrate **Nuclei** for template-based scanning.
 * Implement **Smart Filtering** (e.g., run WordPress templates only on WordPress sites).
 * Immediate Telegram alerts for **Critical/High** vulnerabilities.

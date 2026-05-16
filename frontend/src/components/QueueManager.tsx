@@ -1,15 +1,32 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getQueue, removeFromQueue, moveQueueItem, clearQueue } from '../api/system';
-import { List, Trash2, ArrowUp, Activity } from 'lucide-react';
+import { getQueue, removeFromQueue, moveQueueItem, clearQueue, type QueueItem } from '../api/system';
+import { List, Trash2, ArrowUp, ArrowDown, Activity } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-export const QueueManager = () => {
+interface Props {
+  title?: string;
+  description?: string;
+  compact?: boolean;
+}
+
+const describeQueueItem = (item: QueueItem) => {
+  if (item.target_name || item.root_domain || item.module) {
+    return `${item.module || 'JOB'}:${item.target_name || item.root_domain || item.target_id || 'UNKNOWN'}`;
+  }
+  return item.payload;
+};
+
+export const QueueManager = ({
+  title = 'My Scan Queue',
+  description = 'Queued scans for the current account.',
+  compact = false,
+}: Props) => {
   const queryClient = useQueryClient();
 
-  const { data: queue, isLoading } = useQuery({
+  const { data: queue = [], isLoading } = useQuery({
     queryKey: ['queue'],
     queryFn: getQueue,
-    refetchInterval: 5000 // Auto-refresh queue every 5s
+    refetchInterval: 5000,
   });
 
   const removeMutation = useMutation({
@@ -18,10 +35,7 @@ export const QueueManager = () => {
       queryClient.invalidateQueries({ queryKey: ['queue'] });
       toast.success('Item removed from queue');
     },
-    onError: (err: any) => {
-      const errorMessage = err.response?.data?.error || 'Failed to remove item';
-      toast.error(errorMessage);
-    }
+    onError: (err: any) => toast.error(err.response?.data?.error || 'Failed to remove item'),
   });
 
   const clearMutation = useMutation({
@@ -30,87 +44,94 @@ export const QueueManager = () => {
       queryClient.invalidateQueries({ queryKey: ['queue'] });
       toast.success('Queue cleared');
     },
-    onError: (err: any) => {
-      const errorMessage = err.response?.data?.error || 'Failed to clear queue';
-      toast.error(errorMessage);
-    }
+    onError: (err: any) => toast.error(err.response?.data?.error || 'Failed to clear queue'),
   });
 
   const moveMutation = useMutation({
-    mutationFn: ({ index, direction }: { index: number; direction: 'top' | 'bottom' }) => 
-      moveQueueItem(index, direction),
+    mutationFn: ({ index, direction }: { index: number; direction: 'top' | 'bottom' }) => moveQueueItem(index, direction),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['queue'] });
       toast.success('Queue priority updated');
     },
-    onError: (err: any) => {
-      const errorMessage = err.response?.data?.error || 'Failed to move item';
-      toast.error(errorMessage);
-    }
+    onError: (err: any) => toast.error(err.response?.data?.error || 'Failed to move item'),
   });
 
-  if (isLoading) return <div className="hack-box p-6 animate-pulse">LOADING QUEUE DATA...</div>;
+  if (isLoading) {
+    return <div className="font-mono text-hack-dim">LOADING QUEUE DATA...</div>;
+  }
 
   return (
-    <div className="hack-box flex flex-col h-full w-full">
-      <div className="p-4 border-b border-hack-border bg-black/40 flex items-center justify-between">
-        <div className="flex items-center gap-2 text-hack-primary font-mono text-sm tracking-wider uppercase">
-          <List size={16} />
-          <span>Active Scan Queue</span>
-          <span className="hack-badge ml-2 text-xs">{queue?.length || 0}</span>
+    <div className="border border-hack-border bg-black/30 p-5">
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div>
+          <h3 className="font-mono text-lg uppercase tracking-wider text-hack-primary flex items-center gap-2">
+            <List size={18} /> {title} <span className="text-hack-dim">{queue.length}</span>
+          </h3>
+          <p className="mt-1 text-xs text-hack-dim font-mono">{description}</p>
         </div>
-        
-        {queue && queue.length > 0 && (
-          <button 
-            onClick={() => { if(confirm('CLEAR ALL QUEUED ITEMS?')) clearMutation.mutate(); }}
+
+        {queue.length > 0 && (
+          <button
+            onClick={() => {
+              if (confirm('CLEAR YOUR QUEUED ITEMS?')) clearMutation.mutate();
+            }}
             className="text-hack-danger hover:text-red-400 text-xs font-mono flex items-center gap-1 transition-colors"
           >
-            <Trash2 size={12} /> PURGE ALL
+            <Trash2 size={14} /> PURGE
           </button>
         )}
       </div>
 
-      <div className="overflow-auto max-h-[400px]">
-        {queue?.length === 0 ? (
-          <div className="p-8 text-center text-hack-dim font-mono text-sm flex flex-col items-center gap-2">
-            <Activity size={24} className="opacity-50" />
-            <span>QUEUE IS EMPTY</span>
-            <span className="text-xs opacity-50">System is processing tasks in real-time</span>
-          </div>
-        ) : (
-          <table className="w-full text-left">
-            <thead className="sticky top-0 bg-black z-10">
-              <tr className="text-hack-dim text-[10px] uppercase tracking-wider border-b border-hack-border">
-                <th className="px-4 py-2 font-normal">#</th>
-                <th className="px-4 py-2 font-normal">Payload</th>
-                <th className="px-4 py-2 font-normal text-right">Actions</th>
+      {queue.length === 0 ? (
+        <div className="flex items-center gap-3 border border-dashed border-hack-border p-4 text-hack-dim font-mono text-sm">
+          <Activity size={16} /> QUEUE IS EMPTY
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left font-mono text-sm">
+            <thead>
+              <tr className="border-b border-hack-border text-hack-dim uppercase text-xs tracking-wider">
+                <th className="py-2 pr-3">#</th>
+                <th className="py-2 pr-3">Target / Job</th>
+                {!compact && <th className="py-2 pr-3">Owner</th>}
+                <th className="py-2 text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-hack-border/30">
-              {queue?.map((item, idx) => (
-                <tr key={item.index} className="hover:bg-hack-primary/5 transition-colors font-mono text-sm group">
-                  <td className="px-4 py-3 text-hack-dim">{idx + 1}</td>
-                  <td className="px-4 py-3 text-white truncate max-w-[200px]" title={item.payload}>
-                    {item.payload}
+            <tbody>
+              {queue.map((item, idx) => (
+                <tr key={`${item.index}-${item.payload}`} className="border-b border-hack-border/50">
+                  <td className="py-3 pr-3 text-hack-primary">{idx + 1}</td>
+                  <td className="py-3 pr-3">
+                    <div className="text-white">{describeQueueItem(item)}</div>
+                    <div className="mt-1 text-[11px] text-hack-dim break-all">{item.payload}</div>
                   </td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex justify-end gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
+                  {!compact && <td className="py-3 pr-3 text-hack-dim">{item.owner_username || '-'}</td>}
+                  <td className="py-3 text-right">
+                    <div className="inline-flex items-center gap-2">
                       {idx > 0 && (
-                        <button 
+                        <button
                           onClick={() => moveMutation.mutate({ index: item.index, direction: 'top' })}
                           className="p-1 hover:text-hack-primary transition-colors"
-                          title="Move to Top"
+                          title="Move to top"
                         >
-                          <ArrowUp size={14} />
+                          <ArrowUp size={16} />
                         </button>
                       )}
-                      
-                      <button 
+                      {idx < queue.length - 1 && (
+                        <button
+                          onClick={() => moveMutation.mutate({ index: item.index, direction: 'bottom' })}
+                          className="p-1 hover:text-hack-primary transition-colors"
+                          title="Move to bottom"
+                        >
+                          <ArrowDown size={16} />
+                        </button>
+                      )}
+                      <button
                         onClick={() => removeMutation.mutate(item.index)}
                         className="p-1 hover:text-hack-danger transition-colors"
                         title="Remove"
                       >
-                        <Trash2 size={14} />
+                        <Trash2 size={16} />
                       </button>
                     </div>
                   </td>
@@ -118,8 +139,8 @@ export const QueueManager = () => {
               ))}
             </tbody>
           </table>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 };

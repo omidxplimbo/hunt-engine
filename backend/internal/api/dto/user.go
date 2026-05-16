@@ -9,6 +9,8 @@ type UserResponse struct {
 	Role      string    `json:"role"`
 	IsActive  bool      `json:"is_active"`
 	CreatedAt time.Time `json:"created_at"`
+
+	MaxConcurrentScans int `json:"max_concurrent_scans"`
 }
 
 // CreateUserRequest (قبلاً در auth.go بود، اینجا هم می‌تونه باشه یا همونجا)
@@ -20,4 +22,6 @@ type UpdateUserRequest struct {
 	Password *string `json:"password"` // اختیاری (اگر خالی بود تغییر نکند)
 	Role     *string `json:"role"`
 	IsActive *bool   `json:"is_active"`
+
+	MaxConcurrentScans *int `json:"max_concurrent_scans"`
 }

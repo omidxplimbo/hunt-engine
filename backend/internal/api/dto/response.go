@@ -22,13 +22,17 @@ type TargetResponse struct {
 	// 👇 optional port scan during discovery
 	UsePortscan bool `json:"use_portscan"`
 	// 👇 ابزارهای جدید برای فاز اول (Discovery)
-	UseCero  bool     `json:"use_cero"`
-	UseCrtsh bool     `json:"use_crtsh"`
-	UsePuredns bool   `json:"use_puredns"`
-	UseAbusedb bool   `json:"use_abusedb"`
+	UseCero          bool        `json:"use_cero"`
+	UseCrtsh         bool        `json:"use_crtsh"`
+	UsePuredns       bool        `json:"use_puredns"`
+	UseAbusedb       bool        `json:"use_abusedb"`
 	PurednsWordlists interface{} `json:"puredns_wordlists"`
 
-	ScanModules string `json:"scan_modules"`
+	ScanModules       string `json:"scan_modules"`
+	CreatedByUserID   uint   `json:"created_by_user_id"`
+	CreatedByUsername string `json:"created_by_username"`
+
+	OwnerUsername string `json:"owner_username"`
 }
 
 // ... (بقیه DTOها بدون تغییر)

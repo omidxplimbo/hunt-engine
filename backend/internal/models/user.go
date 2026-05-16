@@ -22,5 +22,6 @@ type User struct {
 	Role string `gorm:"default:'viewer'" json:"role"` // admin, viewer
 
 	// Active / Deactive: اگر false باشد کاربر نمی‌تواند وارد سیستم شود و به API دسترسی ندارد
-	IsActive bool `gorm:"default:true" json:"is_active"`
+	IsActive           bool `gorm:"default:true" json:"is_active"`
+	MaxConcurrentScans int  `gorm:"default:1" json:"max_concurrent_scans"`
 }

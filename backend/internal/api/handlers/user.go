@@ -33,11 +33,12 @@ func GetUsers(c *fiber.Ctx) error {
 	var response []dto.UserResponse
 	for _, u := range users {
 		response = append(response, dto.UserResponse{
-			ID:        u.ID,
-			Username:  u.Username,
-			Role:      u.Role,
-			IsActive:  u.IsActive,
-			CreatedAt: u.CreatedAt,
+			ID:                 u.ID,
+			Username:           u.Username,
+			Role:               u.Role,
+			IsActive:           u.IsActive,
+			CreatedAt:          u.CreatedAt,
+			MaxConcurrentScans: u.MaxConcurrentScans,
 		})
 	}
 
@@ -56,10 +57,14 @@ func AddUser(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to hash password"})
 	}
 	user := models.User{
-		Username: req.Username,
-		Password: hashedPassword,
-		Role:     req.Role,
-		IsActive: true,
+		Username:           req.Username,
+		Password:           hashedPassword,
+		Role:               req.Role,
+		IsActive:           true,
+		MaxConcurrentScans: req.MaxConcurrentScans,
+	}
+	if user.MaxConcurrentScans < 1 {
+		user.MaxConcurrentScans = 1
 	}
 	if user.Role == "" {
 		user.Role = "viewer"
@@ -116,6 +121,12 @@ func UpdateUser(c *fiber.Ctx) error {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to hash password"})
 		}
 		user.Password = hash
+	}
+	if req.MaxConcurrentScans != nil {
+		if *req.MaxConcurrentScans < 1 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "max_concurrent_scans must be at least 1"})
+		}
+		user.MaxConcurrentScans = *req.MaxConcurrentScans
 	}
 	if req.IsActive != nil {
 		// جلوگیری از دی‌اکتیو کردن خود ادمین لاگین شده (برای جلوگیری از قفل شدن)

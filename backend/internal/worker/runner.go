@@ -29,7 +29,6 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/telegram"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/discovery"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/utils"
-	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
@@ -270,18 +269,16 @@ func Start() {
 		}
 
 		// 2. Pop from Redis (with timeout to allow re-checking concurrency)
-		result, err := redisq.Client.BLPop(context.Background(), 5*time.Second, redisq.QueueName).Result()
-		if err == redis.Nil {
-			// Timeout (no jobs or just timeout), loop back
-			continue
-		}
+		payload, err := popNextEligiblePayload(max)
 		if err != nil {
-			log.Printf("❌ Error popping from Redis: %v\n", err)
+			log.Printf("❌ Error selecting Redis job: %v\n", err)
 			time.Sleep(5 * time.Second)
 			continue
 		}
-
-		payload := result[1]
+		if payload == "" {
+			time.Sleep(1 * time.Second)
+			continue
+		}
 
 		// CRITICAL FIX: Update status to SCANNING *synchronously* before spawning goroutine.
 		// This prevents the race condition where the loop continues and pops another item
@@ -299,6 +296,106 @@ func Start() {
 
 		go processJobDispatcher(payload)
 	}
+}
+
+func parsePayloadTargetID(payload string) (uint, bool) {
+	parts := strings.SplitN(payload, ":", 3)
+	if len(parts) < 3 {
+		return 0, false
+	}
+	id, err := strconv.ParseUint(parts[1], 10, 64)
+	if err != nil || id == 0 {
+		return 0, false
+	}
+	return uint(id), true
+}
+
+func countActiveScansForUser(userID uint) int64 {
+	var count int64
+	database.DB.Model(&models.Target{}).
+		Where("created_by_user_id = ? AND status = ?", userID, "SCANNING").
+		Count(&count)
+	return count
+}
+
+func userHasFreeScanSlot(user models.User) bool {
+	if strings.ToLower(strings.TrimSpace(user.Role)) == "admin" {
+		return true
+	}
+	limit := user.MaxConcurrentScans
+	if limit < 1 {
+		limit = 1
+	}
+	return countActiveScansForUser(user.ID) < int64(limit)
+}
+
+func removeQueuePayloadAt(ctx context.Context, key string, index int, payload string) error {
+	placeholder := fmt.Sprintf("__RUNNING__:%d:%d", time.Now().UnixNano(), index)
+	current, err := redisq.Client.LIndex(ctx, key, int64(index)).Result()
+	if err != nil {
+		return err
+	}
+	if current != payload {
+		return fmt.Errorf("queue changed while selecting job")
+	}
+	if err := redisq.Client.LSet(ctx, key, int64(index), placeholder).Err(); err != nil {
+		return err
+	}
+	return redisq.Client.LRem(ctx, key, 1, placeholder).Err()
+}
+
+func popNextEligiblePayload(maxGlobal int) (string, error) {
+	ctx := context.Background()
+	keys, err := redisq.UserQueueKeys(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	// Legacy fallback: drain old global queue if it still has jobs from before this migration.
+	if n, _ := redisq.Client.LLen(ctx, redisq.QueueName).Result(); n > 0 {
+		keys = append(keys, redisq.QueueName)
+	}
+
+	for _, key := range keys {
+		items, err := redisq.Client.LRange(ctx, key, 0, -1).Result()
+		if err != nil {
+			return "", err
+		}
+		for idx, payload := range items {
+			targetID, ok := parsePayloadTargetID(payload)
+			if !ok {
+				_ = removeQueuePayloadAt(ctx, key, idx, payload)
+				continue
+			}
+
+			var target models.Target
+			if err := database.DB.First(&target, targetID).Error; err != nil {
+				_ = removeQueuePayloadAt(ctx, key, idx, payload)
+				continue
+			}
+			if target.Status != "QUEUED" {
+				_ = removeQueuePayloadAt(ctx, key, idx, payload)
+				continue
+			}
+
+			var owner models.User
+			if err := database.DB.First(&owner, target.CreatedByUserID).Error; err != nil {
+				continue
+			}
+			if !userHasFreeScanSlot(owner) {
+				break
+			}
+			if countActiveScans() >= int64(maxGlobal) {
+				return "", nil
+			}
+			if err := removeQueuePayloadAt(ctx, key, idx, payload); err != nil {
+				return "", err
+			}
+			return payload, nil
+		}
+	}
+
+	return "", nil
 }
 
 func countActiveScans() int64 {
@@ -1796,7 +1893,7 @@ func triggerNextModule(targetID uint, rootDomain, currentModule string) {
 		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{"status": "QUEUED", "stop_requested": false})
 
 		payload := fmt.Sprintf("%s:%d:%s", nextModule, targetID, rootDomain)
-		redisq.Client.RPush(context.Background(), redisq.QueueName, payload)
+		redisq.Client.RPush(context.Background(), redisq.QueueNameForUser(target.CreatedByUserID), payload)
 	} else {
 		log.Printf("🏁 Chain Complete for %s.\n", rootDomain)
 		now := time.Now()
