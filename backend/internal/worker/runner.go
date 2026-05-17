@@ -28,6 +28,7 @@ import (
 	probing "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/probing"
 	workerruntime "github.com/omidxplimbo/hunt-engine/backend/internal/worker/runtime"
 	workerstate "github.com/omidxplimbo/hunt-engine/backend/internal/worker/state"
+	workertypes "github.com/omidxplimbo/hunt-engine/backend/internal/worker/types"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/utils"
 	"gorm.io/gorm"
 )
@@ -93,27 +94,10 @@ func acquireTargetLock(targetID uint) (func(), bool) {
 }
 
 // HttpxResult ساختار برای پارس کردن خروجی JSON
-type HttpxResult struct {
-	Input         string   `json:"input"`
-	URL           string   `json:"url"`
-	StatusCode    int      `json:"status_code"`
-	Title         string   `json:"title"`
-	ContentLength int64    `json:"content_length"`
-	A             []string `json:"a"`
-	WebServer     string   `json:"webserver"`
-	CDNName       string   `json:"cdn_name"`
-	Technologies  []string `json:"tech"`
-	BodyHash      string   `json:"body_hash"`
-	HeaderHash    string   `json:"header_hash"`
-	ResponseTime  string   `json:"time"`
-	RawJSON       string   `json:"-"`
-}
+type HttpxResult = workertypes.HTTPXResult
 
 // DnsxResult ساختار خروجی JSON ابزار dnsx
-type DnsxResult struct {
-	Host string   `json:"host"`
-	A    []string `json:"a"`
-}
+type DnsxResult = workertypes.DNSXResult
 
 // Start موتور اصلی کارگر را روشن می‌کند.
 func Start() {
@@ -1172,15 +1156,7 @@ func mergeUnique(slice1, slice2 []string) []string {
 }
 
 // CdnCheckResult ساختار نتیجه cdncheck
-type CdnCheckResult struct {
-	IP        string `json:"ip"`
-	IsCDN     bool   `json:"cdn"`
-	CDNName   string `json:"cdn_name"`
-	IsWAF     bool   `json:"waf"`
-	WAFName   string `json:"waf_name"`
-	IsCloud   bool   `json:"cloud"`
-	CloudName string `json:"cloud_name"`
-}
+type CdnCheckResult = workertypes.CDNCheckResult
 
 // runCdnCheckForLiveAssets چک کردن CDN برای همه IPهای لایو که dnsx resolve کرده
 func runCdnCheckForLiveAssets(targetID uint, dnsxResults map[string][]string, inputFile string) {
