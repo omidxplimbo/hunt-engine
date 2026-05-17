@@ -25,6 +25,7 @@ import (
 	workerhelpers "github.com/omidxplimbo/hunt-engine/backend/internal/worker/helpers"
 	crawlingphase "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/crawling"
 	passivetools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/passive"
+	discoverypersist "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/persistence"
 	discoverytools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/tools"
 	probing "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/probing"
 	workerruntime "github.com/omidxplimbo/hunt-engine/backend/internal/worker/runtime"
@@ -1121,248 +1122,18 @@ type CdnCheckResult = workertypes.CDNCheckResult
 
 // runCdnCheckForLiveAssets چک کردن CDN برای همه IPهای لایو که dnsx resolve کرده
 func runCdnCheckForLiveAssets(targetID uint, dnsxResults map[string][]string, inputFile string) {
-	if len(dnsxResults) == 0 {
-		log.Printf("ℹ️ No live assets found for CDN check.\n")
-		return
-	}
-
-	log.Printf("🔍 Starting CDN check for all live IPs from DNS validation...\n")
-
-	// جمع‌آوری تمام IPهای منحصر به فرد از dnsxResults
-	ipSet := make(map[string]bool)
-	ipToAssets := make(map[string][]string) // IP -> []AssetValue (subdomain)
-
-	for subdomain, ips := range dnsxResults {
-		for _, ip := range ips {
-			if ip != "" {
-				ipSet[ip] = true
-				ipToAssets[ip] = append(ipToAssets[ip], subdomain)
-			}
-		}
-	}
-
-	if len(ipSet) == 0 {
-		log.Printf("ℹ️ No IPs found for CDN check.\n")
-		return
-	}
-
-	// تبدیل set به slice برای cdncheck
-	ipList := make([]string, 0, len(ipSet))
-	for ip := range ipSet {
-		ipList = append(ipList, ip)
-	}
-
-	log.Printf("🔍 Running cdncheck on %d unique IPs from %d live subdomains...\n", len(ipList), len(dnsxResults))
-
-	// اجرای cdncheck
-	cdnResults := runCdnCheck(targetID, ipList, inputFile)
-	if len(cdnResults) == 0 {
-		log.Printf("⚠️ No CDN check results returned.\n")
-		return
-	}
-
-	// پیدا کردن assets از دیتابیس بر اساس subdomain
-	var allAssets []models.Asset
-	database.DB.Where("target_id = ? AND is_live = ?", targetID, true).Find(&allAssets)
-
-	assetMap := make(map[string]*models.Asset) // subdomain -> Asset
-	for i := range allAssets {
-		assetMap[allAssets[i].Value] = &allAssets[i]
-	}
-
-	// به‌روزرسانی assets با اطلاعات CDN/WAF/CLOUD از cdncheck
-	// برای هر asset، اگر حداقل یکی از IPهایش پشت CDN/WAF/CLOUD باشد، فیلدهای مربوطه را ذخیره می‌کنیم
-	updatedCount := 0
-
-	for subdomain, ips := range dnsxResults {
-		asset, exists := assetMap[subdomain]
-		if !exists {
-			continue
-		}
-
-		hasCDN := false
-		cdnName := ""
-		hasWAF := false
-		wafName := ""
-		hasCloud := false
-		cloudName := ""
-
-		// چک کردن همه IPهای این asset
-		for _, ip := range ips {
-			if cdnInfo, found := cdnResults[ip]; found {
-				if cdnInfo.IsCDN {
-					hasCDN = true
-					if cdnInfo.CDNName != "" && cdnName == "" {
-						cdnName = cdnInfo.CDNName
-					}
-				}
-				if cdnInfo.IsWAF {
-					hasWAF = true
-					if cdnInfo.WAFName != "" && wafName == "" {
-						wafName = cdnInfo.WAFName
-					}
-				}
-				if cdnInfo.IsCloud {
-					hasCloud = true
-					if cdnInfo.CloudName != "" && cloudName == "" {
-						cloudName = cdnInfo.CloudName
-					}
-				}
-			}
-		}
-
-		// به‌روزرسانی فیلدهای cdncheck/cdncheck_name و wafcheck/wafcheck_name و cloudcheck/cloudcheck_name
-		updates := make(map[string]interface{})
-		if asset.Cdncheck != hasCDN {
-			updates["cdncheck"] = hasCDN
-		}
-		if hasCDN && asset.CdncheckName != cdnName {
-			updates["cdncheck_name"] = cdnName
-		} else if !hasCDN && asset.CdncheckName != "" {
-			updates["cdncheck_name"] = ""
-		}
-
-		if asset.Wafcheck != hasWAF {
-			updates["wafcheck"] = hasWAF
-		}
-		if hasWAF && asset.WafcheckName != wafName {
-			updates["wafcheck_name"] = wafName
-		} else if !hasWAF && asset.WafcheckName != "" {
-			updates["wafcheck_name"] = ""
-		}
-
-		if asset.Cloudcheck != hasCloud {
-			updates["cloudcheck"] = hasCloud
-		}
-		if hasCloud && asset.CloudcheckName != cloudName {
-			updates["cloudcheck_name"] = cloudName
-		} else if !hasCloud && asset.CloudcheckName != "" {
-			updates["cloudcheck_name"] = ""
-		}
-
-		if len(updates) > 0 {
-			database.DB.Model(asset).Updates(updates)
-			updatedCount++
-		}
-	}
-
-	log.Printf("✅ CDN check completed. Updated %d assets with cdncheck information.\n", updatedCount)
+	discoverypersist.RunCDNCheckForLiveAssets(discoverypersist.Context{
+		TargetID:   targetID,
+		RunCommand: runCommandWithKillSwitch,
+	}, dnsxResults, inputFile)
 }
 
 // runCdnCheck اجرای cdncheck روی لیست IPها
 func runCdnCheck(targetID uint, ips []string, inputFile string) map[string]CdnCheckResult {
-	if len(ips) == 0 {
-		return make(map[string]CdnCheckResult)
-	}
-
-	// نوشتن IPها در فایل
-	if err := utils.WriteSliceToFile(inputFile, ips); err != nil {
-		log.Printf("❌ Error writing cdncheck input file: %v\n", err)
-		return make(map[string]CdnCheckResult)
-	}
-
-	// اجرای cdncheck با فلگ‌های صحیح: -i برای input file و -j برای JSON output به stdout
-	log.Printf("🔍 Running cdncheck on %d IPs...\n", len(ips))
-	output, err := runCommandWithKillSwitch(targetID, "cdncheck",
-		"-i", inputFile,
-		"-j",
-		"-silent",
-		"-nc", // no-color برای جلوگیری از ANSI codes در خروجی
-	)
-	if err != nil {
-		if err.Error() != "process killed by user request" {
-			log.Printf("⚠️ Cdncheck error: %v\n", err)
-		}
-		return make(map[string]CdnCheckResult)
-	}
-
-	if len(output) == 0 {
-		log.Printf("⚠️ Cdncheck returned empty output.\n")
-		return make(map[string]CdnCheckResult)
-	}
-
-	// خواندن نتایج از stdout
-	results := make(map[string]CdnCheckResult)
-	lines := strings.Split(string(output), "\n")
-	parsedCount := 0
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		// فقط خطوطی که با { شروع می‌شوند JSON هستند (خطوط info/error معمولاً این فرمت را ندارند)
-		if !strings.HasPrefix(line, "{") {
-			continue
-		}
-
-		var rawResult map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &rawResult); err != nil {
-			// خطا در parse کردن JSON - این خط احتمالاً info message است
-			continue
-		}
-
-		ip, ok := rawResult["ip"].(string)
-		if !ok || ip == "" {
-			continue
-		}
-
-		// merge if we already saw this ip with another detection type
-		result := results[ip]
-		result.IP = ip
-
-		// CDN
-		if cdnVal, exists := rawResult["cdn"]; exists {
-			switch v := cdnVal.(type) {
-			case bool:
-				result.IsCDN = result.IsCDN || v
-			case string:
-				result.IsCDN = result.IsCDN || (v == "true" || v == "1" || v == "yes")
-			}
-		}
-		if cdnName, ok := rawResult["cdn_name"].(string); ok && cdnName != "" && result.CDNName == "" {
-			result.CDNName = cdnName
-		}
-
-		// WAF
-		if wafVal, exists := rawResult["waf"]; exists {
-			switch v := wafVal.(type) {
-			case bool:
-				result.IsWAF = result.IsWAF || v
-			case string:
-				result.IsWAF = result.IsWAF || (v == "true" || v == "1" || v == "yes")
-			}
-		}
-		if wafName, ok := rawResult["waf_name"].(string); ok && wafName != "" && result.WAFName == "" {
-			result.WAFName = wafName
-		}
-
-		// CLOUD
-		if cloudVal, exists := rawResult["cloud"]; exists {
-			switch v := cloudVal.(type) {
-			case bool:
-				result.IsCloud = result.IsCloud || v
-			case string:
-				result.IsCloud = result.IsCloud || (v == "true" || v == "1" || v == "yes")
-			}
-		}
-		if cloudName, ok := rawResult["cloud_name"].(string); ok && cloudName != "" && result.CloudName == "" {
-			result.CloudName = cloudName
-		}
-
-		// ذخیره همه نتایج (چه CDN باشد چه نباشد) تا بتوانیم تشخیص دهیم
-		results[ip] = result
-		if result.IsCDN || result.IsWAF || result.IsCloud {
-			parsedCount++
-		}
-	}
-
-	if parsedCount > 0 {
-		log.Printf("✅ Parsed %d technology results from cdncheck output.\n", parsedCount)
-	}
-
-	return results
+	return discoverypersist.RunCDNCheck(discoverypersist.Context{
+		TargetID:   targetID,
+		RunCommand: runCommandWithKillSwitch,
+	}, ips, inputFile)
 }
 
 // =================================================================
