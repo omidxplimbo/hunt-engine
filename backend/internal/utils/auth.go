@@ -9,44 +9,43 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// کلید مخفی برای امضای توکن‌ها (در پروداکشن باید از ENV خوانده شود)
 var jwtSecret = getJwtSecret()
 
 func getJwtSecret() []byte {
 	secret := os.Getenv("JWT_SECRET")
-	if secret == "" {
-		// Fallback for development, but should panic in production
-		return []byte("super_secret_hunt_key_change_me")
+	if len(secret) < 32 {
+		panic("JWT_SECRET must be set and at least 32 characters long")
 	}
+
 	return []byte(secret)
 }
 
-// HashPassword پسورد را هش می‌کند
+// HashPassword hashes a password using bcrypt.
 func HashPassword(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
 	return string(bytes), err
 }
 
-// CheckPasswordHash پسورد وارد شده را با هش مقایسه می‌کند
+// CheckPasswordHash compares a plaintext password with a bcrypt hash.
 func CheckPasswordHash(password, hash string) bool {
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
 	return err == nil
 }
 
-// GenerateJWT یک توکن برای کاربر می‌سازد
+// GenerateJWT creates a signed JWT for a user.
 func GenerateJWT(userID uint, username, role string) (string, error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"user_id":  userID,
 		"username": username,
 		"role":     role,
-		"exp":      time.Now().Add(time.Hour * 72).Unix(), // اعتبار: ۳ روز
+		"exp":      time.Now().Add(time.Hour * 72).Unix(),
 	})
 
 	tokenString, err := token.SignedString(jwtSecret)
 	return tokenString, err
 }
 
-// ValidateToken توکن را بررسی و اطلاعات کاربر را برمی‌گرداند
+// ValidateToken validates a JWT and returns its claims.
 func ValidateToken(tokenString string) (jwt.MapClaims, error) {
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {

@@ -5,29 +5,52 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 )
 
 func RunVirusTotal(ctx Context, subdomains []string) map[string]string {
 	results := make(map[string]string)
-	apiKey := "183e25c8551f61932c61c190f8d2fc4667b82e954ada72ccef145cb4075a005e" // TODO: Move to config
+
+	apiKey := strings.TrimSpace(os.Getenv("VIRUSTOTAL_API_KEY"))
+	if apiKey == "" {
+		log.Println("⏩ Skipping VirusTotal collection: VIRUSTOTAL_API_KEY is not set")
+		return results
+	}
+
 	client := &http.Client{Timeout: 30 * time.Second}
 
-	log.Printf(" Starting VT Collection for %d subdomains.", len(subdomains))
+	log.Printf("🔎 Starting VT Collection for %d subdomains.\n", len(subdomains))
+
 	for _, domain := range subdomains {
 		if ctx.CheckStop(ctx.TargetID) {
 			return results
 		}
 
-		url := fmt.Sprintf("https://virustotal.com/vtapi/v2/domain/report?apikey=%s&domain=%s", apiKey, domain)
-		req, err := http.NewRequest("GET", url, nil)
+		domain = strings.TrimSpace(domain)
+		if domain == "" {
+			continue
+		}
+
+		requestURL := fmt.Sprintf(
+			"https://www.virustotal.com/vtapi/v2/domain/report?apikey=%s&domain=%s",
+			url.QueryEscape(apiKey),
+			url.QueryEscape(domain),
+		)
+
+		req, err := http.NewRequest("GET", requestURL, nil)
 		if err != nil {
 			log.Printf("⚠️ Failed to create VT request for %s: %v\n", domain, err)
 			continue
 		}
 
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+		req.Header.Set(
+			"User-Agent",
+			"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "+
+				"(KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+		)
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -35,19 +58,20 @@ func RunVirusTotal(ctx Context, subdomains []string) map[string]string {
 			continue
 		}
 
-		if resp.StatusCode != 200 {
-			if resp.StatusCode == 204 {
-				log.Printf("⚠️ VirusTotal Rate Limit Exceeded (204) for %s. Slowing down.\n", domain)
-			} else if resp.StatusCode != 404 {
+		if resp.StatusCode != http.StatusOK {
+			if resp.StatusCode == http.StatusNoContent {
+				log.Printf("⚠️ VirusTotal rate limit exceeded for %s. Slowing down.\n", domain)
+			} else if resp.StatusCode != http.StatusNotFound {
 				log.Printf("⚠️ VirusTotal API status %d for %s\n", resp.StatusCode, domain)
 			}
+
 			resp.Body.Close()
 			continue
 		}
 
 		var vtResp struct {
-			DetectedUrls   []interface{} `json:"detected_urls"`
-			UndetectedUrls []interface{} `json:"undetected_urls"`
+			DetectedURLs   []interface{} `json:"detected_urls"`
+			UndetectedURLs []interface{} `json:"undetected_urls"`
 		}
 
 		if err := json.NewDecoder(resp.Body).Decode(&vtResp); err != nil {
@@ -55,28 +79,42 @@ func RunVirusTotal(ctx Context, subdomains []string) map[string]string {
 			resp.Body.Close()
 			continue
 		}
+
 		resp.Body.Close()
 
 		foundCount := 0
+
 		processURLs := func(list []interface{}) {
 			for _, item := range list {
-				if arr, ok := item.([]interface{}); ok && len(arr) > 0 {
-					if u, ok := arr[0].(string); ok && u != "" {
-						u = strings.TrimSpace(u)
-						if _, exists := results[u]; !exists {
-							results[u] = "virustotal"
-							foundCount++
-						}
-					}
+				arr, ok := item.([]interface{})
+				if !ok || len(arr) == 0 {
+					continue
 				}
+
+				u, ok := arr[0].(string)
+				if !ok {
+					continue
+				}
+
+				u = strings.TrimSpace(u)
+				if u == "" {
+					continue
+				}
+
+				if _, exists := results[u]; exists {
+					continue
+				}
+
+				results[u] = "virustotal"
+				foundCount++
 			}
 		}
 
-		processURLs(vtResp.DetectedUrls)
-		processURLs(vtResp.UndetectedUrls)
+		processURLs(vtResp.DetectedURLs)
+		processURLs(vtResp.UndetectedURLs)
 
 		if foundCount > 0 {
-			log.Printf(" VirusTotal found %d new URLs for %s\n", foundCount, domain)
+			log.Printf("✅ VirusTotal found %d new URLs for %s\n", foundCount, domain)
 		}
 
 		time.Sleep(15 * time.Second)

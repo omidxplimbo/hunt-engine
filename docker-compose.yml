@@ -12,16 +12,18 @@ services:
       - "8080"
     environment:
       - DB_HOST=postgres
-      - DB_USER=hunter
-      - DB_PASSWORD=secretpassword
-      - DB_NAME=huntdb
+      - DB_USER=${DB_USER:-hunter}
+      - DB_PASSWORD=${DB_PASSWORD:?DB_PASSWORD is required}
+      - DB_NAME=${DB_NAME:-huntdb}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - PROBE_BATCH_SIZE=1000
       - TRUSTED_RESOLVERS=1.1.1.1,8.8.8.8,1.0.0.1,8.8.4.4
       # تنظیمات تلگرام (مقادیر خودت را جایگزین کردی که عالیه)
-      - TELEGRAM_BOT_TOKEN=8186397853:AAGbnh2A5AnGgju9qobtL5joh9G8SSEYGV8
-      - TELEGRAM_CHAT_ID=-1003320492297
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required and must be at least 32 characters}
+      - VIRUSTOTAL_API_KEY=${VIRUSTOTAL_API_KEY:-}
     volumes:
       # 👇 این خط برای وردلیست‌های سفارشی اضافه شد (برای آینده)
       - ./custom_wordlists:/wordlists/custom
@@ -74,11 +76,11 @@ services:
       - nginx_logs:/var/log/nginx
     environment:
       - DOMAIN_NAME=${DOMAIN_NAME:-localhost}
-      - SERVER_IP=${SERVER_IP:-109.248.160.151}
+      - SERVER_IP=${SERVER_IP:-127.0.0.1}
     command: >
       sh -c "
       if [ -z \"$$SERVER_IP\" ]; then
-        export SERVER_IP=109.248.160.151;
+        export SERVER_IP=127.0.0.1;
       fi;
       if [ -f /etc/letsencrypt/live/$${DOMAIN_NAME:-localhost}/fullchain.pem ]; then
         envsubst '$$DOMAIN_NAME $$SERVER_IP' < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf && echo 'Using SSL configuration';
@@ -108,7 +110,7 @@ services:
       - dns_cache:/var/cache/bind
     environment:
       - DOMAIN_NAME=${DOMAIN_NAME:-localhost}
-      - SERVER_IP=${SERVER_IP:-109.248.160.151}
+      - SERVER_IP=${SERVER_IP:-127.0.0.1}
     restart: unless-stopped
     # Note: When using host network mode, we can't use docker networks
     # but DNS server will be directly accessible on host IP
@@ -134,9 +136,9 @@ services:
     container_name: hunt-postgres
     image: postgres:15-alpine
     environment:
-      POSTGRES_USER: hunter
-      POSTGRES_PASSWORD: secretpassword
-      POSTGRES_DB: huntdb
+      POSTGRES_USER: ${DB_USER:-hunter}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      POSTGRES_DB: ${DB_NAME:-huntdb}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
