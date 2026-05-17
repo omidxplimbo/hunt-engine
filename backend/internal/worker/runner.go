@@ -33,6 +33,7 @@ import (
 )
 
 const DefaultBatchSize = 500
+const DefaultDNSXBatchSize = 5000
 
 // --- Monitor Logic ---
 type TaskInfo struct {
@@ -1923,27 +1924,86 @@ func logChange(tx *gorm.DB, assetID uint, field, oldVal, newVal string) error {
 }
 
 func runDnsx(targetID uint, inputFile, outputFile string) (map[string][]string, error) {
-	_, err := runCommandWithKillSwitch(targetID, "dnsx", "-l", inputFile, "-json", "-o", outputFile, "-silent", "-a", "-resp", "-threads", "50")
-	if err != nil {
-		return nil, err
-	}
 	results := make(map[string][]string)
-	file, err := os.Open(outputFile)
+
+	domains, err := utils.ReadSliceFromFile(inputFile)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return results, nil
-		}
 		return nil, err
 	}
-	defer file.Close()
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		var res DnsxResult
-		if err := json.Unmarshal([]byte(scanner.Text()), &res); err == nil && res.Host != "" {
-			results[res.Host] = res.A
-		}
+	if len(domains) == 0 {
+		return results, nil
 	}
-	return results, scanner.Err()
+
+	batchSize := getDNSXBatchSize()
+	totalBatches := (len(domains) + batchSize - 1) / batchSize
+	baseDir := filepath.Dir(outputFile)
+
+	log.Printf(" Starting DNSX validation for %d domains in %d batches (batch size: %d)\n", len(domains), totalBatches, batchSize)
+
+	for start := 0; start < len(domains); start += batchSize {
+		if checkStopRequest(targetID) {
+			return nil, fmt.Errorf("process killed by user request")
+		}
+
+		end := start + batchSize
+		if end > len(domains) {
+			end = len(domains)
+		}
+
+		batchNo := (start / batchSize) + 1
+		batchInputFile := filepath.Join(baseDir, fmt.Sprintf("dnsx_batch_%06d_input.txt", batchNo))
+		batchOutputFile := filepath.Join(baseDir, fmt.Sprintf("dnsx_batch_%06d_output.json", batchNo))
+
+		if err := utils.WriteSliceToFile(batchInputFile, domains[start:end]); err != nil {
+			return nil, err
+		}
+		_ = os.Remove(batchOutputFile)
+
+		log.Printf(" DNSX batch %d/%d: validating %d domains (%d/%d)\n", batchNo, totalBatches, end-start, end, len(domains))
+
+		_, err := runCommandWithKillSwitch(
+			targetID,
+			"dnsx",
+			"-l", batchInputFile,
+			"-json",
+			"-o", batchOutputFile,
+			"-silent",
+			"-a",
+			"-resp",
+			"-threads", "50",
+		)
+		_ = os.Remove(batchInputFile)
+		if err != nil {
+			_ = os.Remove(batchOutputFile)
+			return nil, err
+		}
+
+		file, err := os.Open(batchOutputFile)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+
+		scanner := bufio.NewScanner(file)
+		scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+		for scanner.Scan() {
+			var res DnsxResult
+			if err := json.Unmarshal([]byte(scanner.Text()), &res); err == nil && res.Host != "" {
+				results[res.Host] = res.A
+			}
+		}
+		if scanErr := scanner.Err(); scanErr != nil {
+			_ = file.Close()
+			return nil, scanErr
+		}
+		_ = file.Close()
+		_ = os.Remove(batchOutputFile)
+	}
+
+	log.Printf("✅ DNSX validation completed: %d live domains resolved from %d candidates\n", len(results), len(domains))
+	return results, nil
 }
 
 // normalizeSubdomain حذف www و normalize کردن subdomain
@@ -2521,13 +2581,18 @@ func runAlterx(targetID uint, inputFile, rootDomain string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	unique := make(map[string]bool)
 	var results []string
 	for _, line := range strings.Split(string(output), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" && strings.HasSuffix(trimmed, rootDomain) {
+		trimmed := strings.ToLower(strings.TrimSpace(line))
+		if trimmed != "" && strings.HasSuffix(trimmed, rootDomain) && !unique[trimmed] {
+			unique[trimmed] = true
 			results = append(results, trimmed)
 		}
 	}
+
+	log.Printf("✅ Alterx produced %d unique candidates for %s\n", len(results), rootDomain)
 	return results, nil
 }
 
@@ -2579,6 +2644,20 @@ func getBatchSize() int {
 	if err != nil || size <= 0 {
 		return DefaultBatchSize
 	}
+	return size
+}
+
+func getDNSXBatchSize() int {
+	envStr := os.Getenv("DNSX_BATCH_SIZE")
+	if envStr == "" {
+		return DefaultDNSXBatchSize
+	}
+
+	size, err := strconv.Atoi(envStr)
+	if err != nil || size <= 0 {
+		return DefaultDNSXBatchSize
+	}
+
 	return size
 }
 
