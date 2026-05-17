@@ -22,6 +22,7 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/telegram"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/discovery"
 	workerengine "github.com/omidxplimbo/hunt-engine/backend/internal/worker/engine"
+	workerhelpers "github.com/omidxplimbo/hunt-engine/backend/internal/worker/helpers"
 	crawlingphase "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/crawling"
 	passivetools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/passive"
 	discoverytools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/tools"
@@ -1016,10 +1017,7 @@ func runPuredns(targetID uint, rootDomain string, wordlists []string) (map[strin
 // runVirusTotalCollection collects URLs from VirusTotal API for live subdomains
 
 func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
+	return workerhelpers.Min(a, b)
 }
 
 // SubdomainSource نگه‌داری subdomain و source آن
@@ -1078,45 +1076,19 @@ func marshalJSONOrDefault(v interface{}, defaultVal string) string {
 }
 
 func parseResponseTime(timeStr string) int64 {
-	str := strings.TrimSuffix(timeStr, "ms")
-	if val, err := strconv.ParseFloat(str, 64); err == nil {
-		return int64(val)
-	}
-	return 0
+	return workerhelpers.ParseResponseTime(timeStr)
 }
 
 func shortenString(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) > maxLen {
-		return string(runes[:maxLen]) + "..."
-	}
-	return s
+	return workerhelpers.ShortenString(s, maxLen)
 }
 
 func getBatchSize() int {
-	envStr := os.Getenv("PROBE_BATCH_SIZE")
-	if envStr == "" {
-		return DefaultBatchSize
-	}
-	size, err := strconv.Atoi(envStr)
-	if err != nil || size <= 0 {
-		return DefaultBatchSize
-	}
-	return size
+	return workerhelpers.GetBatchSize(DefaultBatchSize)
 }
 
 func getDNSXBatchSize() int {
-	envStr := os.Getenv("DNSX_BATCH_SIZE")
-	if envStr == "" {
-		return DefaultDNSXBatchSize
-	}
-
-	size, err := strconv.Atoi(envStr)
-	if err != nil || size <= 0 {
-		return DefaultDNSXBatchSize
-	}
-
-	return size
+	return workerhelpers.GetDNSXBatchSize(DefaultDNSXBatchSize)
 }
 
 func readHttpxResults(filename string) (map[string]HttpxResult, error) {
@@ -1141,18 +1113,7 @@ func readHttpxResults(filename string) (map[string]HttpxResult, error) {
 }
 
 func mergeUnique(slice1, slice2 []string) []string {
-	uniqueMap := make(map[string]bool)
-	for _, v := range slice1 {
-		uniqueMap[v] = true
-	}
-	for _, v := range slice2 {
-		uniqueMap[v] = true
-	}
-	final := make([]string, 0, len(uniqueMap))
-	for k := range uniqueMap {
-		final = append(final, k)
-	}
-	return final
+	return workerhelpers.MergeUnique(slice1, slice2)
 }
 
 // CdnCheckResult ساختار نتیجه cdncheck
