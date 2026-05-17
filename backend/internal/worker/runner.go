@@ -28,6 +28,7 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/telegram"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/discovery"
+	passivetools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/passive"
 	discoverytools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/tools"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/utils"
 	"gorm.io/gorm"
@@ -2064,326 +2065,32 @@ func min(a, b int) int {
 }
 
 // SubdomainSource نگه‌داری subdomain و source آن
-type SubdomainSource struct {
-	Subdomain string
-	Source    string
-}
 
 // runPassiveCollection جمع‌آوری اطلاعات غیرفعال (Passive) از منابع مختلف
 func runPassiveCollection(targetID uint, domain string) ([]string, map[string][]string, error) {
-	// دریافت تنظیمات target
-	var target models.Target
-	if err := database.DB.First(&target, targetID).Error; err != nil {
-		log.Printf("⚠️ Failed to fetch target config: %v\n", err)
-		// استفاده از تنظیمات پیش‌فرض
-		target.UseCero = false
-		target.UseCrtsh = false
-	}
-
-	// Build per-owner subfinder provider-config (API keys) if present
-	subfinderPC, err := discovery.WriteSubfinderProviderConfigFile(targetID, target.CreatedByUserID)
-	if err != nil {
-		log.Printf("⚠️ Failed to build subfinder provider-config (user_id=%d): %v\n", target.CreatedByUserID, err)
-		subfinderPC = ""
-	}
-	if subfinderPC != "" {
-		// do not log file contents (API keys)
-		log.Printf("🔑 Subfinder provider-config loaded for user_id=%d\n", target.CreatedByUserID)
-		defer func() { _ = os.Remove(subfinderPC) }()
-	}
-
-	var wg sync.WaitGroup
-	results := make(chan SubdomainSource, 50000)
-
-	runTool := func(name string, args ...string) {
-		defer wg.Done()
-		output, err := runCommandWithKillSwitch(targetID, name, args...)
-		if err == nil {
-			for _, line := range strings.Split(string(output), "\n") {
-				normalized := normalizeSubdomain(strings.TrimSpace(line), domain)
-				if normalized != "" {
-					results <- SubdomainSource{Subdomain: normalized, Source: name}
-				}
-			}
-		} else {
-			log.Printf("❌ %s error/killed: %v\n", name, err)
-		}
-	}
-
-	// 1. ابزارهای همیشگی (Subfinder, Assetfinder)
-	wg.Add(2)
-	go func() {
-		args := []string{"-d", domain, "-silent", "-all"}
-		if subfinderPC != "" {
-			args = append(args, "-pc", subfinderPC)
-		}
-		runTool("subfinder", args...)
-	}()
-	go runTool("assetfinder", "--subs-only", domain)
-
-	// 2. ابزارهای انتخابی (Cero)
-	if target.UseCero {
-		wg.Add(1)
-		log.Printf("🔐 Starting CERO for %s (SSL certificate scraping)...\n", domain)
-		go func() {
-			defer wg.Done()
-			ceroResults := runCero(targetID, domain)
-			log.Printf("✅ CERO found %d domains for %s\n", len(ceroResults), domain)
-			for _, res := range ceroResults {
-				normalized := normalizeSubdomain(res, domain)
-				if normalized != "" {
-					results <- SubdomainSource{Subdomain: normalized, Source: "cero"}
-				}
-			}
-		}()
-	} else {
-		log.Printf("⏩ Skipping CERO for %s (Disabled in settings)\n", domain)
-	}
-
-	// 3. ابزارهای انتخابی (Crt.sh)
-	if target.UseCrtsh {
-		wg.Add(1)
-		log.Printf("🔍 Starting CRT.SH API query for %s...\n", domain)
-		go func() {
-			defer wg.Done()
-			crtshResults := runCrtsh(domain)
-			log.Printf("✅ CRT.SH found %d domains for %s\n", len(crtshResults), domain)
-			for _, res := range crtshResults {
-				normalized := normalizeSubdomain(res, domain)
-				if normalized != "" {
-					results <- SubdomainSource{Subdomain: normalized, Source: "crtsh"}
-				}
-			}
-		}()
-	} else {
-		log.Printf("⏩ Skipping CRT.SH for %s (Disabled in settings)\n", domain)
-	}
-
-	// 4. ابزار اختیاری (AbuseDB)
-	if target.UseAbusedb {
-		wg.Add(1)
-		log.Printf("😈 Starting AbuseDB scraping for %s...\n", domain)
-		go func() {
-			defer wg.Done()
-			abuseResults := runAbuseDB(targetID, domain)
-			for _, res := range abuseResults {
-				normalized := normalizeSubdomain(res, domain)
-				if normalized != "" {
-					results <- SubdomainSource{Subdomain: normalized, Source: "abusedb"}
-				}
-			}
-		}()
-	} else {
-		log.Printf("⏩ Skipping AbuseDB for %s (Disabled in settings)\n", domain)
-	}
-
-	// بستن کانال وقتی همه تمام شدند
-	go func() { wg.Wait(); close(results) }()
-
-	// جمع‌آوری نتایج در Map برای حذف تکراری‌ها و ادغام منابع
-	sourcesMap := make(map[string]map[string]bool)
-	var finalSlice []string
-
-	for res := range results {
-		if res.Subdomain != "" && strings.HasSuffix(res.Subdomain, domain) {
-			// اضافه کردن subdomain به لیست
-			if _, exists := sourcesMap[res.Subdomain]; !exists {
-				sourcesMap[res.Subdomain] = make(map[string]bool)
-				finalSlice = append(finalSlice, res.Subdomain)
-			}
-			// اضافه کردن source
-			sourcesMap[res.Subdomain][res.Source] = true
-		}
-	}
-
-	// تبدیل map[string]bool به []string برای هر ساب‌دامین
-	sourcesListMap := make(map[string][]string)
-	for subdomain, sourcesSet := range sourcesMap {
-		var sources []string
-		for source := range sourcesSet {
-			sources = append(sources, source)
-		}
-		sort.Strings(sources) // مرتب کردن برای consistency
-		sourcesListMap[subdomain] = sources
-	}
-
-	// Check if process was paused/stopped during execution
-	var t models.Target
-	database.DB.Select("status").First(&t, targetID)
-	if t.Status == "PAUSED" {
-		return finalSlice, sourcesListMap, fmt.Errorf("process killed by user request")
-	}
-
-	return finalSlice, sourcesListMap, nil
+	return passivetools.Collect(passivetools.Context{
+		TargetID: targetID,
+		Domain:   domain,
+		RunCommand: func(name string, args ...string) ([]byte, error) {
+			return runCommandWithKillSwitch(targetID, name, args...)
+		},
+		RunCombinedCommand: func(name string, args ...string) ([]byte, error) {
+			return runCommandWithKillSwitchCombined(targetID, name, args...)
+		},
+	})
 }
 
 // ---------------------------------------------------------
 // این تابع را در انتهای فایل runner.go اضافه کنید
 // ---------------------------------------------------------
 
-func runAbuseDB(targetID uint, rootDomain string) []string {
-	scriptPath := "/root/hunt-engine/backend/scripts/abusedb.sh"
-	// اطمینان از وجود فایل
-	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
-		log.Printf("❌ AbuseDB script not found at %s\n", scriptPath)
-		return []string{}
-	}
-
-	output, err := runCommandWithKillSwitchCombined(targetID, "/bin/bash", scriptPath, rootDomain)
-	if err != nil {
-		log.Printf("❌ AbuseDB Script Error: %v\nOutput: %s\n", err, string(output))
-		return []string{}
-	}
-
-	var results []string
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			results = append(results, line)
-		}
-	}
-
-	if len(results) > 0 {
-		log.Printf("😈 AbuseDB script found %d subdomains for %s\n", len(results), rootDomain)
-	} else {
-		log.Printf("⏩ AbuseDB script produced no results for %s\n", rootDomain)
-	}
-
-	return results
-}
-
 // runCero اجرای ابزار cero برای scrape کردن domain names از SSL certificates
-func runCero(targetID uint, domain string) []string {
-	output, err := runCommandWithKillSwitch(targetID, "cero", "-d", domain)
-	if err != nil {
-		log.Printf("⚠️ CERO error/killed: %v\n", err)
-		return []string{}
-	}
-
-	var results []string
-	for _, line := range strings.Split(string(output), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" {
-			results = append(results, trimmed)
-		}
-	}
-	if len(results) > 0 {
-		log.Printf("🔐 CERO scraped %d domains from SSL certificates\n", len(results))
-	}
-	return results
-}
 
 // runCrtsh استفاده از crt.sh API برای پیدا کردن subdomain ها
-func runCrtsh(rootDomain string) []string {
-	// ساخت URL برای crt.sh
-	url1 := fmt.Sprintf("https://crt.sh/?q=%%25.%s&output=json", rootDomain)
-	url2 := fmt.Sprintf("https://crt.sh/?q=%s&output=json", rootDomain)
-
-	var allResults []string
-
-	// درخواست اول: با wildcard
-	log.Printf("🔍 Querying crt.sh API (wildcard): %s\n", url1)
-	if data, err := fetchCrtshData(url1); err == nil {
-		parsed := parseCrtshJSON(data, rootDomain)
-		allResults = append(allResults, parsed...)
-		log.Printf("✅ crt.sh wildcard query returned %d domains\n", len(parsed))
-	} else {
-		log.Printf("⚠️ crt.sh wildcard query failed: %v\n", err)
-	}
-
-	// درخواست دوم: بدون wildcard
-	log.Printf("🔍 Querying crt.sh API (exact): %s\n", url2)
-	if data, err := fetchCrtshData(url2); err == nil {
-		parsed := parseCrtshJSON(data, rootDomain)
-		allResults = append(allResults, parsed...)
-		log.Printf("✅ crt.sh exact query returned %d domains\n", len(parsed))
-	} else {
-		log.Printf("⚠️ crt.sh exact query failed: %v\n", err)
-	}
-
-	// Unique کردن نتایج
-	uniqueMap := make(map[string]bool)
-	var finalResults []string
-	for _, res := range allResults {
-		res = strings.ToLower(strings.TrimSpace(res))
-		if res != "" && !uniqueMap[res] {
-			uniqueMap[res] = true
-			finalResults = append(finalResults, res)
-		}
-	}
-
-	log.Printf("🔍 CRT.SH total unique domains: %d\n", len(finalResults))
-	return finalResults
-}
 
 // fetchCrtshData دریافت داده از crt.sh API
-func fetchCrtshData(url string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("crt.sh API returned status %d", resp.StatusCode)
-	}
-
-	return ioutil.ReadAll(resp.Body)
-}
 
 // parseCrtshJSON پارس کردن JSON از crt.sh و استخراج domain names
-func parseCrtshJSON(data []byte, rootDomain string) []string {
-	var results []string
-	var jsonData []map[string]interface{}
-
-	if err := json.Unmarshal(data, &jsonData); err != nil {
-		return results
-	}
-
-	for _, item := range jsonData {
-		// استخراج common_name
-		if cn, ok := item["common_name"].(string); ok && cn != "" {
-			// حذف wildcard
-			cn = strings.TrimPrefix(cn, "*.")
-			cn = strings.TrimPrefix(cn, "\\*.")
-			results = append(results, cn)
-		}
-
-		// استخراج name_value (می‌تواند یک string یا array باشد)
-		if nv, ok := item["name_value"].(string); ok && nv != "" {
-			// name_value می‌تواند چند خطی باشد
-			for _, line := range strings.Split(nv, "\n") {
-				line = strings.TrimSpace(line)
-				if line != "" {
-					line = strings.TrimPrefix(line, "*.")
-					results = append(results, line)
-				}
-			}
-		}
-	}
-
-	// فیلتر کردن بر اساس rootDomain
-	var filtered []string
-	for _, res := range results {
-		res = strings.ToLower(strings.TrimSpace(res))
-		// بررسی اینکه با rootDomain تمام می‌شود
-		if strings.HasSuffix(res, rootDomain) {
-			filtered = append(filtered, res)
-		}
-	}
-
-	return filtered
-}
 
 func runAlterx(targetID uint, inputFile, rootDomain string) ([]string, error) {
 	return discoverytools.RunAlterx(buildDiscoveryToolContext(targetID, rootDomain), inputFile, rootDomain)
