@@ -28,6 +28,7 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/telegram"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/discovery"
+	discoverytools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/tools"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/utils"
 	"gorm.io/gorm"
 )
@@ -1923,87 +1924,20 @@ func logChange(tx *gorm.DB, assetID uint, field, oldVal, newVal string) error {
 	return tx.Create(&history).Error
 }
 
+func buildDiscoveryToolContext(targetID uint, rootDomain string) discoverytools.Context {
+	tempDir, _, _ := utils.GetTargetTempDir(targetID)
+	return discoverytools.Context{
+		TargetID:           targetID,
+		RootDomain:         rootDomain,
+		TempDir:            tempDir,
+		RunCommand:         runCommandWithKillSwitch,
+		CheckStop:          checkStopRequest,
+		NormalizeSubdomain: normalizeSubdomain,
+	}
+}
+
 func runDnsx(targetID uint, inputFile, outputFile string) (map[string][]string, error) {
-	results := make(map[string][]string)
-
-	domains, err := utils.ReadSliceFromFile(inputFile)
-	if err != nil {
-		return nil, err
-	}
-	if len(domains) == 0 {
-		return results, nil
-	}
-
-	batchSize := getDNSXBatchSize()
-	totalBatches := (len(domains) + batchSize - 1) / batchSize
-	baseDir := filepath.Dir(outputFile)
-
-	log.Printf(" Starting DNSX validation for %d domains in %d batches (batch size: %d)\n", len(domains), totalBatches, batchSize)
-
-	for start := 0; start < len(domains); start += batchSize {
-		if checkStopRequest(targetID) {
-			return nil, fmt.Errorf("process killed by user request")
-		}
-
-		end := start + batchSize
-		if end > len(domains) {
-			end = len(domains)
-		}
-
-		batchNo := (start / batchSize) + 1
-		batchInputFile := filepath.Join(baseDir, fmt.Sprintf("dnsx_batch_%06d_input.txt", batchNo))
-		batchOutputFile := filepath.Join(baseDir, fmt.Sprintf("dnsx_batch_%06d_output.json", batchNo))
-
-		if err := utils.WriteSliceToFile(batchInputFile, domains[start:end]); err != nil {
-			return nil, err
-		}
-		_ = os.Remove(batchOutputFile)
-
-		log.Printf(" DNSX batch %d/%d: validating %d domains (%d/%d)\n", batchNo, totalBatches, end-start, end, len(domains))
-
-		_, err := runCommandWithKillSwitch(
-			targetID,
-			"dnsx",
-			"-l", batchInputFile,
-			"-json",
-			"-o", batchOutputFile,
-			"-silent",
-			"-a",
-			"-resp",
-			"-threads", "50",
-		)
-		_ = os.Remove(batchInputFile)
-		if err != nil {
-			_ = os.Remove(batchOutputFile)
-			return nil, err
-		}
-
-		file, err := os.Open(batchOutputFile)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return nil, err
-		}
-
-		scanner := bufio.NewScanner(file)
-		scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-		for scanner.Scan() {
-			var res DnsxResult
-			if err := json.Unmarshal([]byte(scanner.Text()), &res); err == nil && res.Host != "" {
-				results[res.Host] = res.A
-			}
-		}
-		if scanErr := scanner.Err(); scanErr != nil {
-			_ = file.Close()
-			return nil, scanErr
-		}
-		_ = file.Close()
-		_ = os.Remove(batchOutputFile)
-	}
-
-	log.Printf("✅ DNSX validation completed: %d live domains resolved from %d candidates\n", len(results), len(domains))
-	return results, nil
+	return discoverytools.RunDNSX(buildDiscoveryToolContext(targetID, ""), inputFile, outputFile)
 }
 
 // normalizeSubdomain حذف www و normalize کردن subdomain
@@ -2039,132 +1973,7 @@ func normalizeSubdomain(subdomain, rootDomain string) string {
 // این تابع subdomain‌های لایو (resolve شده) با IP‌هایشان را برمی‌گرداند
 // خروجی: map[string][]string که key=subdomain و value=[]IP
 func runPuredns(targetID uint, rootDomain string, wordlists []string) (map[string][]string, error) {
-	if len(wordlists) == 0 {
-		return map[string][]string{}, nil
-	}
-
-	tempDir, _, err := utils.GetTargetTempDir(targetID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get temp dir: %v", err)
-	}
-
-	// ساخت فایل resolvers.txt از TRUSTED_RESOLVERS
-	resolversFile := filepath.Join(tempDir, "puredns_resolvers.txt")
-	resolversStr := os.Getenv("TRUSTED_RESOLVERS")
-	if resolversStr == "" {
-		resolversStr = "1.1.1.1,8.8.8.8,1.0.0.1,8.8.4.4" // fallback
-	}
-	resolvers := strings.Split(resolversStr, ",")
-	var cleanResolvers []string
-	for _, r := range resolvers {
-		r = strings.TrimSpace(r)
-		if r != "" {
-			cleanResolvers = append(cleanResolvers, r)
-		}
-	}
-	if err := utils.WriteSliceToFile(resolversFile, cleanResolvers); err != nil {
-		return nil, fmt.Errorf("failed to write resolvers file: %v", err)
-	}
-
-	// ساخت یک فایل موقت برای ترکیب همه وردلیست‌ها
-	combinedWordlistFile := filepath.Join(tempDir, "puredns_combined_wordlist.txt")
-	var allWords []string
-	wordSet := make(map[string]bool)
-
-	for _, wlPath := range wordlists {
-		// بررسی وجود فایل
-		if _, err := os.Stat(wlPath); os.IsNotExist(err) {
-			log.Printf("⚠️ Wordlist not found: %s, skipping...\n", wlPath)
-			continue
-		}
-
-		// خواندن وردلیست
-		content, err := os.ReadFile(wlPath)
-		if err != nil {
-			log.Printf("⚠️ Failed to read wordlist %s: %v, skipping...\n", wlPath, err)
-			continue
-		}
-
-		// پارس کردن خطوط
-		for _, line := range strings.Split(string(content), "\n") {
-			word := strings.TrimSpace(line)
-			if word != "" && !strings.HasPrefix(word, "#") && !wordSet[word] {
-				wordSet[word] = true
-				allWords = append(allWords, word)
-			}
-		}
-	}
-
-	if len(allWords) == 0 {
-		log.Printf("⚠️ No words found in wordlists, skipping puredns\n")
-		return map[string][]string{}, nil
-	}
-
-	// نوشتن وردلیست ترکیبی
-	if err := utils.WriteSliceToFile(combinedWordlistFile, allWords); err != nil {
-		return nil, fmt.Errorf("failed to write combined wordlist: %v", err)
-	}
-
-	log.Printf("🔨 Running puredns bruteforce with %d words for %s...\n", len(allWords), rootDomain)
-
-	// اجرای puredns
-	// نکته: -r برای public resolvers است. برای اینکه نیاز به فایل default trusted resolvers نداشته باشیم،
-	// از --trusted-only استفاده می‌کنیم تا فقط همین resolvers استفاده شوند.
-	// puredns bruteforce wordlist.txt domain.com -r resolvers.txt --trusted-only --quiet
-	output, err := runCommandWithKillSwitch(targetID, "puredns", "bruteforce", combinedWordlistFile, rootDomain, "-r", resolversFile, "--trusted-only", "--quiet")
-	if err != nil {
-		if err.Error() == "process killed by user request" {
-			return nil, err
-		}
-		log.Printf("⚠️ Puredns error: %v\n", err)
-		return map[string][]string{}, nil // در صورت خطا، map خالی برمی‌گردانیم
-	}
-
-	// پارس کردن خروجی (هر خط یک subdomain لایو است)
-	subdomains := []string{}
-	for _, line := range strings.Split(string(output), "\n") {
-		normalized := normalizeSubdomain(strings.TrimSpace(line), rootDomain)
-		if normalized != "" {
-			subdomains = append(subdomains, normalized)
-		}
-	}
-
-	// حالا باید IP‌های این subdomain‌ها را resolve کنیم
-	// استفاده از dnsx برای resolve کردن IP‌ها
-	results := make(map[string][]string)
-	if len(subdomains) > 0 {
-		// ساخت فایل موقت برای dnsx
-		purednsInputFile := filepath.Join(tempDir, "puredns_dnsx_input.txt")
-		if err := utils.WriteSliceToFile(purednsInputFile, subdomains); err != nil {
-			log.Printf("⚠️ Failed to write puredns input for dnsx: %v\n", err)
-			// در صورت خطا، subdomain‌ها را بدون IP برمی‌گردانیم
-			for _, subdomain := range subdomains {
-				results[subdomain] = []string{} // IP خالی، اما subdomain لایو است
-			}
-		} else {
-			// اجرای dnsx برای resolve کردن IP‌ها
-			purednsDnsxOutputFile := filepath.Join(tempDir, "puredns_dnsx_output.json")
-			dnsxResults, dnsxErr := runDnsx(targetID, purednsInputFile, purednsDnsxOutputFile)
-			if dnsxErr == nil {
-				results = dnsxResults
-			} else {
-				// در صورت خطا، subdomain‌ها را بدون IP برمی‌گردانیم
-				for _, subdomain := range subdomains {
-					results[subdomain] = []string{} // IP خالی، اما subdomain لایو است
-				}
-			}
-			_ = os.Remove(purednsInputFile)
-			_ = os.Remove(purednsDnsxOutputFile)
-		}
-	}
-
-	log.Printf("✅ Puredns found %d live subdomains for %s\n", len(results), rootDomain)
-
-	// پاکسازی فایل‌های موقت
-	_ = os.Remove(combinedWordlistFile)
-	_ = os.Remove(resolversFile)
-
-	return results, nil
+	return discoverytools.RunPureDNS(buildDiscoveryToolContext(targetID, rootDomain), rootDomain, wordlists)
 }
 
 // runVirusTotalCollection collects URLs from VirusTotal API for live subdomains
@@ -2577,23 +2386,7 @@ func parseCrtshJSON(data []byte, rootDomain string) []string {
 }
 
 func runAlterx(targetID uint, inputFile, rootDomain string) ([]string, error) {
-	output, err := runCommandWithKillSwitch(targetID, "alterx", "-l", inputFile, "-silent")
-	if err != nil {
-		return nil, err
-	}
-
-	unique := make(map[string]bool)
-	var results []string
-	for _, line := range strings.Split(string(output), "\n") {
-		trimmed := strings.ToLower(strings.TrimSpace(line))
-		if trimmed != "" && strings.HasSuffix(trimmed, rootDomain) && !unique[trimmed] {
-			unique[trimmed] = true
-			results = append(results, trimmed)
-		}
-	}
-
-	log.Printf("✅ Alterx produced %d unique candidates for %s\n", len(results), rootDomain)
-	return results, nil
+	return discoverytools.RunAlterx(buildDiscoveryToolContext(targetID, rootDomain), inputFile, rootDomain)
 }
 
 func areJSONArraysEqual(json1, json2 string) bool {
