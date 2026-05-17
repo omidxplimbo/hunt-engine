@@ -15,7 +15,6 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/discovery"
 	workerengine "github.com/omidxplimbo/hunt-engine/backend/internal/worker/engine"
-	workerhelpers "github.com/omidxplimbo/hunt-engine/backend/internal/worker/helpers"
 	crawlingphase "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/crawling"
 	discoverymerge "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/merge"
 	passivetools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/passive"
@@ -36,58 +35,6 @@ const DefaultDNSXBatchSize = 5000
 // --- Monitor Logic ---
 func GetRunningTasks() []workerruntime.TaskInfo {
 	return workerruntime.GetRunningTasks()
-}
-
-// ---------------------
-
-// subfinderProviderKeys is the default set of providers emitted by subfinder v2.11.0
-// when it generates /root/.config/subfinder/provider-config.yaml
-var subfinderProviderKeys = []string{
-	"alienvault",
-	"bevigil",
-	"bufferover",
-	"builtwith",
-	"c99",
-	"censys",
-	"certspotter",
-	"chaos",
-	"chinaz",
-	"digitalyama",
-	"dnsdb",
-	"dnsdumpster",
-	"dnsrepo",
-	"domainsproject",
-	"driftnet",
-	"facebook",
-	"fofa",
-	"fullhunt",
-	"github",
-	"intelx",
-	"leakix",
-	"merklemap",
-	"netlas",
-	"onyphe",
-	"profundis",
-	"pugrecon",
-	"quake",
-	"redhuntlabs",
-	"robtex",
-	"rsecloud",
-	"securitytrails",
-	"shodan",
-	"threatbook",
-	"virustotal",
-	"whoisxmlapi",
-	"windvane",
-	"zoomeyeapi",
-}
-
-func cleanupTargetTempDir(targetID uint) {
-	workerruntime.CleanupTargetTempDir(targetID)
-}
-
-func acquireTargetLock(targetID uint) (func(), bool) {
-	return workerengine.AcquireTargetLock(targetID)
 }
 
 // HttpxResult ساختار برای پارس کردن خروجی JSON
@@ -132,11 +79,11 @@ func Start() {
 	log.Println("👷 Worker started. Waiting for jobs...", redisq.QueueName)
 
 	// Clear stale locks from previous crashes/restarts
-	clearAllLocks()
+	workerengine.ClearAllLocks()
 
 	// Best-effort cleanup of legacy temp dirs created by tools (e.g. httpxXXXX) under /tmp.
 	// With TMPDIR redirected to per-target workspace, new ones should not be created.
-	cleanupLegacyToolTmp()
+	workerruntime.CleanupLegacyToolTmp()
 
 	for {
 		// 1. Check Max Concurrent
@@ -168,14 +115,6 @@ func Start() {
 
 		go processJobDispatcher(payload)
 	}
-}
-
-func cleanupLegacyToolTmp() {
-	workerruntime.CleanupLegacyToolTmp()
-}
-
-func clearAllLocks() {
-	workerengine.ClearAllLocks()
 }
 
 func processJobDispatcher(payload string) {
@@ -624,7 +563,7 @@ func scanSetMeta(targetID uint, meta map[string]interface{}) {
 }
 
 func triggerNextModule(targetID uint, rootDomain, currentModule string) {
-	workerstate.TriggerNextModule(targetID, rootDomain, currentModule, cleanupTargetTempDir)
+	workerstate.TriggerNextModule(targetID, rootDomain, currentModule, workerruntime.CleanupTargetTempDir)
 }
 
 func logChange(tx *gorm.DB, assetID uint, field, oldVal, newVal string) error {
@@ -661,10 +600,6 @@ func runPuredns(targetID uint, rootDomain string, wordlists []string) (map[strin
 
 // runVirusTotalCollection collects URLs from VirusTotal API for live subdomains
 
-func min(a, b int) int {
-	return workerhelpers.Min(a, b)
-}
-
 // SubdomainSource نگه‌داری subdomain و source آن
 
 // runPassiveCollection جمع‌آوری اطلاعات غیرفعال (Passive) از منابع مختلف
@@ -681,44 +616,9 @@ func runPassiveCollection(targetID uint, domain string) ([]string, map[string][]
 	})
 }
 
-// ---------------------------------------------------------
-// این تابع را در انتهای فایل runner.go اضافه کنید
-// ---------------------------------------------------------
-
-// runCero اجرای ابزار cero برای scrape کردن domain names از SSL certificates
-
-// runCrtsh استفاده از crt.sh API برای پیدا کردن subdomain ها
-
-// fetchCrtshData دریافت داده از crt.sh API
-
-// parseCrtshJSON پارس کردن JSON از crt.sh و استخراج domain names
-
 func runAlterx(targetID uint, inputFile, rootDomain string) ([]string, error) {
 	return discoverytools.RunAlterx(buildDiscoveryToolContext(targetID, rootDomain), inputFile, rootDomain)
 }
-
-func parseResponseTime(timeStr string) int64 {
-	return workerhelpers.ParseResponseTime(timeStr)
-}
-
-func shortenString(s string, maxLen int) string {
-	return workerhelpers.ShortenString(s, maxLen)
-}
-
-func getBatchSize() int {
-	return workerhelpers.GetBatchSize(DefaultBatchSize)
-}
-
-func getDNSXBatchSize() int {
-	return workerhelpers.GetDNSXBatchSize(DefaultDNSXBatchSize)
-}
-
-func mergeUnique(slice1, slice2 []string) []string {
-	return workerhelpers.MergeUnique(slice1, slice2)
-}
-
-// CdnCheckResult ساختار نتیجه cdncheck
-type CdnCheckResult = workertypes.CDNCheckResult
 
 // runCdnCheckForLiveAssets چک کردن CDN برای همه IPهای لایو که dnsx resolve کرده
 func runCdnCheckForLiveAssets(targetID uint, dnsxResults map[string][]string, inputFile string) {
@@ -729,13 +629,6 @@ func runCdnCheckForLiveAssets(targetID uint, dnsxResults map[string][]string, in
 }
 
 // runCdnCheck اجرای cdncheck روی لیست IPها
-func runCdnCheck(targetID uint, ips []string, inputFile string) map[string]CdnCheckResult {
-	return discoverypersist.RunCDNCheck(discoverypersist.Context{
-		TargetID:   targetID,
-		RunCommand: runCommandWithKillSwitch,
-	}, ips, inputFile)
-}
-
 // =================================================================
 // Optional Port Scan (Nmap) - PHASE 1
 // =================================================================
