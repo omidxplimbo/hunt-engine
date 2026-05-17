@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
@@ -644,7 +643,7 @@ func buildDiscoveryToolContext(targetID uint, rootDomain string) discoverytools.
 		TempDir:            tempDir,
 		RunCommand:         runCommandWithKillSwitch,
 		CheckStop:          checkStopRequest,
-		NormalizeSubdomain: normalizeSubdomain,
+		NormalizeSubdomain: discoverytools.NormalizeSubdomain,
 	}
 }
 
@@ -653,34 +652,6 @@ func runDnsx(targetID uint, inputFile, outputFile string) (map[string][]string, 
 }
 
 // normalizeSubdomain حذف www و normalize کردن subdomain
-func normalizeSubdomain(subdomain, rootDomain string) string {
-	subdomain = strings.TrimSpace(subdomain)
-	if subdomain == "" {
-		return ""
-	}
-
-	// تبدیل به lowercase برای مقایسه
-	subdomainLower := strings.ToLower(subdomain)
-	rootDomainLower := strings.ToLower(rootDomain)
-
-	// حذف www. از ابتدای subdomain (case-insensitive)
-	subdomainLower = strings.TrimPrefix(subdomainLower, "www.")
-
-	// اگر subdomain برابر rootDomain باشد، رد می‌کنیم (فقط subdomain می‌خواهیم)
-	if subdomainLower == rootDomainLower {
-		return ""
-	}
-
-	// اطمینان از اینکه subdomain واقعا زیرمجموعه‌ی rootDomain است (مرز نقطه)
-	// مثال valid: api.example.com
-	// مثال invalid: api.notexample.com (صرفا به خاطر suffix نباید قبول شود)
-	if !strings.HasSuffix(subdomainLower, "."+rootDomainLower) {
-		return ""
-	}
-
-	return subdomainLower
-}
-
 // runPuredns اجرای puredns برای bruteforce subdomain discovery
 // این تابع subdomain‌های لایو (resolve شده) با IP‌هایشان را برمی‌گرداند
 // خروجی: map[string][]string که key=subdomain و value=[]IP
