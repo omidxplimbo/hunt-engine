@@ -2,7 +2,6 @@ package worker
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,13 +9,11 @@ import (
 	"io"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
@@ -30,6 +27,7 @@ import (
 	passivetools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/passive"
 	discoverytools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/tools"
 	probing "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/probing"
+	workerruntime "github.com/omidxplimbo/hunt-engine/backend/internal/worker/runtime"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/utils"
 	"gorm.io/gorm"
 )
@@ -38,28 +36,8 @@ const DefaultBatchSize = 500
 const DefaultDNSXBatchSize = 5000
 
 // --- Monitor Logic ---
-type TaskInfo struct {
-	TargetID  uint      `json:"target_id"`
-	Command   string    `json:"command"`
-	StartTime time.Time `json:"start_time"`
-	PID       int       `json:"pid"`
-}
-
-var RunningProcesses sync.Map
-
-func GetRunningTasks() []TaskInfo {
-	var tasks []TaskInfo
-	RunningProcesses.Range(func(key, value interface{}) bool {
-		if task, ok := value.(TaskInfo); ok {
-			tasks = append(tasks, task)
-		}
-		return true
-	})
-	// Sort by start time (newest first)
-	sort.Slice(tasks, func(i, j int) bool {
-		return tasks[i].StartTime.After(tasks[j].StartTime)
-	})
-	return tasks
+func GetRunningTasks() []workerruntime.TaskInfo {
+	return workerruntime.GetRunningTasks()
 }
 
 // ---------------------
@@ -106,39 +84,8 @@ var subfinderProviderKeys = []string{
 	"zoomeyeapi",
 }
 
-func getTargetToolTmpDir(targetID uint) string {
-	td, _, err := utils.GetTargetTempDir(targetID)
-	if err != nil || td == "" {
-		// fallback to default OS tmp; best-effort
-		return ""
-	}
-	tmpDir := filepath.Join(td, "_tmp")
-	_ = os.MkdirAll(tmpDir, 0o755)
-	return tmpDir
-}
-
-func envWithTargetTmp(targetID uint) []string {
-	// Inherit existing env, but force TMPDIR/TMP/TEMP into per-target workspace
-	env := append([]string{}, os.Environ()...)
-	tmpDir := getTargetToolTmpDir(targetID)
-	if tmpDir == "" {
-		return env
-	}
-	env = append(env,
-		"TMPDIR="+tmpDir,
-		"TMP="+tmpDir,
-		"TEMP="+tmpDir,
-	)
-	return env
-}
-
 func cleanupTargetTempDir(targetID uint) {
-	td, _, err := utils.GetTargetTempDir(targetID)
-	if err != nil {
-		return
-	}
-	// حذف فقط پوشه‌ی همان target (نه فولدر کل user)
-	_ = os.RemoveAll(td)
+	workerruntime.CleanupTargetTempDir(targetID)
 }
 
 func acquireTargetLock(targetID uint) (func(), bool) {
@@ -409,42 +356,11 @@ func countActiveScans() int64 {
 }
 
 func cleanupLegacyToolTmp() {
-	entries, err := os.ReadDir("/tmp")
-	if err != nil {
-		return
-	}
-	cutoff := time.Now().Add(-30 * time.Minute)
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		// Only legacy httpx temp dirs in /tmp root (NOT inside /tmp/hunt-engine)
-		if !strings.HasPrefix(name, "httpx") {
-			continue
-		}
-		full := filepath.Join("/tmp", name)
-		// safety: do not touch our workspace root
-		if strings.HasPrefix(full, utils.WorkerTempRoot) {
-			continue
-		}
-		fi, err := e.Info()
-		if err != nil {
-			continue
-		}
-		if fi.ModTime().Before(cutoff) {
-			_ = os.RemoveAll(full)
-		}
-	}
+	workerruntime.CleanupLegacyToolTmp()
 }
 
 func clearAllLocks() {
-	lockDir := filepath.Join(utils.WorkerTempRoot, "locks")
-	if err := os.RemoveAll(lockDir); err != nil {
-		log.Printf("⚠️ Failed to clear locks: %v\n", err)
-	} else {
-		log.Println("🧹 Cleared all stale locks on startup.")
-	}
+	workerruntime.ClearAllLocks()
 }
 
 func processJobDispatcher(payload string) {
@@ -1205,96 +1121,16 @@ func UpdateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
 
 // ... (Helper Functions)
 func runCommandWithKillSwitch(targetID uint, name string, args ...string) ([]byte, error) {
-	return runCommandWithStdinAndKillSwitch(targetID, nil, name, args...)
+	return workerruntime.RunCommandWithKillSwitch(targetID, scanHeartbeat, checkStopRequest, name, args...)
 }
 
 func runCommandWithStdinAndKillSwitch(targetID uint, stdin io.Reader, name string, args ...string) ([]byte, error) {
-	cmd := exec.Command(name, args...)
-	cmd.Env = envWithTargetTmp(targetID)
-
-	if stdin != nil {
-		cmd.Stdin = stdin
-	}
-
-	var outBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start command %s: %w", name, err)
-	}
-
-	// Register Task
-	taskKey := fmt.Sprintf("%d-%d", targetID, cmd.Process.Pid)
-	RunningProcesses.Store(taskKey, TaskInfo{
-		TargetID:  targetID,
-		Command:   name + " " + strings.Join(args, " "),
-		StartTime: time.Now(),
-		PID:       cmd.Process.Pid,
-	})
-	defer RunningProcesses.Delete(taskKey)
-
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case err := <-done:
-			return outBuf.Bytes(), err
-		case <-ticker.C:
-			// keep scan heartbeat fresh so API doesn't treat active scans as stale
-			scanHeartbeat(targetID)
-			if checkStopRequest(targetID) {
-				log.Printf("🛑 Kill switch activated for target %d. Killing process %s...", targetID, name)
-				if err := cmd.Process.Kill(); err != nil {
-					log.Printf("⚠️ Failed to kill process: %v", err)
-				}
-				return nil, fmt.Errorf("process killed by user request")
-			}
-		}
-	}
+	return workerruntime.RunCommandWithStdinAndKillSwitch(targetID, stdin, scanHeartbeat, checkStopRequest, name, args...)
 }
 
 // runCommandWithKillSwitchCombined مثل runCommandWithKillSwitch ولی stdout/stderr را با هم برمی‌گرداند (برای ابزارهایی مثل nmap)
 func runCommandWithKillSwitchCombined(targetID uint, name string, args ...string) ([]byte, error) {
-	cmd := exec.Command(name, args...)
-	cmd.Env = envWithTargetTmp(targetID)
-	var outBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &outBuf
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start command %s: %w", name, err)
-	}
-
-	// Register Task
-	taskKey := fmt.Sprintf("%d-%d", targetID, cmd.Process.Pid)
-	RunningProcesses.Store(taskKey, TaskInfo{
-		TargetID:  targetID,
-		Command:   name + " " + strings.Join(args, " "),
-		StartTime: time.Now(),
-		PID:       cmd.Process.Pid,
-	})
-	defer RunningProcesses.Delete(taskKey)
-
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case err := <-done:
-			return outBuf.Bytes(), err
-		case <-ticker.C:
-			// keep scan heartbeat fresh so API doesn't treat active scans as stale
-			scanHeartbeat(targetID)
-			if checkStopRequest(targetID) {
-				log.Printf("🛑 Kill switch activated for target %d. Killing process %s...", targetID, name)
-				if err := cmd.Process.Kill(); err != nil {
-					log.Printf("⚠️ Failed to kill process: %v", err)
-				}
-				return nil, fmt.Errorf("process killed by user request")
-			}
-		}
-	}
+	return workerruntime.RunCommandWithKillSwitchCombined(targetID, scanHeartbeat, checkStopRequest, name, args...)
 }
 
 func checkStopRequest(targetID uint) bool {
