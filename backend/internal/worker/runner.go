@@ -90,57 +90,7 @@ func cleanupTargetTempDir(targetID uint) {
 }
 
 func acquireTargetLock(targetID uint) (func(), bool) {
-	lockDir := filepath.Join(utils.WorkerTempRoot, "locks")
-	_ = os.MkdirAll(lockDir, 0o755)
-	lockPath := filepath.Join(lockDir, fmt.Sprintf("target_%d.lock", targetID))
-
-	type lockMeta struct {
-		PID       int   `json:"pid"`
-		CreatedAt int64 `json:"created_at"` // unix seconds
-	}
-
-	const staleAfter = 30 * time.Minute
-	metaPath := filepath.Join(lockPath, "meta.json")
-
-	tryAcquire := func() (func(), bool) {
-		if err := os.Mkdir(lockPath, 0o755); err != nil {
-			return func() {}, false
-		}
-		// best-effort write meta
-		m := lockMeta{PID: os.Getpid(), CreatedAt: time.Now().Unix()}
-		if b, err := json.Marshal(m); err == nil {
-			_ = os.WriteFile(metaPath, b, 0o644)
-		}
-		return func() { _ = os.RemoveAll(lockPath) }, true
-	}
-
-	if release, ok := tryAcquire(); ok {
-		return release, true
-	}
-
-	// already locked: check if stale (e.g., worker crash left lock behind)
-	var createdAt time.Time
-	if b, err := os.ReadFile(metaPath); err == nil {
-		var m lockMeta
-		if json.Unmarshal(b, &m) == nil && m.CreatedAt > 0 {
-			createdAt = time.Unix(m.CreatedAt, 0)
-		}
-	}
-	if createdAt.IsZero() {
-		if fi, err := os.Stat(lockPath); err == nil {
-			createdAt = fi.ModTime()
-		}
-	}
-
-	if !createdAt.IsZero() && time.Since(createdAt) > staleAfter {
-		log.Printf("🧹 Removing stale lock for target %d (age: %s)\n", targetID, time.Since(createdAt))
-		_ = os.RemoveAll(lockPath)
-		if release, ok := tryAcquire(); ok {
-			return release, true
-		}
-	}
-
-	return func() {}, false
+	return workerengine.AcquireTargetLock(targetID)
 }
 
 // HttpxResult ساختار برای پارس کردن خروجی JSON
@@ -245,61 +195,15 @@ func cleanupLegacyToolTmp() {
 }
 
 func clearAllLocks() {
-	workerruntime.ClearAllLocks()
+	workerengine.ClearAllLocks()
 }
 
 func processJobDispatcher(payload string) {
-	parts := strings.Split(payload, ":")
-	if len(parts) < 3 {
-		log.Printf("⚠️ Invalid job payload format: %s\n", payload)
-		return
-	}
-
-	jobType := parts[0]
-	targetIDStr := parts[1]
-	rootDomain := parts[2]
-
-	var targetID uint
-	fmt.Sscanf(targetIDStr, "%d", &targetID)
-
-	log.Printf("👷 Worker received job type: %s for target ID: %d\n", jobType, targetID)
-
-	// جلوگیری از اجرای همزمان چند job روی یک target (برای جلوگیری از تداخل فایل‌های temp و race در cleanup)
-	releaseLock, ok := acquireTargetLock(targetID)
-	if !ok {
-		log.Printf("⏳ Target %d is already being processed. Waiting for lock...\n", targetID)
-		for {
-			time.Sleep(500 * time.Millisecond)
-			releaseLock, ok = acquireTargetLock(targetID)
-			if ok {
-				break
-			}
-		}
-	}
-	defer releaseLock()
-
-	// Update status to SCANNING (Already done in Start() loop synchronously to fix race condition)
-	// database.DB.Model(&models.Target{}).Where("id = ?", targetID).Update("status", "SCANNING")
-
-	// Panic Recovery: جلوگیری از کرش کامل ورکر در صورت بروز خطا در تسک
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("🔥 CRITICAL PANIC in job dispatcher for target %d: %v\n", targetID, r)
-			// می‌توانیم وضعیت اسکن را به FAILED تغییر دهیم یا فقط لاگ کنیم
-			// فعلاً لاگ می‌کنیم تا ورکر زنده بماند و تسک‌های بعدی را بگیرد
-		}
-	}()
-
-	switch jobType {
-	case "DISCOVERY":
-		runDiscoveryPhase(targetID, rootDomain)
-	case "PROBING":
-		runProbingPhase(targetID, rootDomain)
-	case "CRAWLING":
-		runCrawlingPhase(targetID, rootDomain)
-	default:
-		log.Printf("⚠️ Unknown job type: %s\n", jobType)
-	}
+	workerengine.ProcessJob(payload, workerengine.AcquireTargetLock, workerengine.JobHandlers{
+		Discovery: runDiscoveryPhase,
+		Probing:   runProbingPhase,
+		Crawling:  runCrawlingPhase,
+	})
 }
 
 // =================================================================
