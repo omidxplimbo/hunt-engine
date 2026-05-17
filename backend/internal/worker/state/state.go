@@ -41,6 +41,48 @@ func UpdateTargetPhase(targetID uint, phase string) {
 	database.DB.Model(&models.Target{}).Where("id = ?", targetID).Update("current_phase", phase)
 }
 
+func ResetForNewRun(targetID uint) error {
+	now := time.Now()
+	runID := fmt.Sprintf("run_%d", now.UnixNano())
+
+	return database.DB.Transaction(func(tx *gorm.DB) error {
+		var existing models.TargetScanState
+		err := tx.Where("target_id = ?", targetID).First(&existing).Error
+
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			st := models.TargetScanState{
+				TargetID:       targetID,
+				RunID:          runID,
+				Status:         "QUEUED",
+				CurrentModule:  "",
+				CurrentStep:    "",
+				CompletedSteps: "[]",
+				Meta:           "{}",
+				HeartbeatAt:    &now,
+				LastError:      "",
+			}
+			return tx.Create(&st).Error
+		}
+
+		if err != nil {
+			return err
+		}
+
+		return tx.Model(&models.TargetScanState{}).
+			Where("target_id = ?", targetID).
+			Updates(map[string]interface{}{
+				"run_id":          runID,
+				"status":          "QUEUED",
+				"current_module":  "",
+				"current_step":    "",
+				"completed_steps": "[]",
+				"meta":            "{}",
+				"heartbeat_at":    &now,
+				"last_error":      "",
+			}).Error
+	})
+}
+
 func EnsureScanState(targetID uint) (*models.TargetScanState, error) {
 	var st models.TargetScanState
 	err := database.DB.Where("target_id = ?", targetID).First(&st).Error

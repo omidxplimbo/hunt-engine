@@ -9,6 +9,8 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
+	workerruntime "github.com/omidxplimbo/hunt-engine/backend/internal/worker/runtime"
+	workerstate "github.com/omidxplimbo/hunt-engine/backend/internal/worker/state"
 )
 
 // بازه چک کردن دیتابیس (هر ۱ دقیقه چک می‌کند که نوبت کسی شده یا نه)
@@ -65,6 +67,13 @@ func triggerScan(t models.Target) {
 	}
 	firstJob := modules[0]
 
+	if err := workerstate.ResetForNewRun(t.ID); err != nil {
+		log.Printf("❌ Failed to reset scan state for scheduled target %s: %v\n", t.RootDomain, err)
+		return
+	}
+
+	workerruntime.CleanupTargetTempDir(t.ID)
+
 	// 👇👇👇 قفل کردن تارگت (تغییر وضعیت به QUEUED)
 	// این کار رو قبل از ارسال به صف انجام میدیم
 	tx := database.DB.Model(&models.Target{}).Where("id = ?", t.ID).Updates(map[string]interface{}{"status": "QUEUED", "stop_requested": false})
@@ -80,6 +89,7 @@ func triggerScan(t models.Target) {
 		log.Printf("⚠️ Scheduler failed to enqueue %s: %v\n", t.RootDomain, err)
 		// اگر ارسال به صف شکست خورد، باید قفل رو باز کنیم (Rollback دستی)
 		database.DB.Model(&models.Target{}).Where("id = ?", t.ID).Update("status", "READY")
+		workerstate.MarkPaused(t.ID, fmt.Sprintf("scheduler enqueue failed: %v", err))
 		return
 	}
 
