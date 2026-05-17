@@ -1,33 +1,30 @@
 package worker
 
 import (
-	"bufio"
-	"bytes"
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
-	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"reflect"
-	"sort"
-	"strconv"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
-	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/cache"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/config"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
-	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/telegram"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/discovery"
+	workerengine "github.com/omidxplimbo/hunt-engine/backend/internal/worker/engine"
+	crawlingphase "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/crawling"
+	discoverymerge "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/merge"
+	passivetools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/passive"
+	discoverypersist "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/persistence"
+	discoverytools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/tools"
+	probing "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/probing"
+	probingpersist "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/probing/persistence"
+	workerruntime "github.com/omidxplimbo/hunt-engine/backend/internal/worker/runtime"
+	workerstate "github.com/omidxplimbo/hunt-engine/backend/internal/worker/state"
+	workertypes "github.com/omidxplimbo/hunt-engine/backend/internal/worker/types"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/utils"
 	"gorm.io/gorm"
 )
@@ -36,185 +33,15 @@ const DefaultBatchSize = 500
 const DefaultDNSXBatchSize = 5000
 
 // --- Monitor Logic ---
-type TaskInfo struct {
-	TargetID  uint      `json:"target_id"`
-	Command   string    `json:"command"`
-	StartTime time.Time `json:"start_time"`
-	PID       int       `json:"pid"`
-}
-
-var RunningProcesses sync.Map
-
-func GetRunningTasks() []TaskInfo {
-	var tasks []TaskInfo
-	RunningProcesses.Range(func(key, value interface{}) bool {
-		if task, ok := value.(TaskInfo); ok {
-			tasks = append(tasks, task)
-		}
-		return true
-	})
-	// Sort by start time (newest first)
-	sort.Slice(tasks, func(i, j int) bool {
-		return tasks[i].StartTime.After(tasks[j].StartTime)
-	})
-	return tasks
-}
-
-// ---------------------
-
-// subfinderProviderKeys is the default set of providers emitted by subfinder v2.11.0
-// when it generates /root/.config/subfinder/provider-config.yaml
-var subfinderProviderKeys = []string{
-	"alienvault",
-	"bevigil",
-	"bufferover",
-	"builtwith",
-	"c99",
-	"censys",
-	"certspotter",
-	"chaos",
-	"chinaz",
-	"digitalyama",
-	"dnsdb",
-	"dnsdumpster",
-	"dnsrepo",
-	"domainsproject",
-	"driftnet",
-	"facebook",
-	"fofa",
-	"fullhunt",
-	"github",
-	"intelx",
-	"leakix",
-	"merklemap",
-	"netlas",
-	"onyphe",
-	"profundis",
-	"pugrecon",
-	"quake",
-	"redhuntlabs",
-	"robtex",
-	"rsecloud",
-	"securitytrails",
-	"shodan",
-	"threatbook",
-	"virustotal",
-	"whoisxmlapi",
-	"windvane",
-	"zoomeyeapi",
-}
-
-func getTargetToolTmpDir(targetID uint) string {
-	td, _, err := utils.GetTargetTempDir(targetID)
-	if err != nil || td == "" {
-		// fallback to default OS tmp; best-effort
-		return ""
-	}
-	tmpDir := filepath.Join(td, "_tmp")
-	_ = os.MkdirAll(tmpDir, 0o755)
-	return tmpDir
-}
-
-func envWithTargetTmp(targetID uint) []string {
-	// Inherit existing env, but force TMPDIR/TMP/TEMP into per-target workspace
-	env := append([]string{}, os.Environ()...)
-	tmpDir := getTargetToolTmpDir(targetID)
-	if tmpDir == "" {
-		return env
-	}
-	env = append(env,
-		"TMPDIR="+tmpDir,
-		"TMP="+tmpDir,
-		"TEMP="+tmpDir,
-	)
-	return env
-}
-
-func cleanupTargetTempDir(targetID uint) {
-	td, _, err := utils.GetTargetTempDir(targetID)
-	if err != nil {
-		return
-	}
-	// حذف فقط پوشه‌ی همان target (نه فولدر کل user)
-	_ = os.RemoveAll(td)
-}
-
-func acquireTargetLock(targetID uint) (func(), bool) {
-	lockDir := filepath.Join(utils.WorkerTempRoot, "locks")
-	_ = os.MkdirAll(lockDir, 0o755)
-	lockPath := filepath.Join(lockDir, fmt.Sprintf("target_%d.lock", targetID))
-
-	type lockMeta struct {
-		PID       int   `json:"pid"`
-		CreatedAt int64 `json:"created_at"` // unix seconds
-	}
-
-	const staleAfter = 30 * time.Minute
-	metaPath := filepath.Join(lockPath, "meta.json")
-
-	tryAcquire := func() (func(), bool) {
-		if err := os.Mkdir(lockPath, 0o755); err != nil {
-			return func() {}, false
-		}
-		// best-effort write meta
-		m := lockMeta{PID: os.Getpid(), CreatedAt: time.Now().Unix()}
-		if b, err := json.Marshal(m); err == nil {
-			_ = os.WriteFile(metaPath, b, 0o644)
-		}
-		return func() { _ = os.RemoveAll(lockPath) }, true
-	}
-
-	if release, ok := tryAcquire(); ok {
-		return release, true
-	}
-
-	// already locked: check if stale (e.g., worker crash left lock behind)
-	var createdAt time.Time
-	if b, err := os.ReadFile(metaPath); err == nil {
-		var m lockMeta
-		if json.Unmarshal(b, &m) == nil && m.CreatedAt > 0 {
-			createdAt = time.Unix(m.CreatedAt, 0)
-		}
-	}
-	if createdAt.IsZero() {
-		if fi, err := os.Stat(lockPath); err == nil {
-			createdAt = fi.ModTime()
-		}
-	}
-
-	if !createdAt.IsZero() && time.Since(createdAt) > staleAfter {
-		log.Printf("🧹 Removing stale lock for target %d (age: %s)\n", targetID, time.Since(createdAt))
-		_ = os.RemoveAll(lockPath)
-		if release, ok := tryAcquire(); ok {
-			return release, true
-		}
-	}
-
-	return func() {}, false
+func GetRunningTasks() []workerruntime.TaskInfo {
+	return workerruntime.GetRunningTasks()
 }
 
 // HttpxResult ساختار برای پارس کردن خروجی JSON
-type HttpxResult struct {
-	Input         string   `json:"input"`
-	URL           string   `json:"url"`
-	StatusCode    int      `json:"status_code"`
-	Title         string   `json:"title"`
-	ContentLength int64    `json:"content_length"`
-	A             []string `json:"a"`
-	WebServer     string   `json:"webserver"`
-	CDNName       string   `json:"cdn_name"`
-	Technologies  []string `json:"tech"`
-	BodyHash      string   `json:"body_hash"`
-	HeaderHash    string   `json:"header_hash"`
-	ResponseTime  string   `json:"time"`
-	RawJSON       string   `json:"-"`
-}
+type HttpxResult = workertypes.HTTPXResult
 
 // DnsxResult ساختار خروجی JSON ابزار dnsx
-type DnsxResult struct {
-	Host string   `json:"host"`
-	A    []string `json:"a"`
-}
+type DnsxResult = workertypes.DNSXResult
 
 // Start موتور اصلی کارگر را روشن می‌کند.
 func Start() {
@@ -252,16 +79,16 @@ func Start() {
 	log.Println("👷 Worker started. Waiting for jobs...", redisq.QueueName)
 
 	// Clear stale locks from previous crashes/restarts
-	clearAllLocks()
+	workerengine.ClearAllLocks()
 
 	// Best-effort cleanup of legacy temp dirs created by tools (e.g. httpxXXXX) under /tmp.
 	// With TMPDIR redirected to per-target workspace, new ones should not be created.
-	cleanupLegacyToolTmp()
+	workerruntime.CleanupLegacyToolTmp()
 
 	for {
 		// 1. Check Max Concurrent
 		max := config.GetMaxConcurrentScans()
-		current := countActiveScans()
+		current := workerengine.CountActiveScans()
 
 		if current >= int64(max) {
 			// If max reached, wait a bit before checking again
@@ -270,7 +97,7 @@ func Start() {
 		}
 
 		// 2. Pop from Redis (with timeout to allow re-checking concurrency)
-		payload, err := popNextEligiblePayload(max)
+		payload, err := workerengine.PopNextEligiblePayload(max)
 		if err != nil {
 			log.Printf("❌ Error selecting Redis job: %v\n", err)
 			time.Sleep(5 * time.Second)
@@ -281,222 +108,21 @@ func Start() {
 			continue
 		}
 
-		// CRITICAL FIX: Update status to SCANNING *synchronously* before spawning goroutine.
-		// This prevents the race condition where the loop continues and pops another item
-		// before the goroutine has a chance to update the DB status.
-		parts := strings.Split(payload, ":")
-		if len(parts) >= 2 {
-			targetIDStr := parts[1]
-			var tid uint64
-			// Use Sscanf to be safe
-			fmt.Sscanf(targetIDStr, "%d", &tid)
-			if tid > 0 {
-				database.DB.Model(&models.Target{}).Where("id = ?", tid).Update("status", "SCANNING")
-			}
-		}
+		// CRITICAL FIX: Update status to SCANNING synchronously before spawning
+		// the goroutine. This prevents the queue selector from overbooking
+		// global or per-user scan slots.
+		workerengine.MarkPayloadTargetScanning(payload)
 
 		go processJobDispatcher(payload)
 	}
 }
 
-func parsePayloadTargetID(payload string) (uint, bool) {
-	parts := strings.SplitN(payload, ":", 3)
-	if len(parts) < 3 {
-		return 0, false
-	}
-	id, err := strconv.ParseUint(parts[1], 10, 64)
-	if err != nil || id == 0 {
-		return 0, false
-	}
-	return uint(id), true
-}
-
-func countActiveScansForUser(userID uint) int64 {
-	var count int64
-	database.DB.Model(&models.Target{}).
-		Where("created_by_user_id = ? AND status = ?", userID, "SCANNING").
-		Count(&count)
-	return count
-}
-
-func userHasFreeScanSlot(user models.User) bool {
-	if strings.ToLower(strings.TrimSpace(user.Role)) == "admin" {
-		return true
-	}
-	limit := user.MaxConcurrentScans
-	if limit < 1 {
-		limit = 1
-	}
-	return countActiveScansForUser(user.ID) < int64(limit)
-}
-
-func removeQueuePayloadAt(ctx context.Context, key string, index int, payload string) error {
-	placeholder := fmt.Sprintf("__RUNNING__:%d:%d", time.Now().UnixNano(), index)
-	current, err := redisq.Client.LIndex(ctx, key, int64(index)).Result()
-	if err != nil {
-		return err
-	}
-	if current != payload {
-		return fmt.Errorf("queue changed while selecting job")
-	}
-	if err := redisq.Client.LSet(ctx, key, int64(index), placeholder).Err(); err != nil {
-		return err
-	}
-	return redisq.Client.LRem(ctx, key, 1, placeholder).Err()
-}
-
-func popNextEligiblePayload(maxGlobal int) (string, error) {
-	ctx := context.Background()
-	keys, err := redisq.UserQueueKeys(ctx)
-	if err != nil {
-		return "", err
-	}
-
-	// Legacy fallback: drain old global queue if it still has jobs from before this migration.
-	if n, _ := redisq.Client.LLen(ctx, redisq.QueueName).Result(); n > 0 {
-		keys = append(keys, redisq.QueueName)
-	}
-
-	for _, key := range keys {
-		items, err := redisq.Client.LRange(ctx, key, 0, -1).Result()
-		if err != nil {
-			return "", err
-		}
-		for idx, payload := range items {
-			targetID, ok := parsePayloadTargetID(payload)
-			if !ok {
-				_ = removeQueuePayloadAt(ctx, key, idx, payload)
-				continue
-			}
-
-			var target models.Target
-			if err := database.DB.First(&target, targetID).Error; err != nil {
-				_ = removeQueuePayloadAt(ctx, key, idx, payload)
-				continue
-			}
-			if target.Status != "QUEUED" {
-				_ = removeQueuePayloadAt(ctx, key, idx, payload)
-				continue
-			}
-
-			var owner models.User
-			if err := database.DB.First(&owner, target.CreatedByUserID).Error; err != nil {
-				continue
-			}
-			if !userHasFreeScanSlot(owner) {
-				break
-			}
-			if countActiveScans() >= int64(maxGlobal) {
-				return "", nil
-			}
-			if err := removeQueuePayloadAt(ctx, key, idx, payload); err != nil {
-				return "", err
-			}
-			return payload, nil
-		}
-	}
-
-	return "", nil
-}
-
-func countActiveScans() int64 {
-	var count int64
-	// We count targets that are in 'SCANNING' status.
-	database.DB.Model(&models.Target{}).Where("status = ?", "SCANNING").Count(&count)
-	return count
-}
-
-func cleanupLegacyToolTmp() {
-	entries, err := os.ReadDir("/tmp")
-	if err != nil {
-		return
-	}
-	cutoff := time.Now().Add(-30 * time.Minute)
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		// Only legacy httpx temp dirs in /tmp root (NOT inside /tmp/hunt-engine)
-		if !strings.HasPrefix(name, "httpx") {
-			continue
-		}
-		full := filepath.Join("/tmp", name)
-		// safety: do not touch our workspace root
-		if strings.HasPrefix(full, utils.WorkerTempRoot) {
-			continue
-		}
-		fi, err := e.Info()
-		if err != nil {
-			continue
-		}
-		if fi.ModTime().Before(cutoff) {
-			_ = os.RemoveAll(full)
-		}
-	}
-}
-
-func clearAllLocks() {
-	lockDir := filepath.Join(utils.WorkerTempRoot, "locks")
-	if err := os.RemoveAll(lockDir); err != nil {
-		log.Printf("⚠️ Failed to clear locks: %v\n", err)
-	} else {
-		log.Println("🧹 Cleared all stale locks on startup.")
-	}
-}
-
 func processJobDispatcher(payload string) {
-	parts := strings.Split(payload, ":")
-	if len(parts) < 3 {
-		log.Printf("⚠️ Invalid job payload format: %s\n", payload)
-		return
-	}
-
-	jobType := parts[0]
-	targetIDStr := parts[1]
-	rootDomain := parts[2]
-
-	var targetID uint
-	fmt.Sscanf(targetIDStr, "%d", &targetID)
-
-	log.Printf("👷 Worker received job type: %s for target ID: %d\n", jobType, targetID)
-
-	// جلوگیری از اجرای همزمان چند job روی یک target (برای جلوگیری از تداخل فایل‌های temp و race در cleanup)
-	releaseLock, ok := acquireTargetLock(targetID)
-	if !ok {
-		log.Printf("⏳ Target %d is already being processed. Waiting for lock...\n", targetID)
-		for {
-			time.Sleep(500 * time.Millisecond)
-			releaseLock, ok = acquireTargetLock(targetID)
-			if ok {
-				break
-			}
-		}
-	}
-	defer releaseLock()
-
-	// Update status to SCANNING (Already done in Start() loop synchronously to fix race condition)
-	// database.DB.Model(&models.Target{}).Where("id = ?", targetID).Update("status", "SCANNING")
-
-	// Panic Recovery: جلوگیری از کرش کامل ورکر در صورت بروز خطا در تسک
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("🔥 CRITICAL PANIC in job dispatcher for target %d: %v\n", targetID, r)
-			// می‌توانیم وضعیت اسکن را به FAILED تغییر دهیم یا فقط لاگ کنیم
-			// فعلاً لاگ می‌کنیم تا ورکر زنده بماند و تسک‌های بعدی را بگیرد
-		}
-	}()
-
-	switch jobType {
-	case "DISCOVERY":
-		runDiscoveryPhase(targetID, rootDomain)
-	case "PROBING":
-		runProbingPhase(targetID, rootDomain)
-	case "CRAWLING":
-		runCrawlingPhase(targetID, rootDomain)
-	default:
-		log.Printf("⚠️ Unknown job type: %s\n", jobType)
-	}
+	workerengine.ProcessJob(payload, workerengine.AcquireTargetLock, workerengine.JobHandlers{
+		Discovery: runDiscoveryPhase,
+		Probing:   runProbingPhase,
+		Crawling:  runCrawlingPhase,
+	})
 }
 
 // =================================================================
@@ -692,56 +318,18 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		var existingAssets []string
 		database.DB.Model(&models.Asset{}).Where("target_id = ?", targetID).Pluck("value", &existingAssets)
 
-		masterList = mergeUnique(passiveResults, mutatedResults)
-		var purednsSubdomains []string
-		for subdomain := range purednsResults {
-			purednsSubdomains = append(purednsSubdomains, subdomain)
-		}
-		masterList = mergeUnique(masterList, purednsSubdomains)
-		masterList = mergeUnique(masterList, existingAssets)
+		mergeResult := discoverymerge.Build(discoverymerge.Input{
+			PassiveResults: passiveResults,
+			PassiveSources: passiveSources,
+			MutatedResults: mutatedResults,
+			MutatedSources: mutatedSources,
+			PurednsResults: purednsResults,
+			PurednsSources: purednsSources,
+			ExistingAssets: existingAssets,
+		})
 
-		// Merge sources: passive + mutated + puredns
-		for subdomain, sources := range passiveSources {
-			allSources[subdomain] = sources
-		}
-		for subdomain, sources := range mutatedSources {
-			if existing, ok := allSources[subdomain]; ok {
-				sourceMap := make(map[string]bool)
-				for _, s := range existing {
-					sourceMap[s] = true
-				}
-				for _, s := range sources {
-					sourceMap[s] = true
-				}
-				var merged []string
-				for s := range sourceMap {
-					merged = append(merged, s)
-				}
-				sort.Strings(merged)
-				allSources[subdomain] = merged
-			} else {
-				allSources[subdomain] = sources
-			}
-		}
-		for subdomain, sources := range purednsSources {
-			if existing, ok := allSources[subdomain]; ok {
-				sourceMap := make(map[string]bool)
-				for _, s := range existing {
-					sourceMap[s] = true
-				}
-				for _, s := range sources {
-					sourceMap[s] = true
-				}
-				var merged []string
-				for s := range sourceMap {
-					merged = append(merged, s)
-				}
-				sort.Strings(merged)
-				allSources[subdomain] = merged
-			} else {
-				allSources[subdomain] = sources
-			}
-		}
+		masterList = mergeResult.MasterList
+		allSources = mergeResult.Sources
 
 		// DNSX reads allFoundFile. This file must contain the final merged list
 		// from passive + alterx + optional puredns + existing assets.
@@ -750,11 +338,13 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 			scanMarkFailed(targetID, fmt.Sprintf("merge checkpoint failed: %v", err))
 			return
 		}
+
 		if err := utils.WriteJSONToFile(allSourcesFile, allSources); err != nil {
 			log.Printf("❌ Failed to write merged sources checkpoint: %v\n", err)
 			scanMarkFailed(targetID, fmt.Sprintf("merged sources checkpoint failed: %v", err))
 			return
 		}
+
 		scanMarkStepDone(targetID, "DISCOVERY", "MERGE")
 	}
 
@@ -785,25 +375,8 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		}
 		_ = os.Remove(dnsxOutputFile)
 
-		// Merge puredns results (already live) into dnsxResults
-		for subdomain, ips := range purednsResults {
-			if existingIPs, exists := dnsxResults[subdomain]; exists {
-				ipMap := make(map[string]bool)
-				for _, ip := range existingIPs {
-					ipMap[ip] = true
-				}
-				for _, ip := range ips {
-					ipMap[ip] = true
-				}
-				var mergedIPs []string
-				for ip := range ipMap {
-					mergedIPs = append(mergedIPs, ip)
-				}
-				dnsxResults[subdomain] = mergedIPs
-			} else {
-				dnsxResults[subdomain] = ips
-			}
-		}
+		// Merge puredns results (already live) into dnsxResults.
+		dnsxResults = discoverymerge.MergeLiveResults(dnsxResults, purednsResults)
 
 		_ = utils.WriteJSONToFile(dnsxResultsFile, dnsxResults)
 		scanMarkStepDone(targetID, "DISCOVERY", "DNSX")
@@ -871,1048 +444,126 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 // PHASE 2: Probing Implementation
 // =================================================================
 func runProbingPhase(targetID uint, rootDomain string) {
-	if checkStopRequest(targetID) {
-		return
-	}
+	probing.Run(probing.Context{
+		TargetID:   targetID,
+		RootDomain: rootDomain,
+		BatchSize:  getBatchSize(),
 
-	tempDir, username, err := utils.GetTargetTempDir(targetID)
-	if err != nil {
-		log.Printf("❌ Failed to init temp dir for target %d: %v\n", targetID, err)
-		return
-	}
-	log.Printf("🗂️ Temp workspace: %s (owner: %s)\n", tempDir, username)
-
-	probingInputFile := filepath.Join(tempDir, "httpx_input.txt")
-	probingOutputFile := filepath.Join(tempDir, "httpx_output.json")
-
-	batchSize := getBatchSize()
-	log.Printf("🚀 Starting PHASE 2 (PROBING) for target ID: %d (Batch Size: %d)\n", targetID, batchSize)
-	updateTargetPhase(targetID, "PHASE 2: INITIALIZING")
-	startTime := time.Now()
-
-	_, _ = ensureScanState(targetID)
-	if scanIsStepDone(targetID, "PROBING", "DONE") {
-		log.Printf("⏩ Resume: PROBING already completed. Chaining next module.\n")
-		triggerNextModule(targetID, rootDomain, "PROBING")
-		return
-	}
-
-	var totalLive int64
-	database.DB.Model(&models.Asset{}).Where("target_id = ? AND is_live = true", targetID).Count(&totalLive)
-
-	if totalLive == 0 {
-		log.Println("⚠️ No live assets found. Aborting probing.")
-		triggerNextModule(targetID, rootDomain, "PROBING")
-		return
-	}
-	log.Printf("✅ Found %d live assets in DB. Starting batch processing...\n", totalLive)
-
-	meta := scanGetMeta(targetID)
-	processedCount := 0
-	offset := 0
-	if pm, ok := meta["probing"].(map[string]interface{}); ok {
-		if v, ok := pm["offset"].(float64); ok && int(v) > 0 {
-			offset = int(v)
-		}
-		if v, ok := pm["processed_count"].(float64); ok && int(v) > 0 {
-			processedCount = int(v)
-		}
-	}
-	totalBatches := int(totalLive)/batchSize + 1
-	currentBatch := (offset / batchSize) + 1
-
-	for {
-		if checkStopRequest(targetID) {
-			// persist checkpoint so resume continues from this offset
-			meta["probing"] = map[string]interface{}{
-				"offset":          offset,
-				"processed_count": processedCount,
-				"batch_size":      batchSize,
-				"total_live":      totalLive,
-			}
-			scanSetMeta(targetID, meta)
-			return
-		}
-
-		statusMsg := fmt.Sprintf("PHASE 2: BATCH %d/%d", currentBatch, totalBatches)
-		updateTargetPhase(targetID, statusMsg)
-		scanMarkRunning(targetID, "PROBING", "HTTPX_BATCH")
-
-		var batchAssets []models.Asset
-		err := database.DB.Where("target_id = ? AND is_live = true", targetID).
-			Order("id").
-			Limit(batchSize).
-			Offset(offset).
-			Find(&batchAssets).Error
-
-		if err != nil || len(batchAssets) == 0 {
-			break
-		}
-
-		log.Printf("🔄 Processing batch: Offset %d, Size %d...\n", offset, len(batchAssets))
-
-		var hosts []string
-		for _, asset := range batchAssets {
-			hosts = append(hosts, asset.Value)
-		}
-		if err := utils.WriteSliceToFile(probingInputFile, hosts); err != nil {
-			log.Printf("❌ Error writing batch input file: %v\n", err)
-			break
-		}
-
-		_, err = runCommandWithKillSwitch(targetID, "httpx",
-			"-l", probingInputFile,
-			"-json",
-			"-o", probingOutputFile,
-			"-silent",
-			"-threads", "50",
-			"-tech-detect",
-			"-follow-redirects",
-		)
-		if err != nil {
-			if err.Error() == "process killed by user request" {
-				return
-			}
-			log.Printf("⚠️ Httpx batch finished with issues: %v\n", err)
-		}
-
-		httpxResults, err := readHttpxResults(probingOutputFile)
-		if err != nil {
-			log.Printf("❌ Error reading batch httpx output: %v\n", err)
-		} else {
-			UpdateAssetsWithDiff(targetID, httpxResults)
-			processedCount += len(batchAssets)
-		}
-		// پاکسازی فایل‌های موقت هر batch
-		_ = os.Remove(probingOutputFile)
-		_ = os.Remove(probingInputFile)
-
-		offset += batchSize
-		currentBatch++
-
-		// persist checkpoint after each batch
-		meta["probing"] = map[string]interface{}{
-			"offset":          offset,
-			"processed_count": processedCount,
-			"batch_size":      batchSize,
-			"total_live":      totalLive,
-		}
-		scanSetMeta(targetID, meta)
-	}
-
-	log.Printf("🏁 PHASE 2 finished. Total processed: %d in %s.\n", processedCount, time.Since(startTime))
-	scanMarkStepDone(targetID, "PROBING", "DONE")
-	triggerNextModule(targetID, rootDomain, "PROBING")
+		CheckStop:         checkStopRequest,
+		UpdateTargetPhase: updateTargetPhase,
+		EnsureScanState: func(targetID uint) {
+			_, _ = ensureScanState(targetID)
+		},
+		ScanIsStepDone:    scanIsStepDone,
+		ScanGetMeta:       scanGetMeta,
+		ScanSetMeta:       scanSetMeta,
+		ScanMarkRunning:   scanMarkRunning,
+		ScanMarkStepDone:  scanMarkStepDone,
+		TriggerNextModule: triggerNextModule,
+		RunCommand:        runCommandWithKillSwitch,
+		UpdateAssets: func(targetID uint, results map[string]probing.HTTPXResult) {
+			UpdateAssetsWithDiff(targetID, results)
+		},
+	})
 }
 
 // =================================================================
 // PHASE 3: Crawling Implementation (FIXED)
 // =================================================================
 func runCrawlingPhase(targetID uint, rootDomain string) {
-	if checkStopRequest(targetID) {
-		return
-	}
-
-	tempDir, username, err := utils.GetTargetTempDir(targetID)
-	if err != nil {
-		log.Printf("❌ Failed to init temp dir for target %d: %v\n", targetID, err)
-		return
-	}
-	log.Printf("🗂️ Temp workspace: %s (owner: %s)\n", tempDir, username)
-
-	// 👇 1. دریافت تنظیمات تارگت (برای چک کردن UseWaymore)
-	var target models.Target
-	if err := database.DB.First(&target, targetID).Error; err != nil {
-		log.Printf("❌ Failed to fetch target config in Crawling Phase: %v\n", err)
-		return
-	}
-
-	log.Printf("🚀 Starting PHASE 3 (CRAWLING) for target ID: %d\n", targetID)
-	updateTargetPhase(targetID, "PHASE 3: FETCHING ASSETS")
-
-	_, _ = ensureScanState(targetID)
-	if scanIsStepDone(targetID, "CRAWLING", "DONE") {
-		log.Printf("⏩ Resume: CRAWLING already completed. Chaining next module.\n")
-		triggerNextModule(targetID, rootDomain, "CRAWLING")
-		return
-	}
-
-	var liveAssets []string
-	database.DB.Model(&models.Asset{}).
-		Where("target_id = ? AND is_live = true", targetID).
-		Pluck("value", &liveAssets)
-
-	crawlingAssetsFile := filepath.Join(tempDir, "crawling_assets.txt")
-	if len(liveAssets) > 0 {
-		if err := utils.WriteSliceToFile(crawlingAssetsFile, liveAssets); err != nil {
-			log.Printf("❌ Failed to write crawling assets input: %v\n", err)
-			return
-		}
-	}
-
-	crawlingRootFile := filepath.Join(tempDir, "crawling_root.txt")
-	if err := utils.WriteSliceToFile(crawlingRootFile, []string{rootDomain}); err != nil {
-		log.Printf("❌ Failed to write crawling root input: %v\n", err)
-		return
-	}
-
-	// 1. Waybackurls
-	if scanIsStepDone(targetID, "CRAWLING", "WAYBACK") {
-		log.Printf("⏩ Resume: skipping WAYBACK\n")
-	} else {
-		if checkStopRequest(targetID) {
-			return
-		}
-		scanMarkRunning(targetID, "CRAWLING", "WAYBACK")
-		updateTargetPhase(targetID, "PHASE 3: RUNNING WAYBACK")
-		tmp := make(map[string]string)
-		runToolAndCollect(targetID, crawlingRootFile, tmp, "wayback", "waybackurls")
-		updateTargetPhase(targetID, "PHASE 3: SAVING WAYBACK")
-		saveCrawledURLs(targetID, rootDomain, tmp, true)
-		scanMarkStepDone(targetID, "CRAWLING", "WAYBACK")
-	}
-
-	// 2. GAU
-	if len(liveAssets) > 0 {
-		if scanIsStepDone(targetID, "CRAWLING", "GAU") {
-			log.Printf("⏩ Resume: skipping GAU\n")
-		} else {
-			if checkStopRequest(targetID) {
-				return
-			}
-			scanMarkRunning(targetID, "CRAWLING", "GAU")
-			updateTargetPhase(targetID, "PHASE 3: RUNNING GAU")
-			tmp := make(map[string]string)
-			runToolAndCollect(targetID, crawlingAssetsFile, tmp, "gau", "gau", "--threads", "10")
-			updateTargetPhase(targetID, "PHASE 3: SAVING GAU")
-			saveCrawledURLs(targetID, rootDomain, tmp, true)
-			scanMarkStepDone(targetID, "CRAWLING", "GAU")
-		}
-	} else {
-		scanMarkStepDone(targetID, "CRAWLING", "GAU")
-	}
-
-	// 👇👇👇 3. Waymore Implementation (بخش اضافه شده)
-	if target.UseWaymore {
-		if scanIsStepDone(targetID, "CRAWLING", "WAYMORE") {
-			log.Printf("⏩ Resume: skipping WAYMORE\n")
-		} else {
-			if checkStopRequest(targetID) {
-				return
-			}
-			scanMarkRunning(targetID, "CRAWLING", "WAYMORE")
-			updateTargetPhase(targetID, "PHASE 3: RUNNING WAYMORE")
-			log.Printf("🔥 Running Waymore for %s...\n", rootDomain)
-
-			// فایل خروجی موقت برای Waymore
-			waymoreOutputFile := filepath.Join(tempDir, "waymore.txt")
-
-			_, err := runCommandWithKillSwitch(targetID, "waymore", "-i", rootDomain, "-mode", "U", "-n", "-oU", waymoreOutputFile)
-
-			tmp := make(map[string]string)
-			if err != nil {
-				log.Printf("⚠️ Waymore execution failed: %v\n", err)
-			} else {
-				content, err := ioutil.ReadFile(waymoreOutputFile)
-				if err == nil {
-					lines := strings.Split(string(content), "\n")
-					for _, line := range lines {
-						u := strings.TrimSpace(line)
-						if u != "" {
-							tmp[u] = "waymore"
-						}
-					}
-					log.Printf("✅ Waymore found %d URLs.\n", len(lines))
-				} else {
-					log.Printf("⚠️ Could not read Waymore output file: %v\n", err)
-				}
-				_ = os.Remove(waymoreOutputFile)
-			}
-			updateTargetPhase(targetID, "PHASE 3: SAVING WAYMORE")
-			saveCrawledURLs(targetID, rootDomain, tmp, true)
-			scanMarkStepDone(targetID, "CRAWLING", "WAYMORE")
-		}
-	} else {
-		log.Println("⏩ Skipping Waymore (Disabled in settings)")
-		scanMarkStepDone(targetID, "CRAWLING", "WAYMORE")
-	}
-	// 👆👆👆 پایان بخش اضافه شده
-
-	// 4. Katana
-	if len(liveAssets) > 0 {
-		if scanIsStepDone(targetID, "CRAWLING", "KATANA") {
-			log.Printf("⏩ Resume: skipping KATANA\n")
-		} else {
-			if checkStopRequest(targetID) {
-				return
-			}
-			scanMarkRunning(targetID, "CRAWLING", "KATANA")
-			updateTargetPhase(targetID, "PHASE 3: RUNNING KATANA")
-			tmp := make(map[string]string)
-			runToolAndCollect(targetID, crawlingAssetsFile, tmp, "katana", "katana", "-list", crawlingAssetsFile, "-jc", "-kf", "-silent", "-c", "10")
-			updateTargetPhase(targetID, "PHASE 3: SAVING KATANA")
-			saveCrawledURLs(targetID, rootDomain, tmp, true)
-			scanMarkStepDone(targetID, "CRAWLING", "KATANA")
-		}
-	} else {
-		scanMarkStepDone(targetID, "CRAWLING", "KATANA")
-	}
-
-	// 5. VirusTotal
-	if len(liveAssets) > 0 {
-		if scanIsStepDone(targetID, "CRAWLING", "VIRUSTOTAL") {
-			log.Printf("⏩ Resume: skipping VIRUSTOTAL\n")
-		} else {
-			if checkStopRequest(targetID) {
-				return
-			}
-			scanMarkRunning(targetID, "CRAWLING", "VIRUSTOTAL")
-			updateTargetPhase(targetID, "PHASE 3: RUNNING VIRUSTOTAL")
-			log.Printf("🦠 Running VirusTotal URL discovery for %d live assets...\n", len(liveAssets))
-
-			tmp := make(map[string]string)
-			runVirusTotalCollection(targetID, liveAssets, tmp)
-			updateTargetPhase(targetID, "PHASE 3: SAVING VIRUSTOTAL")
-			saveCrawledURLs(targetID, rootDomain, tmp, true)
-
-			scanMarkStepDone(targetID, "CRAWLING", "VIRUSTOTAL")
-		}
-	} else {
-		scanMarkStepDone(targetID, "CRAWLING", "VIRUSTOTAL")
-	}
-
-	// Filtering & Saving
-	if scanIsStepDone(targetID, "CRAWLING", "FILTER_SAVE") {
-		log.Printf("⏩ Resume: skipping FILTER/SAVE\n")
-	} else {
-		if checkStopRequest(targetID) {
-			return
-		}
-		scanMarkRunning(targetID, "CRAWLING", "FILTER_SAVE")
-		updateTargetPhase(targetID, "PHASE 3: FILTERING & SAVING")
-		// URLs were already saved per-tool; this step is mostly a final marker.
-		scanMarkStepDone(targetID, "CRAWLING", "FILTER_SAVE")
-	}
-
-	_ = os.Remove(crawlingAssetsFile)
-	_ = os.Remove(crawlingRootFile)
-
-	log.Printf("🏁 PHASE 3 finished for %s.\n", rootDomain)
-	scanMarkStepDone(targetID, "CRAWLING", "DONE")
-	triggerNextModule(targetID, rootDomain, "CRAWLING")
-}
-
-func runToolAndCollect(targetID uint, inputFile string, results map[string]string, sourceLabel string, cmdName string, cmdArgs ...string) {
-	var output []byte
-	var err error
-
-	if cmdName == "waybackurls" || cmdName == "gau" {
-		// Open input file directly instead of using 'cat' command
-		f, err := os.Open(inputFile)
-		if err != nil {
-			log.Printf("⚠️ Failed to open input file for %s: %v\n", cmdName, err)
-			return
-		}
-		defer f.Close()
-
-		// Run tool with stdin from file, monitored by kill switch
-		output, err = runCommandWithStdinAndKillSwitch(targetID, f, cmdName, cmdArgs...)
-	} else {
-		output, err = runCommandWithKillSwitch(targetID, cmdName, cmdArgs...)
-	}
-
-	if err != nil {
-		log.Printf("⚠️ Tool %s failed or killed: %v\n", cmdName, err)
-		return
-	}
-
-	scanner := bufio.NewScanner(bytes.NewReader(output))
-	for scanner.Scan() {
-		u := strings.TrimSpace(scanner.Text())
-		if u == "" {
-			continue
-		}
-		if _, exists := results[u]; !exists {
-			results[u] = sourceLabel
-		}
-	}
+	crawlingphase.Run(crawlingphase.Context{
+		TargetID:            targetID,
+		RootDomain:          rootDomain,
+		CheckStop:           checkStopRequest,
+		UpdateTargetPhase:   updateTargetPhase,
+		EnsureScanState:     ensureScanState,
+		ScanIsStepDone:      scanIsStepDone,
+		ScanMarkRunning:     scanMarkRunning,
+		ScanMarkStepDone:    scanMarkStepDone,
+		TriggerNextModule:   triggerNextModule,
+		RunCommand:          runCommandWithKillSwitch,
+		RunCommandWithStdin: runCommandWithStdinAndKillSwitch,
+	})
 }
 
 // saveCrawledURLs (UPDATED) اضافه شدن پارامتر silent
-func saveCrawledURLs(targetID uint, rootDomain string, urls map[string]string, silent bool) {
-	log.Printf("💾 Processing %d collected URLs...", len(urls))
-
-	ignoredExts := []string{
-		".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp", ".ico", ".webp",
-		".woff", ".woff2", ".ttf", ".eot", ".otf",
-		".css",
-	}
-
-	var newUrls []models.FoundURL
-	countSkippedCache := 0
-	countSkippedExt := 0
-	countUpdatedSource := 0
-
-	// کلید ردیس برای جلوگیری از تکرار در دفعات بعد (Continuous Monitoring)
-	redisKey := fmt.Sprintf("target:%d:crawled_urls", targetID)
-
-	for u, source := range urls {
-		cleanURL := strings.Split(u, "?")[0]
-		isIgnored := false
-		for _, ext := range ignoredExts {
-			if strings.HasSuffix(strings.ToLower(cleanURL), ext) {
-				isIgnored = true
-				break
-			}
-		}
-		if isIgnored {
-			countSkippedExt++
-			continue
-		}
-
-		// 👇 چک کردن کش ردیس (Deduplication)
-		// برای هر URL، بررسی می‌کنیم آیا قبلاً در دیتابیس وجود دارد یا خیر تا source را مرج کنیم
-		var existingURL models.FoundURL
-		result := database.DB.Where("target_id = ? AND value = ?", targetID, u).First(&existingURL)
-
-		if result.Error == nil {
-			// URL already exists, check/update source
-			currentSources := strings.Split(existingURL.Source, ", ")
-			newSource := source
-
-			// Check if new source is already present
-			sourceExists := false
-			for _, s := range currentSources {
-				if s == newSource {
-					sourceExists = true
-					break
-				}
-			}
-
-			if !sourceExists {
-				// Append new source
-				existingURL.Source = existingURL.Source + ", " + newSource
-				database.DB.Save(&existingURL)
-				countUpdatedSource++
-			}
-
-			countSkippedCache++
-			continue
-		}
-
-		// URL is new
-		newUrls = append(newUrls, models.FoundURL{
-			TargetID: targetID,
-			Value:    u,
-			Source:   source,
-		})
-
-		// 👇 افزودن به کش ردیس (اگرچه منطق بالا دیتابیس را چک می‌کند، ردیس هم برای سرعت خوب است اما اینجا منطق اصلی دیتابیس شد)
-		redisq.Client.SAdd(context.Background(), redisKey, u)
-
-		// 👇 ارسال نوتیفیکیشن فقط اگر silent نباشد
-		if !silent {
-			telegram.SendNewURLAlert(rootDomain, u, source)
-		}
-	}
-
-	if len(newUrls) > 0 {
-		batchSize := 500
-		for i := 0; i < len(newUrls); i += batchSize {
-			end := i + batchSize
-			if end > len(newUrls) {
-				end = len(newUrls)
-			}
-			if err := database.DB.CreateInBatches(newUrls[i:end], batchSize).Error; err != nil {
-				log.Printf("⚠️ DB Insert Warning: %v\n", err)
-			}
-		}
-		// کش تارگت را می‌سوزانیم تا دیتای جدید در لیست‌ها دیده شود
-		cache.IncrementTargetVersion(targetID)
-		log.Printf("✅ Saved %d NEW URLs to DB.", len(newUrls))
-	} else {
-		log.Println("✅ No new URLs to save.")
-	}
-
-	if countUpdatedSource > 0 {
-		log.Printf("🔄 Updated sources for %d existing URLs.", countUpdatedSource)
-	}
-
-	log.Printf("📊 Stats: Total Found: %d | Ignored (Ext): %d | Exists/Skipped: %d | New: %d",
-		len(urls), countSkippedExt, countSkippedCache, len(newUrls))
-}
 
 // ==========================================
 // Smart Storage & Notification Logic
 // ==========================================
 
 func saveDiscoveryResultsToDB(target models.Target, masterList []string, liveResults map[string][]string, sourcesMap map[string][]string) {
-	log.Printf("💾 Saving/Updating assets (Scan Count: %d)...", target.ScanCount)
-
-	isFirstRun := target.ScanCount == 0
-	countNew := 0
-	countUpdated := 0
-
-	// Helper function برای merge کردن sources
-	mergeSources := func(existingSourcesJSON string, newSources []string) string {
-		var existingSources []string
-		if existingSourcesJSON != "" && existingSourcesJSON != "[]" {
-			_ = json.Unmarshal([]byte(existingSourcesJSON), &existingSources)
-		}
-
-		// ایجاد map برای unique کردن
-		sourceMap := make(map[string]bool)
-		for _, s := range existingSources {
-			sourceMap[s] = true
-		}
-		for _, s := range newSources {
-			sourceMap[s] = true
-		}
-
-		// تبدیل به slice و مرتب کردن
-		var merged []string
-		for s := range sourceMap {
-			merged = append(merged, s)
-		}
-		sort.Strings(merged)
-
-		bytes, _ := json.Marshal(merged)
-		return string(bytes)
-	}
-
-	chunkSize := 1000
-	for i := 0; i < len(masterList); i += chunkSize {
-		end := i + chunkSize
-		if end > len(masterList) {
-			end = len(masterList)
-		}
-		chunk := masterList[i:end]
-
-		var existingAssets []models.Asset
-		database.DB.Where("target_id = ? AND value IN ?", target.ID, chunk).Find(&existingAssets)
-
-		existingMap := make(map[string]*models.Asset)
-		for j := range existingAssets {
-			existingMap[existingAssets[j].Value] = &existingAssets[j]
-		}
-
-		var toInsert []models.Asset
-
-		for _, val := range chunk {
-			ips, foundInDnsx := liveResults[val]
-			hasIPs := foundInDnsx && len(ips) > 0
-			isLive := hasIPs
-
-			dnsxIPJSON := "[]"
-			if hasIPs {
-				bytes, _ := json.Marshal(ips)
-				dnsxIPJSON = string(bytes)
-			}
-
-			// دریافت sources برای این subdomain
-			newSources := sourcesMap[val]
-			sourcesJSON := "[]"
-			if len(newSources) > 0 {
-				bytes, _ := json.Marshal(newSources)
-				sourcesJSON = string(bytes)
-			}
-
-			if existing, ok := existingMap[val]; ok {
-				// Merge sources با sources موجود
-				mergedSourcesJSON := mergeSources(existing.Sources, newSources)
-
-				updateData := make(map[string]interface{})
-				needsUpdate := false
-
-				if existing.IsLive != isLive {
-					now := time.Now()
-					logChange(database.DB, existing.ID, "is_live", strconv.FormatBool(existing.IsLive), strconv.FormatBool(isLive))
-
-					// اگر ساب‌دامین قبلاً در دیتابیس بود اما لایو نبود و حالا لایو شده، به عنوان fresh asset در نظر می‌گیریم
-					if isLive && !existing.IsLive {
-						if !isFirstRun {
-							telegram.SendNewAssetAlert(target.RootDomain, val)
-						}
-					} else if !isLive {
-						telegram.SendChangeAlert(target.RootDomain, val, "is_live", "true", "false")
-					}
-
-					updateData["is_live"] = isLive
-					updateData["is_new"] = true
-					updateData["last_change_at"] = &now
-					updateData["dnsx_ip"] = dnsxIPJSON
-					needsUpdate = true
-				} else if isLive && existing.DnsxIP != dnsxIPJSON {
-					updateData["dnsx_ip"] = dnsxIPJSON
-					needsUpdate = true
-				}
-
-				// آپدیت sources اگر تغییر کرده
-				if existing.Sources != mergedSourcesJSON {
-					updateData["sources"] = mergedSourcesJSON
-					needsUpdate = true
-				}
-
-				if needsUpdate {
-					database.DB.Model(existing).Updates(updateData)
-					countUpdated++
-				}
-			} else {
-				// ساب‌دامین جدید: فقط اگر لایو باشد (دارای IP از dnsx) به عنوان fresh asset در نظر می‌گیریم
-				newAsset := models.Asset{
-					TargetID:     target.ID,
-					Value:        val,
-					Type:         "subdomain",
-					IsNew:        true,
-					IsLive:       isLive,
-					Technologies: "[]",
-					HostIP:       "[]",
-					RawHttpx:     "{}",
-					DnsxIP:       dnsxIPJSON,
-					Sources:      sourcesJSON,
-				}
-				toInsert = append(toInsert, newAsset)
-
-				// فقط برای ساب‌دامین‌های جدید که لایو هستند (دارای IP از dnsx) نوتیف می‌فرستیم
-				if !isFirstRun && isLive {
-					telegram.SendNewAssetAlert(target.RootDomain, val)
-				}
-				countNew++
-			}
-		}
-
-		if len(toInsert) > 0 {
-			if err := database.DB.CreateInBatches(toInsert, 500).Error; err != nil {
-				log.Printf("❌ Bulk insert failed: %v\n", err)
-			}
-		}
-	}
-
-	// کش را می‌سوزانیم چون Asset جدید اضافه یا آپدیت شده
-	if countNew > 0 || countUpdated > 0 {
-		cache.IncrementTargetVersion(target.ID)
-	}
-	log.Printf("✅ DB Sync Complete. New: %d, Status Changed: %d.\n", countNew, countUpdated)
+	discoverypersist.SaveDiscoveryResultsToDB(discoverypersist.SaveContext{
+		LogChange: logChange,
+	}, target, masterList, liveResults, sourcesMap)
 }
 
 func UpdateAssetsWithDiff(targetID uint, results map[string]HttpxResult) {
-	var targetName string
-	var target models.Target
-	isFirstRun := false
-	if err := database.DB.First(&target, targetID).Error; err == nil {
-		targetName = target.RootDomain
-		isFirstRun = target.ScanCount == 0
-	}
-
-	countUpdated := 0
-	countChanges := 0
-
-	err := database.DB.Transaction(func(tx *gorm.DB) error {
-		for hostInput, result := range results {
-			var asset models.Asset
-			if err := tx.Set("gorm:query_option", "FOR UPDATE").Where("value = ? AND target_id = ?", hostInput, targetID).First(&asset).Error; err != nil {
-				if err == gorm.ErrRecordNotFound {
-					// این حالت نادر است چون Phase 2 فقط assets موجود در دیتابیس را پردازش می‌کند
-					// اما اگر asset جدیدی پیدا شد و لایو است، فقط در صورتی نوتیف می‌فرستیم که اولین اجرا نباشد
-					asset = models.Asset{
-						TargetID: targetID, Value: hostInput, Type: "subdomain", IsNew: true, IsLive: true,
-						Technologies: "[]", HostIP: "[]", RawHttpx: "{}", DnsxIP: "[]",
-					}
-					if err := tx.Create(&asset).Error; err != nil {
-						return err
-					}
-					// فقط برای assets جدید که لایو هستند و اولین اجرا نیست، نوتیف می‌فرستیم
-					if !isFirstRun && result.StatusCode > 0 {
-						telegram.SendNewAssetAlert(targetName, hostInput)
-					}
-				} else {
-					continue
-				}
-			}
-
-			isFirstProbing := asset.RawHttpx == "" || asset.RawHttpx == "{}"
-			hasChanged := false
-			now := time.Now()
-
-			checkAndNotify := func(field, oldVal, newVal string) error {
-				if oldVal != newVal {
-					if err := logChange(tx, asset.ID, field, oldVal, newVal); err != nil {
-						return err
-					}
-					if !isFirstProbing {
-						telegram.SendChangeAlert(targetName, hostInput, field, oldVal, newVal)
-					}
-					hasChanged = true
-				}
-				return nil
-			}
-
-			if err := checkAndNotify("status_code", strconv.Itoa(asset.StatusCode), strconv.Itoa(result.StatusCode)); err != nil {
-				return err
-			}
-			oldTitle := shortenString(asset.Title, 50)
-			newTitle := shortenString(result.Title, 50)
-			if err := checkAndNotify("title", oldTitle, newTitle); err != nil {
-				return err
-			}
-			if err := checkAndNotify("web_server", asset.WebServer, result.WebServer); err != nil {
-				return err
-			}
-
-			newTechJSON := marshalJSONOrDefault(result.Technologies, "[]")
-			newIPsJSON := marshalJSONOrDefault(result.A, "[]")
-
-			if !areJSONArraysEqual(asset.Technologies, newTechJSON) {
-				if err := checkAndNotify("technologies", asset.Technologies, newTechJSON); err != nil {
-					return err
-				}
-			}
-			if !areJSONArraysEqual(asset.HostIP, newIPsJSON) {
-				if err := checkAndNotify("host_ip", asset.HostIP, newIPsJSON); err != nil {
-					return err
-				}
-			}
-
-			if hasChanged {
-				asset.LastChangeAt = &now
-				countChanges++
-			}
-
-			asset.FinalURL = result.URL
-			asset.StatusCode = result.StatusCode
-			asset.Title = result.Title
-			asset.ContentLength = result.ContentLength
-			asset.HostIP = newIPsJSON
-			asset.WebServer = result.WebServer
-			asset.CDNName = result.CDNName
-			asset.Technologies = newTechJSON
-			asset.BodyHash = result.BodyHash
-			asset.HeaderHash = result.HeaderHash
-			asset.RawHttpx = result.RawJSON
-			asset.ResponseTimeMs = parseResponseTime(result.ResponseTime)
-
-			if err := tx.Save(&asset).Error; err != nil {
-				return err
-			}
-			countUpdated++
-		}
-		return nil
-	})
-
-	if err != nil {
-		log.Printf("❌ Transaction failed: %v\n", err)
-	} else {
-		// کش را می‌سوزانیم
-		if countUpdated > 0 {
-			cache.IncrementTargetVersion(targetID)
-		}
-		log.Printf("✅ Smart Update Complete. Updated: %d, Changes Detected: %d.\n", countUpdated, countChanges)
-	}
+	probingpersist.UpdateAssetsWithDiff(probingpersist.Context{
+		LogChange: logChange,
+	}, targetID, results)
 }
 
 // ... (Helper Functions)
 func runCommandWithKillSwitch(targetID uint, name string, args ...string) ([]byte, error) {
-	return runCommandWithStdinAndKillSwitch(targetID, nil, name, args...)
+	return workerruntime.RunCommandWithKillSwitch(targetID, scanHeartbeat, checkStopRequest, name, args...)
 }
 
 func runCommandWithStdinAndKillSwitch(targetID uint, stdin io.Reader, name string, args ...string) ([]byte, error) {
-	cmd := exec.Command(name, args...)
-	cmd.Env = envWithTargetTmp(targetID)
-
-	if stdin != nil {
-		cmd.Stdin = stdin
-	}
-
-	var outBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start command %s: %w", name, err)
-	}
-
-	// Register Task
-	taskKey := fmt.Sprintf("%d-%d", targetID, cmd.Process.Pid)
-	RunningProcesses.Store(taskKey, TaskInfo{
-		TargetID:  targetID,
-		Command:   name + " " + strings.Join(args, " "),
-		StartTime: time.Now(),
-		PID:       cmd.Process.Pid,
-	})
-	defer RunningProcesses.Delete(taskKey)
-
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case err := <-done:
-			return outBuf.Bytes(), err
-		case <-ticker.C:
-			// keep scan heartbeat fresh so API doesn't treat active scans as stale
-			scanHeartbeat(targetID)
-			if checkStopRequest(targetID) {
-				log.Printf("🛑 Kill switch activated for target %d. Killing process %s...", targetID, name)
-				if err := cmd.Process.Kill(); err != nil {
-					log.Printf("⚠️ Failed to kill process: %v", err)
-				}
-				return nil, fmt.Errorf("process killed by user request")
-			}
-		}
-	}
+	return workerruntime.RunCommandWithStdinAndKillSwitch(targetID, stdin, scanHeartbeat, checkStopRequest, name, args...)
 }
 
 // runCommandWithKillSwitchCombined مثل runCommandWithKillSwitch ولی stdout/stderr را با هم برمی‌گرداند (برای ابزارهایی مثل nmap)
 func runCommandWithKillSwitchCombined(targetID uint, name string, args ...string) ([]byte, error) {
-	cmd := exec.Command(name, args...)
-	cmd.Env = envWithTargetTmp(targetID)
-	var outBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &outBuf
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start command %s: %w", name, err)
-	}
-
-	// Register Task
-	taskKey := fmt.Sprintf("%d-%d", targetID, cmd.Process.Pid)
-	RunningProcesses.Store(taskKey, TaskInfo{
-		TargetID:  targetID,
-		Command:   name + " " + strings.Join(args, " "),
-		StartTime: time.Now(),
-		PID:       cmd.Process.Pid,
-	})
-	defer RunningProcesses.Delete(taskKey)
-
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case err := <-done:
-			return outBuf.Bytes(), err
-		case <-ticker.C:
-			// keep scan heartbeat fresh so API doesn't treat active scans as stale
-			scanHeartbeat(targetID)
-			if checkStopRequest(targetID) {
-				log.Printf("🛑 Kill switch activated for target %d. Killing process %s...", targetID, name)
-				if err := cmd.Process.Kill(); err != nil {
-					log.Printf("⚠️ Failed to kill process: %v", err)
-				}
-				return nil, fmt.Errorf("process killed by user request")
-			}
-		}
-	}
+	return workerruntime.RunCommandWithKillSwitchCombined(targetID, scanHeartbeat, checkStopRequest, name, args...)
 }
 
 func checkStopRequest(targetID uint) bool {
-	var t models.Target
-	if err := database.DB.Select("stop_requested").First(&t, targetID).Error; err != nil {
-		return false
-	}
-	if t.StopRequested {
-		now := time.Now()
-		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{
-			"status": "PAUSED", "current_phase": "PAUSED BY USER", "stop_requested": false, "last_scan_at": &now,
-		})
-		scanMarkPaused(targetID, "paused by user")
-		return true
-	}
-	return false
+	return workerstate.CheckStopRequest(targetID)
 }
 
 func updateTargetPhase(targetID uint, phase string) {
-	database.DB.Model(&models.Target{}).Where("id = ?", targetID).Update("current_phase", phase)
+	workerstate.UpdateTargetPhase(targetID, phase)
 }
-
-// =================================================================
-// Persistent Scan Checkpointing (DB-backed)
-// =================================================================
 
 func ensureScanState(targetID uint) (*models.TargetScanState, error) {
-	var st models.TargetScanState
-	err := database.DB.Where("target_id = ?", targetID).First(&st).Error
-	if err == nil {
-		return &st, nil
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
-	}
-	st = models.TargetScanState{
-		TargetID: targetID,
-		Status:   "PAUSED",
-		RunID:    fmt.Sprintf("run_%d", time.Now().UnixNano()),
-	}
-	if err := database.DB.Create(&st).Error; err != nil {
-		return nil, err
-	}
-	return &st, nil
-}
-
-func scanCompletedSet(completedJSON string) map[string]bool {
-	out := make(map[string]bool)
-	if completedJSON == "" {
-		return out
-	}
-	var keys []string
-	if err := json.Unmarshal([]byte(completedJSON), &keys); err != nil {
-		return out
-	}
-	for _, k := range keys {
-		k = strings.TrimSpace(k)
-		if k != "" {
-			out[k] = true
-		}
-	}
-	return out
-}
-
-func scanCompletedList(set map[string]bool) []string {
-	var keys []string
-	for k := range set {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func scanStepKey(module, step string) string {
-	return fmt.Sprintf("%s:%s", strings.TrimSpace(module), strings.TrimSpace(step))
+	return workerstate.EnsureScanState(targetID)
 }
 
 func scanMarkRunning(targetID uint, module, step string) {
-	now := time.Now()
-	_ = database.DB.Model(&models.TargetScanState{}).
-		Where("target_id = ?", targetID).
-		Updates(map[string]interface{}{
-			"status":         "RUNNING",
-			"current_module": module,
-			"current_step":   step,
-			"heartbeat_at":   &now,
-			"last_error":     "",
-		}).Error
+	workerstate.MarkRunning(targetID, module, step)
 }
 
 func scanHeartbeat(targetID uint) {
-	now := time.Now()
-	_ = database.DB.Model(&models.TargetScanState{}).
-		Where("target_id = ? AND status = ?", targetID, "RUNNING").
-		Update("heartbeat_at", &now).Error
+	workerstate.Heartbeat(targetID)
 }
 
 func scanMarkPaused(targetID uint, reason string) {
-	now := time.Now()
-	_ = database.DB.Model(&models.TargetScanState{}).
-		Where("target_id = ?", targetID).
-		Updates(map[string]interface{}{
-			"status":       "PAUSED",
-			"heartbeat_at": &now,
-			"last_error":   reason,
-		}).Error
+	workerstate.MarkPaused(targetID, reason)
 }
 
 func scanMarkFailed(targetID uint, errMsg string) {
-	now := time.Now()
-	_ = database.DB.Model(&models.TargetScanState{}).
-		Where("target_id = ?", targetID).
-		Updates(map[string]interface{}{
-			"status":       "FAILED",
-			"heartbeat_at": &now,
-			"last_error":   errMsg,
-		}).Error
+	workerstate.MarkFailed(targetID, errMsg)
 }
 
 func scanMarkStepDone(targetID uint, module, step string) {
-	st, err := ensureScanState(targetID)
-	if err != nil {
-		return
-	}
-	set := scanCompletedSet(st.CompletedSteps)
-	set[scanStepKey(module, step)] = true
-	keys := scanCompletedList(set)
-	b, _ := json.Marshal(keys)
-	now := time.Now()
-	_ = database.DB.Model(&models.TargetScanState{}).
-		Where("target_id = ?", targetID).
-		Updates(map[string]interface{}{
-			"completed_steps": string(b),
-			"heartbeat_at":    &now,
-		}).Error
+	workerstate.MarkStepDone(targetID, module, step)
 }
 
 func scanIsStepDone(targetID uint, module, step string) bool {
-	st, err := ensureScanState(targetID)
-	if err != nil {
-		return false
-	}
-	set := scanCompletedSet(st.CompletedSteps)
-	return set[scanStepKey(module, step)]
+	return workerstate.IsStepDone(targetID, module, step)
 }
 
 func scanGetMeta(targetID uint) map[string]interface{} {
-	st, err := ensureScanState(targetID)
-	if err != nil {
-		return map[string]interface{}{}
-	}
-	out := map[string]interface{}{}
-	if st.Meta != "" {
-		_ = json.Unmarshal([]byte(st.Meta), &out)
-	}
-	return out
+	return workerstate.GetMeta(targetID)
 }
 
 func scanSetMeta(targetID uint, meta map[string]interface{}) {
-	b, _ := json.Marshal(meta)
-	now := time.Now()
-	_ = database.DB.Model(&models.TargetScanState{}).
-		Where("target_id = ?", targetID).
-		Updates(map[string]interface{}{
-			"meta":         string(b),
-			"heartbeat_at": &now,
-		}).Error
+	workerstate.SetMeta(targetID, meta)
 }
 
 func triggerNextModule(targetID uint, rootDomain, currentModule string) {
-	var target models.Target
-	if err := database.DB.First(&target, targetID).Error; err != nil {
-		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Update("status", "READY")
-		return
-	}
-	var modules []string
-	json.Unmarshal([]byte(target.ScanModules), &modules)
-	currentIndex := -1
-	for i, m := range modules {
-		if m == currentModule {
-			currentIndex = i
-			break
-		}
-	}
-	if currentIndex != -1 && currentIndex+1 < len(modules) {
-		nextModule := modules[currentIndex+1]
-		log.Printf("🔗 Chaining: Phase '%s' done. Starting '%s'\n", currentModule, nextModule)
-
-		// Update status to QUEUED so it doesn't count towards concurrency limit while waiting
-		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{"status": "QUEUED", "stop_requested": false})
-
-		payload := fmt.Sprintf("%s:%d:%s", nextModule, targetID, rootDomain)
-		redisq.Client.RPush(context.Background(), redisq.QueueNameForUser(target.CreatedByUserID), payload)
-	} else {
-		log.Printf("🏁 Chain Complete for %s.\n", rootDomain)
-		now := time.Now()
-		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{
-			"last_scan_at": &now, "status": "READY", "scan_count": gorm.Expr("scan_count + 1"), "current_phase": "IDLE",
-		})
-		_ = database.DB.Model(&models.TargetScanState{}).
-			Where("target_id = ?", targetID).
-			Updates(map[string]interface{}{
-				"status":         "COMPLETED",
-				"current_module": "",
-				"current_step":   "",
-				"heartbeat_at":   &now,
-				"last_error":     "",
-			}).Error
-		// پاکسازی workspace موقت این target بعد از پایان کامل chain
-		cleanupTargetTempDir(targetID)
-	}
+	workerstate.TriggerNextModule(targetID, rootDomain, currentModule, workerruntime.CleanupTargetTempDir)
 }
 
 func logChange(tx *gorm.DB, assetID uint, field, oldVal, newVal string) error {
@@ -1923,1037 +574,61 @@ func logChange(tx *gorm.DB, assetID uint, field, oldVal, newVal string) error {
 	return tx.Create(&history).Error
 }
 
+func buildDiscoveryToolContext(targetID uint, rootDomain string) discoverytools.Context {
+	tempDir, _, _ := utils.GetTargetTempDir(targetID)
+	return discoverytools.Context{
+		TargetID:           targetID,
+		RootDomain:         rootDomain,
+		TempDir:            tempDir,
+		RunCommand:         runCommandWithKillSwitch,
+		CheckStop:          checkStopRequest,
+		NormalizeSubdomain: discoverytools.NormalizeSubdomain,
+	}
+}
+
 func runDnsx(targetID uint, inputFile, outputFile string) (map[string][]string, error) {
-	results := make(map[string][]string)
-
-	domains, err := utils.ReadSliceFromFile(inputFile)
-	if err != nil {
-		return nil, err
-	}
-	if len(domains) == 0 {
-		return results, nil
-	}
-
-	batchSize := getDNSXBatchSize()
-	totalBatches := (len(domains) + batchSize - 1) / batchSize
-	baseDir := filepath.Dir(outputFile)
-
-	log.Printf(" Starting DNSX validation for %d domains in %d batches (batch size: %d)\n", len(domains), totalBatches, batchSize)
-
-	for start := 0; start < len(domains); start += batchSize {
-		if checkStopRequest(targetID) {
-			return nil, fmt.Errorf("process killed by user request")
-		}
-
-		end := start + batchSize
-		if end > len(domains) {
-			end = len(domains)
-		}
-
-		batchNo := (start / batchSize) + 1
-		batchInputFile := filepath.Join(baseDir, fmt.Sprintf("dnsx_batch_%06d_input.txt", batchNo))
-		batchOutputFile := filepath.Join(baseDir, fmt.Sprintf("dnsx_batch_%06d_output.json", batchNo))
-
-		if err := utils.WriteSliceToFile(batchInputFile, domains[start:end]); err != nil {
-			return nil, err
-		}
-		_ = os.Remove(batchOutputFile)
-
-		log.Printf(" DNSX batch %d/%d: validating %d domains (%d/%d)\n", batchNo, totalBatches, end-start, end, len(domains))
-
-		_, err := runCommandWithKillSwitch(
-			targetID,
-			"dnsx",
-			"-l", batchInputFile,
-			"-json",
-			"-o", batchOutputFile,
-			"-silent",
-			"-a",
-			"-resp",
-			"-threads", "50",
-		)
-		_ = os.Remove(batchInputFile)
-		if err != nil {
-			_ = os.Remove(batchOutputFile)
-			return nil, err
-		}
-
-		file, err := os.Open(batchOutputFile)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return nil, err
-		}
-
-		scanner := bufio.NewScanner(file)
-		scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-		for scanner.Scan() {
-			var res DnsxResult
-			if err := json.Unmarshal([]byte(scanner.Text()), &res); err == nil && res.Host != "" {
-				results[res.Host] = res.A
-			}
-		}
-		if scanErr := scanner.Err(); scanErr != nil {
-			_ = file.Close()
-			return nil, scanErr
-		}
-		_ = file.Close()
-		_ = os.Remove(batchOutputFile)
-	}
-
-	log.Printf("✅ DNSX validation completed: %d live domains resolved from %d candidates\n", len(results), len(domains))
-	return results, nil
+	return discoverytools.RunDNSX(buildDiscoveryToolContext(targetID, ""), inputFile, outputFile)
 }
 
 // normalizeSubdomain حذف www و normalize کردن subdomain
-func normalizeSubdomain(subdomain, rootDomain string) string {
-	subdomain = strings.TrimSpace(subdomain)
-	if subdomain == "" {
-		return ""
-	}
-
-	// تبدیل به lowercase برای مقایسه
-	subdomainLower := strings.ToLower(subdomain)
-	rootDomainLower := strings.ToLower(rootDomain)
-
-	// حذف www. از ابتدای subdomain (case-insensitive)
-	subdomainLower = strings.TrimPrefix(subdomainLower, "www.")
-
-	// اگر subdomain برابر rootDomain باشد، رد می‌کنیم (فقط subdomain می‌خواهیم)
-	if subdomainLower == rootDomainLower {
-		return ""
-	}
-
-	// اطمینان از اینکه subdomain واقعا زیرمجموعه‌ی rootDomain است (مرز نقطه)
-	// مثال valid: api.example.com
-	// مثال invalid: api.notexample.com (صرفا به خاطر suffix نباید قبول شود)
-	if !strings.HasSuffix(subdomainLower, "."+rootDomainLower) {
-		return ""
-	}
-
-	return subdomainLower
-}
-
 // runPuredns اجرای puredns برای bruteforce subdomain discovery
 // این تابع subdomain‌های لایو (resolve شده) با IP‌هایشان را برمی‌گرداند
 // خروجی: map[string][]string که key=subdomain و value=[]IP
 func runPuredns(targetID uint, rootDomain string, wordlists []string) (map[string][]string, error) {
-	if len(wordlists) == 0 {
-		return map[string][]string{}, nil
-	}
-
-	tempDir, _, err := utils.GetTargetTempDir(targetID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get temp dir: %v", err)
-	}
-
-	// ساخت فایل resolvers.txt از TRUSTED_RESOLVERS
-	resolversFile := filepath.Join(tempDir, "puredns_resolvers.txt")
-	resolversStr := os.Getenv("TRUSTED_RESOLVERS")
-	if resolversStr == "" {
-		resolversStr = "1.1.1.1,8.8.8.8,1.0.0.1,8.8.4.4" // fallback
-	}
-	resolvers := strings.Split(resolversStr, ",")
-	var cleanResolvers []string
-	for _, r := range resolvers {
-		r = strings.TrimSpace(r)
-		if r != "" {
-			cleanResolvers = append(cleanResolvers, r)
-		}
-	}
-	if err := utils.WriteSliceToFile(resolversFile, cleanResolvers); err != nil {
-		return nil, fmt.Errorf("failed to write resolvers file: %v", err)
-	}
-
-	// ساخت یک فایل موقت برای ترکیب همه وردلیست‌ها
-	combinedWordlistFile := filepath.Join(tempDir, "puredns_combined_wordlist.txt")
-	var allWords []string
-	wordSet := make(map[string]bool)
-
-	for _, wlPath := range wordlists {
-		// بررسی وجود فایل
-		if _, err := os.Stat(wlPath); os.IsNotExist(err) {
-			log.Printf("⚠️ Wordlist not found: %s, skipping...\n", wlPath)
-			continue
-		}
-
-		// خواندن وردلیست
-		content, err := os.ReadFile(wlPath)
-		if err != nil {
-			log.Printf("⚠️ Failed to read wordlist %s: %v, skipping...\n", wlPath, err)
-			continue
-		}
-
-		// پارس کردن خطوط
-		for _, line := range strings.Split(string(content), "\n") {
-			word := strings.TrimSpace(line)
-			if word != "" && !strings.HasPrefix(word, "#") && !wordSet[word] {
-				wordSet[word] = true
-				allWords = append(allWords, word)
-			}
-		}
-	}
-
-	if len(allWords) == 0 {
-		log.Printf("⚠️ No words found in wordlists, skipping puredns\n")
-		return map[string][]string{}, nil
-	}
-
-	// نوشتن وردلیست ترکیبی
-	if err := utils.WriteSliceToFile(combinedWordlistFile, allWords); err != nil {
-		return nil, fmt.Errorf("failed to write combined wordlist: %v", err)
-	}
-
-	log.Printf("🔨 Running puredns bruteforce with %d words for %s...\n", len(allWords), rootDomain)
-
-	// اجرای puredns
-	// نکته: -r برای public resolvers است. برای اینکه نیاز به فایل default trusted resolvers نداشته باشیم،
-	// از --trusted-only استفاده می‌کنیم تا فقط همین resolvers استفاده شوند.
-	// puredns bruteforce wordlist.txt domain.com -r resolvers.txt --trusted-only --quiet
-	output, err := runCommandWithKillSwitch(targetID, "puredns", "bruteforce", combinedWordlistFile, rootDomain, "-r", resolversFile, "--trusted-only", "--quiet")
-	if err != nil {
-		if err.Error() == "process killed by user request" {
-			return nil, err
-		}
-		log.Printf("⚠️ Puredns error: %v\n", err)
-		return map[string][]string{}, nil // در صورت خطا، map خالی برمی‌گردانیم
-	}
-
-	// پارس کردن خروجی (هر خط یک subdomain لایو است)
-	subdomains := []string{}
-	for _, line := range strings.Split(string(output), "\n") {
-		normalized := normalizeSubdomain(strings.TrimSpace(line), rootDomain)
-		if normalized != "" {
-			subdomains = append(subdomains, normalized)
-		}
-	}
-
-	// حالا باید IP‌های این subdomain‌ها را resolve کنیم
-	// استفاده از dnsx برای resolve کردن IP‌ها
-	results := make(map[string][]string)
-	if len(subdomains) > 0 {
-		// ساخت فایل موقت برای dnsx
-		purednsInputFile := filepath.Join(tempDir, "puredns_dnsx_input.txt")
-		if err := utils.WriteSliceToFile(purednsInputFile, subdomains); err != nil {
-			log.Printf("⚠️ Failed to write puredns input for dnsx: %v\n", err)
-			// در صورت خطا، subdomain‌ها را بدون IP برمی‌گردانیم
-			for _, subdomain := range subdomains {
-				results[subdomain] = []string{} // IP خالی، اما subdomain لایو است
-			}
-		} else {
-			// اجرای dnsx برای resolve کردن IP‌ها
-			purednsDnsxOutputFile := filepath.Join(tempDir, "puredns_dnsx_output.json")
-			dnsxResults, dnsxErr := runDnsx(targetID, purednsInputFile, purednsDnsxOutputFile)
-			if dnsxErr == nil {
-				results = dnsxResults
-			} else {
-				// در صورت خطا، subdomain‌ها را بدون IP برمی‌گردانیم
-				for _, subdomain := range subdomains {
-					results[subdomain] = []string{} // IP خالی، اما subdomain لایو است
-				}
-			}
-			_ = os.Remove(purednsInputFile)
-			_ = os.Remove(purednsDnsxOutputFile)
-		}
-	}
-
-	log.Printf("✅ Puredns found %d live subdomains for %s\n", len(results), rootDomain)
-
-	// پاکسازی فایل‌های موقت
-	_ = os.Remove(combinedWordlistFile)
-	_ = os.Remove(resolversFile)
-
-	return results, nil
+	return discoverytools.RunPureDNS(buildDiscoveryToolContext(targetID, rootDomain), rootDomain, wordlists)
 }
 
 // runVirusTotalCollection collects URLs from VirusTotal API for live subdomains
-func runVirusTotalCollection(targetID uint, subdomains []string, results map[string]string) {
-	apiKey := "183e25c8551f61932c61c190f8d2fc4667b82e954ada72ccef145cb4075a005e" // TODO: Move to config
-	client := &http.Client{Timeout: 30 * time.Second}
-
-	log.Printf("🦠 Starting VT Collection for %d subdomains.", len(subdomains))
-
-	for _, domain := range subdomains {
-		if checkStopRequest(targetID) {
-			return
-		}
-
-		url := fmt.Sprintf("https://virustotal.com/vtapi/v2/domain/report?apikey=%s&domain=%s", apiKey, domain)
-		req, err := http.NewRequest("GET", url, nil)
-		if err != nil {
-			log.Printf("⚠️ Failed to create VT request for %s: %v\n", domain, err)
-			continue
-		}
-		// تنظیم User-Agent برای جلوگیری از بلاک شدن توسط فایروال‌های VT
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Printf("⚠️ VirusTotal API error for %s: %v\n", domain, err)
-			continue
-		}
-
-		if resp.StatusCode != 200 {
-			// Don't log 404s too noisily, but warn on 204 (Rate Limit)
-			if resp.StatusCode == 204 {
-				log.Printf("⚠️ VirusTotal Rate Limit Exceeded (204) for %s. Slowing down.\n", domain)
-			} else if resp.StatusCode != 404 {
-				log.Printf("⚠️ VirusTotal API status %d for %s\n", resp.StatusCode, domain)
-			}
-			resp.Body.Close()
-			continue
-		}
-
-		var vtResp struct {
-			DetectedUrls   []interface{} `json:"detected_urls"`
-			UndetectedUrls []interface{} `json:"undetected_urls"`
-		}
-
-		if err := json.NewDecoder(resp.Body).Decode(&vtResp); err != nil {
-			log.Printf("⚠️ Failed to decode VT response for %s: %v\n", domain, err)
-			resp.Body.Close()
-			continue
-		}
-		resp.Body.Close()
-
-		foundCount := 0
-		// Helper to extract URLs from the nested arrays
-		// detected_urls structure: [ [url, sha256, positives, total, date], ... ]
-		processUrls := func(list []interface{}) {
-			for _, item := range list {
-				if arr, ok := item.([]interface{}); ok && len(arr) > 0 {
-					if u, ok := arr[0].(string); ok && u != "" {
-						u = strings.TrimSpace(u)
-						if _, exists := results[u]; !exists {
-							results[u] = "virustotal"
-							foundCount++
-						}
-					}
-				}
-			}
-		}
-
-		processUrls(vtResp.DetectedUrls)
-		processUrls(vtResp.UndetectedUrls)
-
-		if foundCount > 0 {
-			log.Printf("🦠 VirusTotal found %d new URLs for %s\n", foundCount, domain)
-		}
-
-		// Respect rate limits - VT public API has 4 req/min limit usually.
-		// We sleep 15 seconds to be safe (60s / 4 = 15s).
-		time.Sleep(15 * time.Second)
-	}
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
 
 // SubdomainSource نگه‌داری subdomain و source آن
-type SubdomainSource struct {
-	Subdomain string
-	Source    string
-}
 
 // runPassiveCollection جمع‌آوری اطلاعات غیرفعال (Passive) از منابع مختلف
 func runPassiveCollection(targetID uint, domain string) ([]string, map[string][]string, error) {
-	// دریافت تنظیمات target
-	var target models.Target
-	if err := database.DB.First(&target, targetID).Error; err != nil {
-		log.Printf("⚠️ Failed to fetch target config: %v\n", err)
-		// استفاده از تنظیمات پیش‌فرض
-		target.UseCero = false
-		target.UseCrtsh = false
-	}
-
-	// Build per-owner subfinder provider-config (API keys) if present
-	subfinderPC, err := discovery.WriteSubfinderProviderConfigFile(targetID, target.CreatedByUserID)
-	if err != nil {
-		log.Printf("⚠️ Failed to build subfinder provider-config (user_id=%d): %v\n", target.CreatedByUserID, err)
-		subfinderPC = ""
-	}
-	if subfinderPC != "" {
-		// do not log file contents (API keys)
-		log.Printf("🔑 Subfinder provider-config loaded for user_id=%d\n", target.CreatedByUserID)
-		defer func() { _ = os.Remove(subfinderPC) }()
-	}
-
-	var wg sync.WaitGroup
-	results := make(chan SubdomainSource, 50000)
-
-	runTool := func(name string, args ...string) {
-		defer wg.Done()
-		output, err := runCommandWithKillSwitch(targetID, name, args...)
-		if err == nil {
-			for _, line := range strings.Split(string(output), "\n") {
-				normalized := normalizeSubdomain(strings.TrimSpace(line), domain)
-				if normalized != "" {
-					results <- SubdomainSource{Subdomain: normalized, Source: name}
-				}
-			}
-		} else {
-			log.Printf("❌ %s error/killed: %v\n", name, err)
-		}
-	}
-
-	// 1. ابزارهای همیشگی (Subfinder, Assetfinder)
-	wg.Add(2)
-	go func() {
-		args := []string{"-d", domain, "-silent", "-all"}
-		if subfinderPC != "" {
-			args = append(args, "-pc", subfinderPC)
-		}
-		runTool("subfinder", args...)
-	}()
-	go runTool("assetfinder", "--subs-only", domain)
-
-	// 2. ابزارهای انتخابی (Cero)
-	if target.UseCero {
-		wg.Add(1)
-		log.Printf("🔐 Starting CERO for %s (SSL certificate scraping)...\n", domain)
-		go func() {
-			defer wg.Done()
-			ceroResults := runCero(targetID, domain)
-			log.Printf("✅ CERO found %d domains for %s\n", len(ceroResults), domain)
-			for _, res := range ceroResults {
-				normalized := normalizeSubdomain(res, domain)
-				if normalized != "" {
-					results <- SubdomainSource{Subdomain: normalized, Source: "cero"}
-				}
-			}
-		}()
-	} else {
-		log.Printf("⏩ Skipping CERO for %s (Disabled in settings)\n", domain)
-	}
-
-	// 3. ابزارهای انتخابی (Crt.sh)
-	if target.UseCrtsh {
-		wg.Add(1)
-		log.Printf("🔍 Starting CRT.SH API query for %s...\n", domain)
-		go func() {
-			defer wg.Done()
-			crtshResults := runCrtsh(domain)
-			log.Printf("✅ CRT.SH found %d domains for %s\n", len(crtshResults), domain)
-			for _, res := range crtshResults {
-				normalized := normalizeSubdomain(res, domain)
-				if normalized != "" {
-					results <- SubdomainSource{Subdomain: normalized, Source: "crtsh"}
-				}
-			}
-		}()
-	} else {
-		log.Printf("⏩ Skipping CRT.SH for %s (Disabled in settings)\n", domain)
-	}
-
-	// 4. ابزار اختیاری (AbuseDB)
-	if target.UseAbusedb {
-		wg.Add(1)
-		log.Printf("😈 Starting AbuseDB scraping for %s...\n", domain)
-		go func() {
-			defer wg.Done()
-			abuseResults := runAbuseDB(targetID, domain)
-			for _, res := range abuseResults {
-				normalized := normalizeSubdomain(res, domain)
-				if normalized != "" {
-					results <- SubdomainSource{Subdomain: normalized, Source: "abusedb"}
-				}
-			}
-		}()
-	} else {
-		log.Printf("⏩ Skipping AbuseDB for %s (Disabled in settings)\n", domain)
-	}
-
-	// بستن کانال وقتی همه تمام شدند
-	go func() { wg.Wait(); close(results) }()
-
-	// جمع‌آوری نتایج در Map برای حذف تکراری‌ها و ادغام منابع
-	sourcesMap := make(map[string]map[string]bool)
-	var finalSlice []string
-
-	for res := range results {
-		if res.Subdomain != "" && strings.HasSuffix(res.Subdomain, domain) {
-			// اضافه کردن subdomain به لیست
-			if _, exists := sourcesMap[res.Subdomain]; !exists {
-				sourcesMap[res.Subdomain] = make(map[string]bool)
-				finalSlice = append(finalSlice, res.Subdomain)
-			}
-			// اضافه کردن source
-			sourcesMap[res.Subdomain][res.Source] = true
-		}
-	}
-
-	// تبدیل map[string]bool به []string برای هر ساب‌دامین
-	sourcesListMap := make(map[string][]string)
-	for subdomain, sourcesSet := range sourcesMap {
-		var sources []string
-		for source := range sourcesSet {
-			sources = append(sources, source)
-		}
-		sort.Strings(sources) // مرتب کردن برای consistency
-		sourcesListMap[subdomain] = sources
-	}
-
-	// Check if process was paused/stopped during execution
-	var t models.Target
-	database.DB.Select("status").First(&t, targetID)
-	if t.Status == "PAUSED" {
-		return finalSlice, sourcesListMap, fmt.Errorf("process killed by user request")
-	}
-
-	return finalSlice, sourcesListMap, nil
-}
-
-// ---------------------------------------------------------
-// این تابع را در انتهای فایل runner.go اضافه کنید
-// ---------------------------------------------------------
-
-func runAbuseDB(targetID uint, rootDomain string) []string {
-	scriptPath := "/root/hunt-engine/backend/scripts/abusedb.sh"
-	// اطمینان از وجود فایل
-	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
-		log.Printf("❌ AbuseDB script not found at %s\n", scriptPath)
-		return []string{}
-	}
-
-	output, err := runCommandWithKillSwitchCombined(targetID, "/bin/bash", scriptPath, rootDomain)
-	if err != nil {
-		log.Printf("❌ AbuseDB Script Error: %v\nOutput: %s\n", err, string(output))
-		return []string{}
-	}
-
-	var results []string
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			results = append(results, line)
-		}
-	}
-
-	if len(results) > 0 {
-		log.Printf("😈 AbuseDB script found %d subdomains for %s\n", len(results), rootDomain)
-	} else {
-		log.Printf("⏩ AbuseDB script produced no results for %s\n", rootDomain)
-	}
-
-	return results
-}
-
-// runCero اجرای ابزار cero برای scrape کردن domain names از SSL certificates
-func runCero(targetID uint, domain string) []string {
-	output, err := runCommandWithKillSwitch(targetID, "cero", "-d", domain)
-	if err != nil {
-		log.Printf("⚠️ CERO error/killed: %v\n", err)
-		return []string{}
-	}
-
-	var results []string
-	for _, line := range strings.Split(string(output), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" {
-			results = append(results, trimmed)
-		}
-	}
-	if len(results) > 0 {
-		log.Printf("🔐 CERO scraped %d domains from SSL certificates\n", len(results))
-	}
-	return results
-}
-
-// runCrtsh استفاده از crt.sh API برای پیدا کردن subdomain ها
-func runCrtsh(rootDomain string) []string {
-	// ساخت URL برای crt.sh
-	url1 := fmt.Sprintf("https://crt.sh/?q=%%25.%s&output=json", rootDomain)
-	url2 := fmt.Sprintf("https://crt.sh/?q=%s&output=json", rootDomain)
-
-	var allResults []string
-
-	// درخواست اول: با wildcard
-	log.Printf("🔍 Querying crt.sh API (wildcard): %s\n", url1)
-	if data, err := fetchCrtshData(url1); err == nil {
-		parsed := parseCrtshJSON(data, rootDomain)
-		allResults = append(allResults, parsed...)
-		log.Printf("✅ crt.sh wildcard query returned %d domains\n", len(parsed))
-	} else {
-		log.Printf("⚠️ crt.sh wildcard query failed: %v\n", err)
-	}
-
-	// درخواست دوم: بدون wildcard
-	log.Printf("🔍 Querying crt.sh API (exact): %s\n", url2)
-	if data, err := fetchCrtshData(url2); err == nil {
-		parsed := parseCrtshJSON(data, rootDomain)
-		allResults = append(allResults, parsed...)
-		log.Printf("✅ crt.sh exact query returned %d domains\n", len(parsed))
-	} else {
-		log.Printf("⚠️ crt.sh exact query failed: %v\n", err)
-	}
-
-	// Unique کردن نتایج
-	uniqueMap := make(map[string]bool)
-	var finalResults []string
-	for _, res := range allResults {
-		res = strings.ToLower(strings.TrimSpace(res))
-		if res != "" && !uniqueMap[res] {
-			uniqueMap[res] = true
-			finalResults = append(finalResults, res)
-		}
-	}
-
-	log.Printf("🔍 CRT.SH total unique domains: %d\n", len(finalResults))
-	return finalResults
-}
-
-// fetchCrtshData دریافت داده از crt.sh API
-func fetchCrtshData(url string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("crt.sh API returned status %d", resp.StatusCode)
-	}
-
-	return ioutil.ReadAll(resp.Body)
-}
-
-// parseCrtshJSON پارس کردن JSON از crt.sh و استخراج domain names
-func parseCrtshJSON(data []byte, rootDomain string) []string {
-	var results []string
-	var jsonData []map[string]interface{}
-
-	if err := json.Unmarshal(data, &jsonData); err != nil {
-		return results
-	}
-
-	for _, item := range jsonData {
-		// استخراج common_name
-		if cn, ok := item["common_name"].(string); ok && cn != "" {
-			// حذف wildcard
-			cn = strings.TrimPrefix(cn, "*.")
-			cn = strings.TrimPrefix(cn, "\\*.")
-			results = append(results, cn)
-		}
-
-		// استخراج name_value (می‌تواند یک string یا array باشد)
-		if nv, ok := item["name_value"].(string); ok && nv != "" {
-			// name_value می‌تواند چند خطی باشد
-			for _, line := range strings.Split(nv, "\n") {
-				line = strings.TrimSpace(line)
-				if line != "" {
-					line = strings.TrimPrefix(line, "*.")
-					results = append(results, line)
-				}
-			}
-		}
-	}
-
-	// فیلتر کردن بر اساس rootDomain
-	var filtered []string
-	for _, res := range results {
-		res = strings.ToLower(strings.TrimSpace(res))
-		// بررسی اینکه با rootDomain تمام می‌شود
-		if strings.HasSuffix(res, rootDomain) {
-			filtered = append(filtered, res)
-		}
-	}
-
-	return filtered
+	return passivetools.Collect(passivetools.Context{
+		TargetID: targetID,
+		Domain:   domain,
+		RunCommand: func(name string, args ...string) ([]byte, error) {
+			return runCommandWithKillSwitch(targetID, name, args...)
+		},
+		RunCombinedCommand: func(name string, args ...string) ([]byte, error) {
+			return runCommandWithKillSwitchCombined(targetID, name, args...)
+		},
+	})
 }
 
 func runAlterx(targetID uint, inputFile, rootDomain string) ([]string, error) {
-	output, err := runCommandWithKillSwitch(targetID, "alterx", "-l", inputFile, "-silent")
-	if err != nil {
-		return nil, err
-	}
-
-	unique := make(map[string]bool)
-	var results []string
-	for _, line := range strings.Split(string(output), "\n") {
-		trimmed := strings.ToLower(strings.TrimSpace(line))
-		if trimmed != "" && strings.HasSuffix(trimmed, rootDomain) && !unique[trimmed] {
-			unique[trimmed] = true
-			results = append(results, trimmed)
-		}
-	}
-
-	log.Printf("✅ Alterx produced %d unique candidates for %s\n", len(results), rootDomain)
-	return results, nil
-}
-
-func areJSONArraysEqual(json1, json2 string) bool {
-	var arr1, arr2 []string
-	_ = json.Unmarshal([]byte(json1), &arr1)
-	_ = json.Unmarshal([]byte(json2), &arr2)
-	if len(arr1) != len(arr2) {
-		return false
-	}
-	sort.Strings(arr1)
-	sort.Strings(arr2)
-	return reflect.DeepEqual(arr1, arr2)
-}
-
-func marshalJSONOrDefault(v interface{}, defaultVal string) string {
-	if reflect.ValueOf(v).Kind() == reflect.Slice && reflect.ValueOf(v).Len() == 0 {
-		return defaultVal
-	}
-	jsonBytes, err := json.Marshal(v)
-	if err != nil || string(jsonBytes) == "null" || string(jsonBytes) == "" {
-		return defaultVal
-	}
-	return string(jsonBytes)
-}
-
-func parseResponseTime(timeStr string) int64 {
-	str := strings.TrimSuffix(timeStr, "ms")
-	if val, err := strconv.ParseFloat(str, 64); err == nil {
-		return int64(val)
-	}
-	return 0
-}
-
-func shortenString(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) > maxLen {
-		return string(runes[:maxLen]) + "..."
-	}
-	return s
-}
-
-func getBatchSize() int {
-	envStr := os.Getenv("PROBE_BATCH_SIZE")
-	if envStr == "" {
-		return DefaultBatchSize
-	}
-	size, err := strconv.Atoi(envStr)
-	if err != nil || size <= 0 {
-		return DefaultBatchSize
-	}
-	return size
-}
-
-func getDNSXBatchSize() int {
-	envStr := os.Getenv("DNSX_BATCH_SIZE")
-	if envStr == "" {
-		return DefaultDNSXBatchSize
-	}
-
-	size, err := strconv.Atoi(envStr)
-	if err != nil || size <= 0 {
-		return DefaultDNSXBatchSize
-	}
-
-	return size
-}
-
-func readHttpxResults(filename string) (map[string]HttpxResult, error) {
-	file, err := os.Open(filename)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	results := make(map[string]HttpxResult)
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		var result HttpxResult
-		if err := json.Unmarshal([]byte(line), &result); err == nil {
-			if result.Input != "" {
-				result.RawJSON = line
-				results[result.Input] = result
-			}
-		}
-	}
-	return results, scanner.Err()
-}
-
-func mergeUnique(slice1, slice2 []string) []string {
-	uniqueMap := make(map[string]bool)
-	for _, v := range slice1 {
-		uniqueMap[v] = true
-	}
-	for _, v := range slice2 {
-		uniqueMap[v] = true
-	}
-	final := make([]string, 0, len(uniqueMap))
-	for k := range uniqueMap {
-		final = append(final, k)
-	}
-	return final
-}
-
-// CdnCheckResult ساختار نتیجه cdncheck
-type CdnCheckResult struct {
-	IP        string `json:"ip"`
-	IsCDN     bool   `json:"cdn"`
-	CDNName   string `json:"cdn_name"`
-	IsWAF     bool   `json:"waf"`
-	WAFName   string `json:"waf_name"`
-	IsCloud   bool   `json:"cloud"`
-	CloudName string `json:"cloud_name"`
+	return discoverytools.RunAlterx(buildDiscoveryToolContext(targetID, rootDomain), inputFile, rootDomain)
 }
 
 // runCdnCheckForLiveAssets چک کردن CDN برای همه IPهای لایو که dnsx resolve کرده
 func runCdnCheckForLiveAssets(targetID uint, dnsxResults map[string][]string, inputFile string) {
-	if len(dnsxResults) == 0 {
-		log.Printf("ℹ️ No live assets found for CDN check.\n")
-		return
-	}
-
-	log.Printf("🔍 Starting CDN check for all live IPs from DNS validation...\n")
-
-	// جمع‌آوری تمام IPهای منحصر به فرد از dnsxResults
-	ipSet := make(map[string]bool)
-	ipToAssets := make(map[string][]string) // IP -> []AssetValue (subdomain)
-
-	for subdomain, ips := range dnsxResults {
-		for _, ip := range ips {
-			if ip != "" {
-				ipSet[ip] = true
-				ipToAssets[ip] = append(ipToAssets[ip], subdomain)
-			}
-		}
-	}
-
-	if len(ipSet) == 0 {
-		log.Printf("ℹ️ No IPs found for CDN check.\n")
-		return
-	}
-
-	// تبدیل set به slice برای cdncheck
-	ipList := make([]string, 0, len(ipSet))
-	for ip := range ipSet {
-		ipList = append(ipList, ip)
-	}
-
-	log.Printf("🔍 Running cdncheck on %d unique IPs from %d live subdomains...\n", len(ipList), len(dnsxResults))
-
-	// اجرای cdncheck
-	cdnResults := runCdnCheck(targetID, ipList, inputFile)
-	if len(cdnResults) == 0 {
-		log.Printf("⚠️ No CDN check results returned.\n")
-		return
-	}
-
-	// پیدا کردن assets از دیتابیس بر اساس subdomain
-	var allAssets []models.Asset
-	database.DB.Where("target_id = ? AND is_live = ?", targetID, true).Find(&allAssets)
-
-	assetMap := make(map[string]*models.Asset) // subdomain -> Asset
-	for i := range allAssets {
-		assetMap[allAssets[i].Value] = &allAssets[i]
-	}
-
-	// به‌روزرسانی assets با اطلاعات CDN/WAF/CLOUD از cdncheck
-	// برای هر asset، اگر حداقل یکی از IPهایش پشت CDN/WAF/CLOUD باشد، فیلدهای مربوطه را ذخیره می‌کنیم
-	updatedCount := 0
-
-	for subdomain, ips := range dnsxResults {
-		asset, exists := assetMap[subdomain]
-		if !exists {
-			continue
-		}
-
-		hasCDN := false
-		cdnName := ""
-		hasWAF := false
-		wafName := ""
-		hasCloud := false
-		cloudName := ""
-
-		// چک کردن همه IPهای این asset
-		for _, ip := range ips {
-			if cdnInfo, found := cdnResults[ip]; found {
-				if cdnInfo.IsCDN {
-					hasCDN = true
-					if cdnInfo.CDNName != "" && cdnName == "" {
-						cdnName = cdnInfo.CDNName
-					}
-				}
-				if cdnInfo.IsWAF {
-					hasWAF = true
-					if cdnInfo.WAFName != "" && wafName == "" {
-						wafName = cdnInfo.WAFName
-					}
-				}
-				if cdnInfo.IsCloud {
-					hasCloud = true
-					if cdnInfo.CloudName != "" && cloudName == "" {
-						cloudName = cdnInfo.CloudName
-					}
-				}
-			}
-		}
-
-		// به‌روزرسانی فیلدهای cdncheck/cdncheck_name و wafcheck/wafcheck_name و cloudcheck/cloudcheck_name
-		updates := make(map[string]interface{})
-		if asset.Cdncheck != hasCDN {
-			updates["cdncheck"] = hasCDN
-		}
-		if hasCDN && asset.CdncheckName != cdnName {
-			updates["cdncheck_name"] = cdnName
-		} else if !hasCDN && asset.CdncheckName != "" {
-			updates["cdncheck_name"] = ""
-		}
-
-		if asset.Wafcheck != hasWAF {
-			updates["wafcheck"] = hasWAF
-		}
-		if hasWAF && asset.WafcheckName != wafName {
-			updates["wafcheck_name"] = wafName
-		} else if !hasWAF && asset.WafcheckName != "" {
-			updates["wafcheck_name"] = ""
-		}
-
-		if asset.Cloudcheck != hasCloud {
-			updates["cloudcheck"] = hasCloud
-		}
-		if hasCloud && asset.CloudcheckName != cloudName {
-			updates["cloudcheck_name"] = cloudName
-		} else if !hasCloud && asset.CloudcheckName != "" {
-			updates["cloudcheck_name"] = ""
-		}
-
-		if len(updates) > 0 {
-			database.DB.Model(asset).Updates(updates)
-			updatedCount++
-		}
-	}
-
-	log.Printf("✅ CDN check completed. Updated %d assets with cdncheck information.\n", updatedCount)
+	discoverypersist.RunCDNCheckForLiveAssets(discoverypersist.Context{
+		TargetID:   targetID,
+		RunCommand: runCommandWithKillSwitch,
+	}, dnsxResults, inputFile)
 }
 
 // runCdnCheck اجرای cdncheck روی لیست IPها
-func runCdnCheck(targetID uint, ips []string, inputFile string) map[string]CdnCheckResult {
-	if len(ips) == 0 {
-		return make(map[string]CdnCheckResult)
-	}
-
-	// نوشتن IPها در فایل
-	if err := utils.WriteSliceToFile(inputFile, ips); err != nil {
-		log.Printf("❌ Error writing cdncheck input file: %v\n", err)
-		return make(map[string]CdnCheckResult)
-	}
-
-	// اجرای cdncheck با فلگ‌های صحیح: -i برای input file و -j برای JSON output به stdout
-	log.Printf("🔍 Running cdncheck on %d IPs...\n", len(ips))
-	output, err := runCommandWithKillSwitch(targetID, "cdncheck",
-		"-i", inputFile,
-		"-j",
-		"-silent",
-		"-nc", // no-color برای جلوگیری از ANSI codes در خروجی
-	)
-	if err != nil {
-		if err.Error() != "process killed by user request" {
-			log.Printf("⚠️ Cdncheck error: %v\n", err)
-		}
-		return make(map[string]CdnCheckResult)
-	}
-
-	if len(output) == 0 {
-		log.Printf("⚠️ Cdncheck returned empty output.\n")
-		return make(map[string]CdnCheckResult)
-	}
-
-	// خواندن نتایج از stdout
-	results := make(map[string]CdnCheckResult)
-	lines := strings.Split(string(output), "\n")
-	parsedCount := 0
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		// فقط خطوطی که با { شروع می‌شوند JSON هستند (خطوط info/error معمولاً این فرمت را ندارند)
-		if !strings.HasPrefix(line, "{") {
-			continue
-		}
-
-		var rawResult map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &rawResult); err != nil {
-			// خطا در parse کردن JSON - این خط احتمالاً info message است
-			continue
-		}
-
-		ip, ok := rawResult["ip"].(string)
-		if !ok || ip == "" {
-			continue
-		}
-
-		// merge if we already saw this ip with another detection type
-		result := results[ip]
-		result.IP = ip
-
-		// CDN
-		if cdnVal, exists := rawResult["cdn"]; exists {
-			switch v := cdnVal.(type) {
-			case bool:
-				result.IsCDN = result.IsCDN || v
-			case string:
-				result.IsCDN = result.IsCDN || (v == "true" || v == "1" || v == "yes")
-			}
-		}
-		if cdnName, ok := rawResult["cdn_name"].(string); ok && cdnName != "" && result.CDNName == "" {
-			result.CDNName = cdnName
-		}
-
-		// WAF
-		if wafVal, exists := rawResult["waf"]; exists {
-			switch v := wafVal.(type) {
-			case bool:
-				result.IsWAF = result.IsWAF || v
-			case string:
-				result.IsWAF = result.IsWAF || (v == "true" || v == "1" || v == "yes")
-			}
-		}
-		if wafName, ok := rawResult["waf_name"].(string); ok && wafName != "" && result.WAFName == "" {
-			result.WAFName = wafName
-		}
-
-		// CLOUD
-		if cloudVal, exists := rawResult["cloud"]; exists {
-			switch v := cloudVal.(type) {
-			case bool:
-				result.IsCloud = result.IsCloud || v
-			case string:
-				result.IsCloud = result.IsCloud || (v == "true" || v == "1" || v == "yes")
-			}
-		}
-		if cloudName, ok := rawResult["cloud_name"].(string); ok && cloudName != "" && result.CloudName == "" {
-			result.CloudName = cloudName
-		}
-
-		// ذخیره همه نتایج (چه CDN باشد چه نباشد) تا بتوانیم تشخیص دهیم
-		results[ip] = result
-		if result.IsCDN || result.IsWAF || result.IsCloud {
-			parsedCount++
-		}
-	}
-
-	if parsedCount > 0 {
-		log.Printf("✅ Parsed %d technology results from cdncheck output.\n", parsedCount)
-	}
-
-	return results
-}
-
 // =================================================================
 // Optional Port Scan (Nmap) - PHASE 1
 // =================================================================
