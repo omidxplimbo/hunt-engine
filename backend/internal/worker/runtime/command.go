@@ -7,6 +7,7 @@ import (
 	"log"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -22,10 +23,10 @@ func RunCommandWithKillSwitch(targetID uint, heartbeat HeartbeatFunc, shouldStop
 }
 
 // RunCommandWithStdinAndKillSwitch runs an external command with optional stdin
-// and kills it when shouldStop returns true.
+// and kills the entire process group when shouldStop returns true.
 func RunCommandWithStdinAndKillSwitch(targetID uint, stdin io.Reader, heartbeat HeartbeatFunc, shouldStop StopRequestedFunc, name string, args ...string) ([]byte, error) {
 	cmd := exec.Command(name, args...)
-	cmd.Env = EnvWithTargetTmp(targetID)
+	prepareCommand(targetID, cmd)
 
 	if stdin != nil {
 		cmd.Stdin = stdin
@@ -38,45 +39,13 @@ func RunCommandWithStdinAndKillSwitch(targetID uint, stdin io.Reader, heartbeat 
 		return nil, fmt.Errorf("failed to start command %s: %w", name, err)
 	}
 
-	taskKey := fmt.Sprintf("%d-%d", targetID, cmd.Process.Pid)
-	storeRunningProcess(taskKey, TaskInfo{
-		TargetID:  targetID,
-		Command:   name + " " + strings.Join(args, " "),
-		StartTime: time.Now(),
-		PID:       cmd.Process.Pid,
-	})
-	defer deleteRunningProcess(taskKey)
-
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case err := <-done:
-			return outBuf.Bytes(), err
-		case <-ticker.C:
-			if heartbeat != nil {
-				heartbeat(targetID)
-			}
-
-			if shouldStop != nil && shouldStop(targetID) {
-				log.Printf("🛑 Kill switch activated for target %d. Killing process %s...", targetID, name)
-				if err := cmd.Process.Kill(); err != nil {
-					log.Printf("⚠️ Failed to kill process: %v", err)
-				}
-				return nil, fmt.Errorf("process killed by user request")
-			}
-		}
-	}
+	return waitCommandWithKillSwitch(targetID, cmd, heartbeat, shouldStop, name, args, &outBuf)
 }
 
 // RunCommandWithKillSwitchCombined runs an external command and returns stdout + stderr.
 func RunCommandWithKillSwitchCombined(targetID uint, heartbeat HeartbeatFunc, shouldStop StopRequestedFunc, name string, args ...string) ([]byte, error) {
 	cmd := exec.Command(name, args...)
-	cmd.Env = EnvWithTargetTmp(targetID)
+	prepareCommand(targetID, cmd)
 
 	var outBuf bytes.Buffer
 	cmd.Stdout = &outBuf
@@ -86,6 +55,27 @@ func RunCommandWithKillSwitchCombined(targetID uint, heartbeat HeartbeatFunc, sh
 		return nil, fmt.Errorf("failed to start command %s: %w", name, err)
 	}
 
+	return waitCommandWithKillSwitch(targetID, cmd, heartbeat, shouldStop, name, args, &outBuf)
+}
+
+func prepareCommand(targetID uint, cmd *exec.Cmd) {
+	cmd.Env = EnvWithTargetTmp(targetID)
+
+	// Start every external tool in its own process group. Killing only the
+	// parent process can leave child processes behind for tools that spawn
+	// helpers or shell pipelines. A process-group kill keeps Stop Scan reliable.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+}
+
+func waitCommandWithKillSwitch(
+	targetID uint,
+	cmd *exec.Cmd,
+	heartbeat HeartbeatFunc,
+	shouldStop StopRequestedFunc,
+	name string,
+	args []string,
+	outBuf *bytes.Buffer,
+) ([]byte, error) {
 	taskKey := fmt.Sprintf("%d-%d", targetID, cmd.Process.Pid)
 	storeRunningProcess(taskKey, TaskInfo{
 		TargetID:  targetID,
@@ -96,7 +86,9 @@ func RunCommandWithKillSwitchCombined(targetID uint, heartbeat HeartbeatFunc, sh
 	defer deleteRunningProcess(taskKey)
 
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	go func() {
+		done <- cmd.Wait()
+	}()
 
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -105,18 +97,47 @@ func RunCommandWithKillSwitchCombined(targetID uint, heartbeat HeartbeatFunc, sh
 		select {
 		case err := <-done:
 			return outBuf.Bytes(), err
+
 		case <-ticker.C:
 			if heartbeat != nil {
 				heartbeat(targetID)
 			}
 
 			if shouldStop != nil && shouldStop(targetID) {
-				log.Printf("🛑 Kill switch activated for target %d. Killing process %s...", targetID, name)
-				if err := cmd.Process.Kill(); err != nil {
-					log.Printf("⚠️ Failed to kill process: %v", err)
+				log.Printf("🛑 Kill switch activated for target %d. Killing process group for %s...", targetID, name)
+
+				if err := killProcessGroup(cmd); err != nil {
+					log.Printf("⚠️ Failed to kill process group for %s: %v", name, err)
 				}
-				return nil, fmt.Errorf("process killed by user request")
+
+				select {
+				case <-done:
+					return nil, fmt.Errorf("process killed by user request")
+				case <-time.After(5 * time.Second):
+					log.Printf("⚠️ Timed out waiting for killed process group to exit for %s", name)
+					return nil, fmt.Errorf("process killed by user request")
+				}
 			}
 		}
 	}
+}
+
+func killProcessGroup(cmd *exec.Cmd) error {
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+
+	pid := cmd.Process.Pid
+	pgid, err := syscall.Getpgid(pid)
+	if err != nil {
+		// Fallback to killing the parent process if the process group is already gone.
+		return cmd.Process.Kill()
+	}
+
+	// Negative PID targets the whole process group on Unix/Linux.
+	if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil {
+		return err
+	}
+
+	return nil
 }
