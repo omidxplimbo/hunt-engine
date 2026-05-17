@@ -75,3 +75,39 @@ func MergeSources(dst map[string][]string, src map[string][]string) {
 		dst[subdomain] = merged
 	}
 }
+
+// MergeLiveResults merges already-resolved live DNS results, de-duplicating IPs per host.
+// It is used after DNSX to inject PureDNS results that were resolved earlier and
+// should not be revalidated by DNSX.
+func MergeLiveResults(base map[string][]string, extra map[string][]string) map[string][]string {
+	if base == nil {
+		base = make(map[string][]string)
+	}
+
+	for host, ips := range extra {
+		if host == "" || len(ips) == 0 {
+			continue
+		}
+
+		seen := make(map[string]bool)
+		for _, ip := range base[host] {
+			if ip != "" {
+				seen[ip] = true
+			}
+		}
+		for _, ip := range ips {
+			if ip != "" {
+				seen[ip] = true
+			}
+		}
+
+		merged := make([]string, 0, len(seen))
+		for ip := range seen {
+			merged = append(merged, ip)
+		}
+		sort.Strings(merged)
+		base[host] = merged
+	}
+
+	return base
+}

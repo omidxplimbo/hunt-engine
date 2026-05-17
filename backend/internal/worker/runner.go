@@ -437,25 +437,8 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		}
 		_ = os.Remove(dnsxOutputFile)
 
-		// Merge puredns results (already live) into dnsxResults
-		for subdomain, ips := range purednsResults {
-			if existingIPs, exists := dnsxResults[subdomain]; exists {
-				ipMap := make(map[string]bool)
-				for _, ip := range existingIPs {
-					ipMap[ip] = true
-				}
-				for _, ip := range ips {
-					ipMap[ip] = true
-				}
-				var mergedIPs []string
-				for ip := range ipMap {
-					mergedIPs = append(mergedIPs, ip)
-				}
-				dnsxResults[subdomain] = mergedIPs
-			} else {
-				dnsxResults[subdomain] = ips
-			}
-		}
+		// Merge puredns results (already live) into dnsxResults.
+		dnsxResults = discoverymerge.MergeLiveResults(dnsxResults, purednsResults)
 
 		_ = utils.WriteJSONToFile(dnsxResultsFile, dnsxResults)
 		scanMarkStepDone(targetID, "DISCOVERY", "DNSX")
