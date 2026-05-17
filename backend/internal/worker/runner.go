@@ -2,9 +2,7 @@ package worker
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -29,6 +27,7 @@ import (
 	discoverytools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/tools"
 	probing "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/probing"
 	workerruntime "github.com/omidxplimbo/hunt-engine/backend/internal/worker/runtime"
+	workerstate "github.com/omidxplimbo/hunt-engine/backend/internal/worker/state"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/utils"
 	"gorm.io/gorm"
 )
@@ -923,214 +922,51 @@ func runCommandWithKillSwitchCombined(targetID uint, name string, args ...string
 }
 
 func checkStopRequest(targetID uint) bool {
-	var t models.Target
-	if err := database.DB.Select("stop_requested").First(&t, targetID).Error; err != nil {
-		return false
-	}
-	if t.StopRequested {
-		now := time.Now()
-		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{
-			"status": "PAUSED", "current_phase": "PAUSED BY USER", "stop_requested": false, "last_scan_at": &now,
-		})
-		scanMarkPaused(targetID, "paused by user")
-		return true
-	}
-	return false
+	return workerstate.CheckStopRequest(targetID)
 }
 
 func updateTargetPhase(targetID uint, phase string) {
-	database.DB.Model(&models.Target{}).Where("id = ?", targetID).Update("current_phase", phase)
+	workerstate.UpdateTargetPhase(targetID, phase)
 }
-
-// =================================================================
-// Persistent Scan Checkpointing (DB-backed)
-// =================================================================
 
 func ensureScanState(targetID uint) (*models.TargetScanState, error) {
-	var st models.TargetScanState
-	err := database.DB.Where("target_id = ?", targetID).First(&st).Error
-	if err == nil {
-		return &st, nil
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
-	}
-	st = models.TargetScanState{
-		TargetID: targetID,
-		Status:   "PAUSED",
-		RunID:    fmt.Sprintf("run_%d", time.Now().UnixNano()),
-	}
-	if err := database.DB.Create(&st).Error; err != nil {
-		return nil, err
-	}
-	return &st, nil
-}
-
-func scanCompletedSet(completedJSON string) map[string]bool {
-	out := make(map[string]bool)
-	if completedJSON == "" {
-		return out
-	}
-	var keys []string
-	if err := json.Unmarshal([]byte(completedJSON), &keys); err != nil {
-		return out
-	}
-	for _, k := range keys {
-		k = strings.TrimSpace(k)
-		if k != "" {
-			out[k] = true
-		}
-	}
-	return out
-}
-
-func scanCompletedList(set map[string]bool) []string {
-	var keys []string
-	for k := range set {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func scanStepKey(module, step string) string {
-	return fmt.Sprintf("%s:%s", strings.TrimSpace(module), strings.TrimSpace(step))
+	return workerstate.EnsureScanState(targetID)
 }
 
 func scanMarkRunning(targetID uint, module, step string) {
-	now := time.Now()
-	_ = database.DB.Model(&models.TargetScanState{}).
-		Where("target_id = ?", targetID).
-		Updates(map[string]interface{}{
-			"status":         "RUNNING",
-			"current_module": module,
-			"current_step":   step,
-			"heartbeat_at":   &now,
-			"last_error":     "",
-		}).Error
+	workerstate.MarkRunning(targetID, module, step)
 }
 
 func scanHeartbeat(targetID uint) {
-	now := time.Now()
-	_ = database.DB.Model(&models.TargetScanState{}).
-		Where("target_id = ? AND status = ?", targetID, "RUNNING").
-		Update("heartbeat_at", &now).Error
+	workerstate.Heartbeat(targetID)
 }
 
 func scanMarkPaused(targetID uint, reason string) {
-	now := time.Now()
-	_ = database.DB.Model(&models.TargetScanState{}).
-		Where("target_id = ?", targetID).
-		Updates(map[string]interface{}{
-			"status":       "PAUSED",
-			"heartbeat_at": &now,
-			"last_error":   reason,
-		}).Error
+	workerstate.MarkPaused(targetID, reason)
 }
 
 func scanMarkFailed(targetID uint, errMsg string) {
-	now := time.Now()
-	_ = database.DB.Model(&models.TargetScanState{}).
-		Where("target_id = ?", targetID).
-		Updates(map[string]interface{}{
-			"status":       "FAILED",
-			"heartbeat_at": &now,
-			"last_error":   errMsg,
-		}).Error
+	workerstate.MarkFailed(targetID, errMsg)
 }
 
 func scanMarkStepDone(targetID uint, module, step string) {
-	st, err := ensureScanState(targetID)
-	if err != nil {
-		return
-	}
-	set := scanCompletedSet(st.CompletedSteps)
-	set[scanStepKey(module, step)] = true
-	keys := scanCompletedList(set)
-	b, _ := json.Marshal(keys)
-	now := time.Now()
-	_ = database.DB.Model(&models.TargetScanState{}).
-		Where("target_id = ?", targetID).
-		Updates(map[string]interface{}{
-			"completed_steps": string(b),
-			"heartbeat_at":    &now,
-		}).Error
+	workerstate.MarkStepDone(targetID, module, step)
 }
 
 func scanIsStepDone(targetID uint, module, step string) bool {
-	st, err := ensureScanState(targetID)
-	if err != nil {
-		return false
-	}
-	set := scanCompletedSet(st.CompletedSteps)
-	return set[scanStepKey(module, step)]
+	return workerstate.IsStepDone(targetID, module, step)
 }
 
 func scanGetMeta(targetID uint) map[string]interface{} {
-	st, err := ensureScanState(targetID)
-	if err != nil {
-		return map[string]interface{}{}
-	}
-	out := map[string]interface{}{}
-	if st.Meta != "" {
-		_ = json.Unmarshal([]byte(st.Meta), &out)
-	}
-	return out
+	return workerstate.GetMeta(targetID)
 }
 
 func scanSetMeta(targetID uint, meta map[string]interface{}) {
-	b, _ := json.Marshal(meta)
-	now := time.Now()
-	_ = database.DB.Model(&models.TargetScanState{}).
-		Where("target_id = ?", targetID).
-		Updates(map[string]interface{}{
-			"meta":         string(b),
-			"heartbeat_at": &now,
-		}).Error
+	workerstate.SetMeta(targetID, meta)
 }
 
 func triggerNextModule(targetID uint, rootDomain, currentModule string) {
-	var target models.Target
-	if err := database.DB.First(&target, targetID).Error; err != nil {
-		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Update("status", "READY")
-		return
-	}
-	var modules []string
-	json.Unmarshal([]byte(target.ScanModules), &modules)
-	currentIndex := -1
-	for i, m := range modules {
-		if m == currentModule {
-			currentIndex = i
-			break
-		}
-	}
-	if currentIndex != -1 && currentIndex+1 < len(modules) {
-		nextModule := modules[currentIndex+1]
-		log.Printf("🔗 Chaining: Phase '%s' done. Starting '%s'\n", currentModule, nextModule)
-
-		// Update status to QUEUED so it doesn't count towards concurrency limit while waiting
-		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{"status": "QUEUED", "stop_requested": false})
-
-		payload := fmt.Sprintf("%s:%d:%s", nextModule, targetID, rootDomain)
-		redisq.Client.RPush(context.Background(), redisq.QueueNameForUser(target.CreatedByUserID), payload)
-	} else {
-		log.Printf("🏁 Chain Complete for %s.\n", rootDomain)
-		now := time.Now()
-		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{
-			"last_scan_at": &now, "status": "READY", "scan_count": gorm.Expr("scan_count + 1"), "current_phase": "IDLE",
-		})
-		_ = database.DB.Model(&models.TargetScanState{}).
-			Where("target_id = ?", targetID).
-			Updates(map[string]interface{}{
-				"status":         "COMPLETED",
-				"current_module": "",
-				"current_step":   "",
-				"heartbeat_at":   &now,
-				"last_error":     "",
-			}).Error
-		// پاکسازی workspace موقت این target بعد از پایان کامل chain
-		cleanupTargetTempDir(targetID)
-	}
+	workerstate.TriggerNextModule(targetID, rootDomain, currentModule, cleanupTargetTempDir)
 }
 
 func logChange(tx *gorm.DB, assetID uint, field, oldVal, newVal string) error {
