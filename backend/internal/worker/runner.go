@@ -8,9 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +26,7 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/telegram"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/discovery"
+	crawlingphase "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/crawling"
 	passivetools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/passive"
 	discoverytools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/tools"
 	probing "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/probing"
@@ -919,338 +918,22 @@ func runProbingPhase(targetID uint, rootDomain string) {
 // PHASE 3: Crawling Implementation (FIXED)
 // =================================================================
 func runCrawlingPhase(targetID uint, rootDomain string) {
-	if checkStopRequest(targetID) {
-		return
-	}
-
-	tempDir, username, err := utils.GetTargetTempDir(targetID)
-	if err != nil {
-		log.Printf("❌ Failed to init temp dir for target %d: %v\n", targetID, err)
-		return
-	}
-	log.Printf("🗂️ Temp workspace: %s (owner: %s)\n", tempDir, username)
-
-	// 👇 1. دریافت تنظیمات تارگت (برای چک کردن UseWaymore)
-	var target models.Target
-	if err := database.DB.First(&target, targetID).Error; err != nil {
-		log.Printf("❌ Failed to fetch target config in Crawling Phase: %v\n", err)
-		return
-	}
-
-	log.Printf("🚀 Starting PHASE 3 (CRAWLING) for target ID: %d\n", targetID)
-	updateTargetPhase(targetID, "PHASE 3: FETCHING ASSETS")
-
-	_, _ = ensureScanState(targetID)
-	if scanIsStepDone(targetID, "CRAWLING", "DONE") {
-		log.Printf("⏩ Resume: CRAWLING already completed. Chaining next module.\n")
-		triggerNextModule(targetID, rootDomain, "CRAWLING")
-		return
-	}
-
-	var liveAssets []string
-	database.DB.Model(&models.Asset{}).
-		Where("target_id = ? AND is_live = true", targetID).
-		Pluck("value", &liveAssets)
-
-	crawlingAssetsFile := filepath.Join(tempDir, "crawling_assets.txt")
-	if len(liveAssets) > 0 {
-		if err := utils.WriteSliceToFile(crawlingAssetsFile, liveAssets); err != nil {
-			log.Printf("❌ Failed to write crawling assets input: %v\n", err)
-			return
-		}
-	}
-
-	crawlingRootFile := filepath.Join(tempDir, "crawling_root.txt")
-	if err := utils.WriteSliceToFile(crawlingRootFile, []string{rootDomain}); err != nil {
-		log.Printf("❌ Failed to write crawling root input: %v\n", err)
-		return
-	}
-
-	// 1. Waybackurls
-	if scanIsStepDone(targetID, "CRAWLING", "WAYBACK") {
-		log.Printf("⏩ Resume: skipping WAYBACK\n")
-	} else {
-		if checkStopRequest(targetID) {
-			return
-		}
-		scanMarkRunning(targetID, "CRAWLING", "WAYBACK")
-		updateTargetPhase(targetID, "PHASE 3: RUNNING WAYBACK")
-		tmp := make(map[string]string)
-		runToolAndCollect(targetID, crawlingRootFile, tmp, "wayback", "waybackurls")
-		updateTargetPhase(targetID, "PHASE 3: SAVING WAYBACK")
-		saveCrawledURLs(targetID, rootDomain, tmp, true)
-		scanMarkStepDone(targetID, "CRAWLING", "WAYBACK")
-	}
-
-	// 2. GAU
-	if len(liveAssets) > 0 {
-		if scanIsStepDone(targetID, "CRAWLING", "GAU") {
-			log.Printf("⏩ Resume: skipping GAU\n")
-		} else {
-			if checkStopRequest(targetID) {
-				return
-			}
-			scanMarkRunning(targetID, "CRAWLING", "GAU")
-			updateTargetPhase(targetID, "PHASE 3: RUNNING GAU")
-			tmp := make(map[string]string)
-			runToolAndCollect(targetID, crawlingAssetsFile, tmp, "gau", "gau", "--threads", "10")
-			updateTargetPhase(targetID, "PHASE 3: SAVING GAU")
-			saveCrawledURLs(targetID, rootDomain, tmp, true)
-			scanMarkStepDone(targetID, "CRAWLING", "GAU")
-		}
-	} else {
-		scanMarkStepDone(targetID, "CRAWLING", "GAU")
-	}
-
-	// 👇👇👇 3. Waymore Implementation (بخش اضافه شده)
-	if target.UseWaymore {
-		if scanIsStepDone(targetID, "CRAWLING", "WAYMORE") {
-			log.Printf("⏩ Resume: skipping WAYMORE\n")
-		} else {
-			if checkStopRequest(targetID) {
-				return
-			}
-			scanMarkRunning(targetID, "CRAWLING", "WAYMORE")
-			updateTargetPhase(targetID, "PHASE 3: RUNNING WAYMORE")
-			log.Printf("🔥 Running Waymore for %s...\n", rootDomain)
-
-			// فایل خروجی موقت برای Waymore
-			waymoreOutputFile := filepath.Join(tempDir, "waymore.txt")
-
-			_, err := runCommandWithKillSwitch(targetID, "waymore", "-i", rootDomain, "-mode", "U", "-n", "-oU", waymoreOutputFile)
-
-			tmp := make(map[string]string)
-			if err != nil {
-				log.Printf("⚠️ Waymore execution failed: %v\n", err)
-			} else {
-				content, err := ioutil.ReadFile(waymoreOutputFile)
-				if err == nil {
-					lines := strings.Split(string(content), "\n")
-					for _, line := range lines {
-						u := strings.TrimSpace(line)
-						if u != "" {
-							tmp[u] = "waymore"
-						}
-					}
-					log.Printf("✅ Waymore found %d URLs.\n", len(lines))
-				} else {
-					log.Printf("⚠️ Could not read Waymore output file: %v\n", err)
-				}
-				_ = os.Remove(waymoreOutputFile)
-			}
-			updateTargetPhase(targetID, "PHASE 3: SAVING WAYMORE")
-			saveCrawledURLs(targetID, rootDomain, tmp, true)
-			scanMarkStepDone(targetID, "CRAWLING", "WAYMORE")
-		}
-	} else {
-		log.Println("⏩ Skipping Waymore (Disabled in settings)")
-		scanMarkStepDone(targetID, "CRAWLING", "WAYMORE")
-	}
-	// 👆👆👆 پایان بخش اضافه شده
-
-	// 4. Katana
-	if len(liveAssets) > 0 {
-		if scanIsStepDone(targetID, "CRAWLING", "KATANA") {
-			log.Printf("⏩ Resume: skipping KATANA\n")
-		} else {
-			if checkStopRequest(targetID) {
-				return
-			}
-			scanMarkRunning(targetID, "CRAWLING", "KATANA")
-			updateTargetPhase(targetID, "PHASE 3: RUNNING KATANA")
-			tmp := make(map[string]string)
-			runToolAndCollect(targetID, crawlingAssetsFile, tmp, "katana", "katana", "-list", crawlingAssetsFile, "-jc", "-kf", "-silent", "-c", "10")
-			updateTargetPhase(targetID, "PHASE 3: SAVING KATANA")
-			saveCrawledURLs(targetID, rootDomain, tmp, true)
-			scanMarkStepDone(targetID, "CRAWLING", "KATANA")
-		}
-	} else {
-		scanMarkStepDone(targetID, "CRAWLING", "KATANA")
-	}
-
-	// 5. VirusTotal
-	if len(liveAssets) > 0 {
-		if scanIsStepDone(targetID, "CRAWLING", "VIRUSTOTAL") {
-			log.Printf("⏩ Resume: skipping VIRUSTOTAL\n")
-		} else {
-			if checkStopRequest(targetID) {
-				return
-			}
-			scanMarkRunning(targetID, "CRAWLING", "VIRUSTOTAL")
-			updateTargetPhase(targetID, "PHASE 3: RUNNING VIRUSTOTAL")
-			log.Printf("🦠 Running VirusTotal URL discovery for %d live assets...\n", len(liveAssets))
-
-			tmp := make(map[string]string)
-			runVirusTotalCollection(targetID, liveAssets, tmp)
-			updateTargetPhase(targetID, "PHASE 3: SAVING VIRUSTOTAL")
-			saveCrawledURLs(targetID, rootDomain, tmp, true)
-
-			scanMarkStepDone(targetID, "CRAWLING", "VIRUSTOTAL")
-		}
-	} else {
-		scanMarkStepDone(targetID, "CRAWLING", "VIRUSTOTAL")
-	}
-
-	// Filtering & Saving
-	if scanIsStepDone(targetID, "CRAWLING", "FILTER_SAVE") {
-		log.Printf("⏩ Resume: skipping FILTER/SAVE\n")
-	} else {
-		if checkStopRequest(targetID) {
-			return
-		}
-		scanMarkRunning(targetID, "CRAWLING", "FILTER_SAVE")
-		updateTargetPhase(targetID, "PHASE 3: FILTERING & SAVING")
-		// URLs were already saved per-tool; this step is mostly a final marker.
-		scanMarkStepDone(targetID, "CRAWLING", "FILTER_SAVE")
-	}
-
-	_ = os.Remove(crawlingAssetsFile)
-	_ = os.Remove(crawlingRootFile)
-
-	log.Printf("🏁 PHASE 3 finished for %s.\n", rootDomain)
-	scanMarkStepDone(targetID, "CRAWLING", "DONE")
-	triggerNextModule(targetID, rootDomain, "CRAWLING")
-}
-
-func runToolAndCollect(targetID uint, inputFile string, results map[string]string, sourceLabel string, cmdName string, cmdArgs ...string) {
-	var output []byte
-	var err error
-
-	if cmdName == "waybackurls" || cmdName == "gau" {
-		// Open input file directly instead of using 'cat' command
-		f, err := os.Open(inputFile)
-		if err != nil {
-			log.Printf("⚠️ Failed to open input file for %s: %v\n", cmdName, err)
-			return
-		}
-		defer f.Close()
-
-		// Run tool with stdin from file, monitored by kill switch
-		output, err = runCommandWithStdinAndKillSwitch(targetID, f, cmdName, cmdArgs...)
-	} else {
-		output, err = runCommandWithKillSwitch(targetID, cmdName, cmdArgs...)
-	}
-
-	if err != nil {
-		log.Printf("⚠️ Tool %s failed or killed: %v\n", cmdName, err)
-		return
-	}
-
-	scanner := bufio.NewScanner(bytes.NewReader(output))
-	for scanner.Scan() {
-		u := strings.TrimSpace(scanner.Text())
-		if u == "" {
-			continue
-		}
-		if _, exists := results[u]; !exists {
-			results[u] = sourceLabel
-		}
-	}
+	crawlingphase.Run(crawlingphase.Context{
+		TargetID:            targetID,
+		RootDomain:          rootDomain,
+		CheckStop:           checkStopRequest,
+		UpdateTargetPhase:   updateTargetPhase,
+		EnsureScanState:     ensureScanState,
+		ScanIsStepDone:      scanIsStepDone,
+		ScanMarkRunning:     scanMarkRunning,
+		ScanMarkStepDone:    scanMarkStepDone,
+		TriggerNextModule:   triggerNextModule,
+		RunCommand:          runCommandWithKillSwitch,
+		RunCommandWithStdin: runCommandWithStdinAndKillSwitch,
+	})
 }
 
 // saveCrawledURLs (UPDATED) اضافه شدن پارامتر silent
-func saveCrawledURLs(targetID uint, rootDomain string, urls map[string]string, silent bool) {
-	log.Printf("💾 Processing %d collected URLs...", len(urls))
-
-	ignoredExts := []string{
-		".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp", ".ico", ".webp",
-		".woff", ".woff2", ".ttf", ".eot", ".otf",
-		".css",
-	}
-
-	var newUrls []models.FoundURL
-	countSkippedCache := 0
-	countSkippedExt := 0
-	countUpdatedSource := 0
-
-	// کلید ردیس برای جلوگیری از تکرار در دفعات بعد (Continuous Monitoring)
-	redisKey := fmt.Sprintf("target:%d:crawled_urls", targetID)
-
-	for u, source := range urls {
-		cleanURL := strings.Split(u, "?")[0]
-		isIgnored := false
-		for _, ext := range ignoredExts {
-			if strings.HasSuffix(strings.ToLower(cleanURL), ext) {
-				isIgnored = true
-				break
-			}
-		}
-		if isIgnored {
-			countSkippedExt++
-			continue
-		}
-
-		// 👇 چک کردن کش ردیس (Deduplication)
-		// برای هر URL، بررسی می‌کنیم آیا قبلاً در دیتابیس وجود دارد یا خیر تا source را مرج کنیم
-		var existingURL models.FoundURL
-		result := database.DB.Where("target_id = ? AND value = ?", targetID, u).First(&existingURL)
-
-		if result.Error == nil {
-			// URL already exists, check/update source
-			currentSources := strings.Split(existingURL.Source, ", ")
-			newSource := source
-
-			// Check if new source is already present
-			sourceExists := false
-			for _, s := range currentSources {
-				if s == newSource {
-					sourceExists = true
-					break
-				}
-			}
-
-			if !sourceExists {
-				// Append new source
-				existingURL.Source = existingURL.Source + ", " + newSource
-				database.DB.Save(&existingURL)
-				countUpdatedSource++
-			}
-
-			countSkippedCache++
-			continue
-		}
-
-		// URL is new
-		newUrls = append(newUrls, models.FoundURL{
-			TargetID: targetID,
-			Value:    u,
-			Source:   source,
-		})
-
-		// 👇 افزودن به کش ردیس (اگرچه منطق بالا دیتابیس را چک می‌کند، ردیس هم برای سرعت خوب است اما اینجا منطق اصلی دیتابیس شد)
-		redisq.Client.SAdd(context.Background(), redisKey, u)
-
-		// 👇 ارسال نوتیفیکیشن فقط اگر silent نباشد
-		if !silent {
-			telegram.SendNewURLAlert(rootDomain, u, source)
-		}
-	}
-
-	if len(newUrls) > 0 {
-		batchSize := 500
-		for i := 0; i < len(newUrls); i += batchSize {
-			end := i + batchSize
-			if end > len(newUrls) {
-				end = len(newUrls)
-			}
-			if err := database.DB.CreateInBatches(newUrls[i:end], batchSize).Error; err != nil {
-				log.Printf("⚠️ DB Insert Warning: %v\n", err)
-			}
-		}
-		// کش تارگت را می‌سوزانیم تا دیتای جدید در لیست‌ها دیده شود
-		cache.IncrementTargetVersion(targetID)
-		log.Printf("✅ Saved %d NEW URLs to DB.", len(newUrls))
-	} else {
-		log.Println("✅ No new URLs to save.")
-	}
-
-	if countUpdatedSource > 0 {
-		log.Printf("🔄 Updated sources for %d existing URLs.", countUpdatedSource)
-	}
-
-	log.Printf("📊 Stats: Total Found: %d | Ignored (Ext): %d | Exists/Skipped: %d | New: %d",
-		len(urls), countSkippedExt, countSkippedCache, len(newUrls))
-}
 
 // ==========================================
 // Smart Storage & Notification Logic
@@ -1886,84 +1569,6 @@ func runPuredns(targetID uint, rootDomain string, wordlists []string) (map[strin
 }
 
 // runVirusTotalCollection collects URLs from VirusTotal API for live subdomains
-func runVirusTotalCollection(targetID uint, subdomains []string, results map[string]string) {
-	apiKey := "183e25c8551f61932c61c190f8d2fc4667b82e954ada72ccef145cb4075a005e" // TODO: Move to config
-	client := &http.Client{Timeout: 30 * time.Second}
-
-	log.Printf("🦠 Starting VT Collection for %d subdomains.", len(subdomains))
-
-	for _, domain := range subdomains {
-		if checkStopRequest(targetID) {
-			return
-		}
-
-		url := fmt.Sprintf("https://virustotal.com/vtapi/v2/domain/report?apikey=%s&domain=%s", apiKey, domain)
-		req, err := http.NewRequest("GET", url, nil)
-		if err != nil {
-			log.Printf("⚠️ Failed to create VT request for %s: %v\n", domain, err)
-			continue
-		}
-		// تنظیم User-Agent برای جلوگیری از بلاک شدن توسط فایروال‌های VT
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Printf("⚠️ VirusTotal API error for %s: %v\n", domain, err)
-			continue
-		}
-
-		if resp.StatusCode != 200 {
-			// Don't log 404s too noisily, but warn on 204 (Rate Limit)
-			if resp.StatusCode == 204 {
-				log.Printf("⚠️ VirusTotal Rate Limit Exceeded (204) for %s. Slowing down.\n", domain)
-			} else if resp.StatusCode != 404 {
-				log.Printf("⚠️ VirusTotal API status %d for %s\n", resp.StatusCode, domain)
-			}
-			resp.Body.Close()
-			continue
-		}
-
-		var vtResp struct {
-			DetectedUrls   []interface{} `json:"detected_urls"`
-			UndetectedUrls []interface{} `json:"undetected_urls"`
-		}
-
-		if err := json.NewDecoder(resp.Body).Decode(&vtResp); err != nil {
-			log.Printf("⚠️ Failed to decode VT response for %s: %v\n", domain, err)
-			resp.Body.Close()
-			continue
-		}
-		resp.Body.Close()
-
-		foundCount := 0
-		// Helper to extract URLs from the nested arrays
-		// detected_urls structure: [ [url, sha256, positives, total, date], ... ]
-		processUrls := func(list []interface{}) {
-			for _, item := range list {
-				if arr, ok := item.([]interface{}); ok && len(arr) > 0 {
-					if u, ok := arr[0].(string); ok && u != "" {
-						u = strings.TrimSpace(u)
-						if _, exists := results[u]; !exists {
-							results[u] = "virustotal"
-							foundCount++
-						}
-					}
-				}
-			}
-		}
-
-		processUrls(vtResp.DetectedUrls)
-		processUrls(vtResp.UndetectedUrls)
-
-		if foundCount > 0 {
-			log.Printf("🦠 VirusTotal found %d new URLs for %s\n", foundCount, domain)
-		}
-
-		// Respect rate limits - VT public API has 4 req/min limit usually.
-		// We sleep 15 seconds to be safe (60s / 4 = 15s).
-		time.Sleep(15 * time.Second)
-	}
-}
 
 func min(a, b int) int {
 	if a < b {
