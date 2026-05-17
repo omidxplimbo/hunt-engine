@@ -1,7 +1,6 @@
 package worker
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -579,25 +578,7 @@ func runProbingPhase(targetID uint, rootDomain string) {
 		TriggerNextModule: triggerNextModule,
 		RunCommand:        runCommandWithKillSwitch,
 		UpdateAssets: func(targetID uint, results map[string]probing.HTTPXResult) {
-			converted := make(map[string]HttpxResult, len(results))
-			for host, result := range results {
-				converted[host] = HttpxResult{
-					Input:         result.Input,
-					URL:           result.URL,
-					StatusCode:    result.StatusCode,
-					Title:         result.Title,
-					ContentLength: result.ContentLength,
-					A:             result.A,
-					WebServer:     result.WebServer,
-					CDNName:       result.CDNName,
-					Technologies:  result.Technologies,
-					BodyHash:      result.BodyHash,
-					HeaderHash:    result.HeaderHash,
-					ResponseTime:  result.ResponseTime,
-					RawJSON:       result.RawJSON,
-				}
-			}
-			UpdateAssetsWithDiff(targetID, converted)
+			UpdateAssetsWithDiff(targetID, results)
 		},
 	})
 }
@@ -799,29 +780,6 @@ func runAlterx(targetID uint, inputFile, rootDomain string) ([]string, error) {
 	return discoverytools.RunAlterx(buildDiscoveryToolContext(targetID, rootDomain), inputFile, rootDomain)
 }
 
-func areJSONArraysEqual(json1, json2 string) bool {
-	var arr1, arr2 []string
-	_ = json.Unmarshal([]byte(json1), &arr1)
-	_ = json.Unmarshal([]byte(json2), &arr2)
-	if len(arr1) != len(arr2) {
-		return false
-	}
-	sort.Strings(arr1)
-	sort.Strings(arr2)
-	return reflect.DeepEqual(arr1, arr2)
-}
-
-func marshalJSONOrDefault(v interface{}, defaultVal string) string {
-	if reflect.ValueOf(v).Kind() == reflect.Slice && reflect.ValueOf(v).Len() == 0 {
-		return defaultVal
-	}
-	jsonBytes, err := json.Marshal(v)
-	if err != nil || string(jsonBytes) == "null" || string(jsonBytes) == "" {
-		return defaultVal
-	}
-	return string(jsonBytes)
-}
-
 func parseResponseTime(timeStr string) int64 {
 	return workerhelpers.ParseResponseTime(timeStr)
 }
@@ -836,27 +794,6 @@ func getBatchSize() int {
 
 func getDNSXBatchSize() int {
 	return workerhelpers.GetDNSXBatchSize(DefaultDNSXBatchSize)
-}
-
-func readHttpxResults(filename string) (map[string]HttpxResult, error) {
-	file, err := os.Open(filename)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	results := make(map[string]HttpxResult)
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		var result HttpxResult
-		if err := json.Unmarshal([]byte(line), &result); err == nil {
-			if result.Input != "" {
-				result.RawJSON = line
-				results[result.Input] = result
-			}
-		}
-	}
-	return results, scanner.Err()
 }
 
 func mergeUnique(slice1, slice2 []string) []string {
