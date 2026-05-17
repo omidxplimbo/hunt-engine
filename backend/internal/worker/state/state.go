@@ -238,44 +238,96 @@ func SetMeta(targetID uint, meta map[string]interface{}) {
 func TriggerNextModule(targetID uint, rootDomain, currentModule string, cleanupTargetTempDir func(uint)) {
 	var target models.Target
 	if err := database.DB.First(&target, targetID).Error; err != nil {
-		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Update("status", "READY")
+		log.Printf("⚠️ Chaining failed: target %d not found after %s: %v\n", targetID, currentModule, err)
+		MarkFailed(targetID, fmt.Sprintf("target not found while chaining from %s: %v", currentModule, err))
 		return
 	}
 
 	var modules []string
-	json.Unmarshal([]byte(target.ScanModules), &modules)
+	if err := json.Unmarshal([]byte(target.ScanModules), &modules); err != nil {
+		errMsg := fmt.Sprintf("invalid scan module list while chaining from %s: %v", currentModule, err)
+		log.Printf("❌ %s\n", errMsg)
+		MarkFailed(targetID, errMsg)
+		_ = database.DB.Model(&models.Target{}).
+			Where("id = ?", targetID).
+			Updates(map[string]interface{}{
+				"status":         "PAUSED",
+				"current_phase":  "FAILED: INVALID MODULE LIST",
+				"stop_requested": false,
+			}).Error
+		return
+	}
+
 	currentIndex := -1
 	for i, m := range modules {
-		if m == currentModule {
+		if strings.TrimSpace(m) == currentModule {
 			currentIndex = i
 			break
 		}
 	}
 
 	if currentIndex != -1 && currentIndex+1 < len(modules) {
-		nextModule := modules[currentIndex+1]
-		log.Printf("🔗 Chaining: Phase '%s' done. Starting '%s'\n", currentModule, nextModule)
+		nextModule := strings.TrimSpace(modules[currentIndex+1])
+		if nextModule == "" {
+			errMsg := fmt.Sprintf("empty next module after %s", currentModule)
+			log.Printf("❌ %s\n", errMsg)
+			MarkFailed(targetID, errMsg)
+			_ = database.DB.Model(&models.Target{}).
+				Where("id = ?", targetID).
+				Updates(map[string]interface{}{
+					"status":         "PAUSED",
+					"current_phase":  "FAILED: EMPTY NEXT MODULE",
+					"stop_requested": false,
+				}).Error
+			return
+		}
 
-		// Update status to QUEUED so it doesn't count towards concurrency limit while waiting.
-		database.DB.Model(&models.Target{}).
+		log.Printf(" Chaining: Phase '%s' done. Starting '%s'\n", currentModule, nextModule)
+
+		// Update status to QUEUED so it does not count towards concurrency limit while waiting.
+		if err := database.DB.Model(&models.Target{}).
 			Where("id = ?", targetID).
-			Updates(map[string]interface{}{"status": "QUEUED", "stop_requested": false})
+			Updates(map[string]interface{}{"status": "QUEUED", "stop_requested": false}).Error; err != nil {
+			errMsg := fmt.Sprintf("failed to mark target queued for next module %s: %v", nextModule, err)
+			log.Printf("❌ %s\n", errMsg)
+			MarkFailed(targetID, errMsg)
+			return
+		}
 
 		payload := fmt.Sprintf("%s:%d:%s", nextModule, targetID, rootDomain)
-		redisq.Client.RPush(context.Background(), redisq.QueueNameForUser(target.CreatedByUserID), payload)
+		queueName := redisq.QueueNameForUser(target.CreatedByUserID)
+		if err := redisq.Client.RPush(context.Background(), queueName, payload).Err(); err != nil {
+			errMsg := fmt.Sprintf("failed to enqueue next module %s for target %d: %v", nextModule, targetID, err)
+			log.Printf("❌ %s\n", errMsg)
+			MarkFailed(targetID, errMsg)
+			_ = database.DB.Model(&models.Target{}).
+				Where("id = ?", targetID).
+				Updates(map[string]interface{}{
+					"status":         "PAUSED",
+					"current_phase":  "FAILED: QUEUE NEXT MODULE",
+					"stop_requested": false,
+				}).Error
+			return
+		}
+
 		return
 	}
 
-	log.Printf("🏁 Chain Complete for %s.\n", rootDomain)
+	log.Printf(" Chain Complete for %s.\n", rootDomain)
 	now := time.Now()
-	database.DB.Model(&models.Target{}).
+	if err := database.DB.Model(&models.Target{}).
 		Where("id = ?", targetID).
 		Updates(map[string]interface{}{
 			"last_scan_at":  &now,
 			"status":        "READY",
 			"scan_count":    gorm.Expr("scan_count + 1"),
 			"current_phase": "IDLE",
-		})
+		}).Error; err != nil {
+		errMsg := fmt.Sprintf("failed to finalize target after completed chain: %v", err)
+		log.Printf("❌ %s\n", errMsg)
+		MarkFailed(targetID, errMsg)
+		return
+	}
 
 	_ = database.DB.Model(&models.TargetScanState{}).
 		Where("target_id = ?", targetID).
