@@ -7,8 +7,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"reflect"
-	"sort"
 	"strings"
 	"time"
 
@@ -20,6 +18,7 @@ import (
 	workerengine "github.com/omidxplimbo/hunt-engine/backend/internal/worker/engine"
 	workerhelpers "github.com/omidxplimbo/hunt-engine/backend/internal/worker/helpers"
 	crawlingphase "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/crawling"
+	discoverymerge "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/merge"
 	passivetools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/passive"
 	discoverypersist "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/persistence"
 	discoverytools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/tools"
@@ -381,56 +380,18 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		var existingAssets []string
 		database.DB.Model(&models.Asset{}).Where("target_id = ?", targetID).Pluck("value", &existingAssets)
 
-		masterList = mergeUnique(passiveResults, mutatedResults)
-		var purednsSubdomains []string
-		for subdomain := range purednsResults {
-			purednsSubdomains = append(purednsSubdomains, subdomain)
-		}
-		masterList = mergeUnique(masterList, purednsSubdomains)
-		masterList = mergeUnique(masterList, existingAssets)
+		mergeResult := discoverymerge.Build(discoverymerge.Input{
+			PassiveResults: passiveResults,
+			PassiveSources: passiveSources,
+			MutatedResults: mutatedResults,
+			MutatedSources: mutatedSources,
+			PurednsResults: purednsResults,
+			PurednsSources: purednsSources,
+			ExistingAssets: existingAssets,
+		})
 
-		// Merge sources: passive + mutated + puredns
-		for subdomain, sources := range passiveSources {
-			allSources[subdomain] = sources
-		}
-		for subdomain, sources := range mutatedSources {
-			if existing, ok := allSources[subdomain]; ok {
-				sourceMap := make(map[string]bool)
-				for _, s := range existing {
-					sourceMap[s] = true
-				}
-				for _, s := range sources {
-					sourceMap[s] = true
-				}
-				var merged []string
-				for s := range sourceMap {
-					merged = append(merged, s)
-				}
-				sort.Strings(merged)
-				allSources[subdomain] = merged
-			} else {
-				allSources[subdomain] = sources
-			}
-		}
-		for subdomain, sources := range purednsSources {
-			if existing, ok := allSources[subdomain]; ok {
-				sourceMap := make(map[string]bool)
-				for _, s := range existing {
-					sourceMap[s] = true
-				}
-				for _, s := range sources {
-					sourceMap[s] = true
-				}
-				var merged []string
-				for s := range sourceMap {
-					merged = append(merged, s)
-				}
-				sort.Strings(merged)
-				allSources[subdomain] = merged
-			} else {
-				allSources[subdomain] = sources
-			}
-		}
+		masterList = mergeResult.MasterList
+		allSources = mergeResult.Sources
 
 		// DNSX reads allFoundFile. This file must contain the final merged list
 		// from passive + alterx + optional puredns + existing assets.
@@ -439,11 +400,13 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 			scanMarkFailed(targetID, fmt.Sprintf("merge checkpoint failed: %v", err))
 			return
 		}
+
 		if err := utils.WriteJSONToFile(allSourcesFile, allSources); err != nil {
 			log.Printf("❌ Failed to write merged sources checkpoint: %v\n", err)
 			scanMarkFailed(targetID, fmt.Sprintf("merged sources checkpoint failed: %v", err))
 			return
 		}
+
 		scanMarkStepDone(targetID, "DISCOVERY", "MERGE")
 	}
 
