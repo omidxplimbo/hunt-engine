@@ -15,6 +15,7 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/discovery"
 	workerengine "github.com/omidxplimbo/hunt-engine/backend/internal/worker/engine"
+	workerhelpers "github.com/omidxplimbo/hunt-engine/backend/internal/worker/helpers"
 	crawlingphase "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/crawling"
 	discoverymerge "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/merge"
 	passivetools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/passive"
@@ -447,7 +448,7 @@ func runProbingPhase(targetID uint, rootDomain string) {
 	probing.Run(probing.Context{
 		TargetID:   targetID,
 		RootDomain: rootDomain,
-		BatchSize:  getBatchSize(),
+		BatchSize:  workerhelpers.GetBatchSize(DefaultBatchSize),
 
 		CheckStop:         checkStopRequest,
 		UpdateTargetPhase: updateTargetPhase,
