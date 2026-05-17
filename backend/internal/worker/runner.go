@@ -23,6 +23,7 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/telegram"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/discovery"
+	workerengine "github.com/omidxplimbo/hunt-engine/backend/internal/worker/engine"
 	crawlingphase "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/crawling"
 	passivetools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/passive"
 	discoverytools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/tools"
@@ -210,7 +211,7 @@ func Start() {
 	for {
 		// 1. Check Max Concurrent
 		max := config.GetMaxConcurrentScans()
-		current := countActiveScans()
+		current := workerengine.CountActiveScans()
 
 		if current >= int64(max) {
 			// If max reached, wait a bit before checking again
@@ -219,7 +220,7 @@ func Start() {
 		}
 
 		// 2. Pop from Redis (with timeout to allow re-checking concurrency)
-		payload, err := popNextEligiblePayload(max)
+		payload, err := workerengine.PopNextEligiblePayload(max)
 		if err != nil {
 			log.Printf("❌ Error selecting Redis job: %v\n", err)
 			time.Sleep(5 * time.Second)
@@ -230,129 +231,13 @@ func Start() {
 			continue
 		}
 
-		// CRITICAL FIX: Update status to SCANNING *synchronously* before spawning goroutine.
-		// This prevents the race condition where the loop continues and pops another item
-		// before the goroutine has a chance to update the DB status.
-		parts := strings.Split(payload, ":")
-		if len(parts) >= 2 {
-			targetIDStr := parts[1]
-			var tid uint64
-			// Use Sscanf to be safe
-			fmt.Sscanf(targetIDStr, "%d", &tid)
-			if tid > 0 {
-				database.DB.Model(&models.Target{}).Where("id = ?", tid).Update("status", "SCANNING")
-			}
-		}
+		// CRITICAL FIX: Update status to SCANNING synchronously before spawning
+		// the goroutine. This prevents the queue selector from overbooking
+		// global or per-user scan slots.
+		workerengine.MarkPayloadTargetScanning(payload)
 
 		go processJobDispatcher(payload)
 	}
-}
-
-func parsePayloadTargetID(payload string) (uint, bool) {
-	parts := strings.SplitN(payload, ":", 3)
-	if len(parts) < 3 {
-		return 0, false
-	}
-	id, err := strconv.ParseUint(parts[1], 10, 64)
-	if err != nil || id == 0 {
-		return 0, false
-	}
-	return uint(id), true
-}
-
-func countActiveScansForUser(userID uint) int64 {
-	var count int64
-	database.DB.Model(&models.Target{}).
-		Where("created_by_user_id = ? AND status = ?", userID, "SCANNING").
-		Count(&count)
-	return count
-}
-
-func userHasFreeScanSlot(user models.User) bool {
-	if strings.ToLower(strings.TrimSpace(user.Role)) == "admin" {
-		return true
-	}
-	limit := user.MaxConcurrentScans
-	if limit < 1 {
-		limit = 1
-	}
-	return countActiveScansForUser(user.ID) < int64(limit)
-}
-
-func removeQueuePayloadAt(ctx context.Context, key string, index int, payload string) error {
-	placeholder := fmt.Sprintf("__RUNNING__:%d:%d", time.Now().UnixNano(), index)
-	current, err := redisq.Client.LIndex(ctx, key, int64(index)).Result()
-	if err != nil {
-		return err
-	}
-	if current != payload {
-		return fmt.Errorf("queue changed while selecting job")
-	}
-	if err := redisq.Client.LSet(ctx, key, int64(index), placeholder).Err(); err != nil {
-		return err
-	}
-	return redisq.Client.LRem(ctx, key, 1, placeholder).Err()
-}
-
-func popNextEligiblePayload(maxGlobal int) (string, error) {
-	ctx := context.Background()
-	keys, err := redisq.UserQueueKeys(ctx)
-	if err != nil {
-		return "", err
-	}
-
-	// Legacy fallback: drain old global queue if it still has jobs from before this migration.
-	if n, _ := redisq.Client.LLen(ctx, redisq.QueueName).Result(); n > 0 {
-		keys = append(keys, redisq.QueueName)
-	}
-
-	for _, key := range keys {
-		items, err := redisq.Client.LRange(ctx, key, 0, -1).Result()
-		if err != nil {
-			return "", err
-		}
-		for idx, payload := range items {
-			targetID, ok := parsePayloadTargetID(payload)
-			if !ok {
-				_ = removeQueuePayloadAt(ctx, key, idx, payload)
-				continue
-			}
-
-			var target models.Target
-			if err := database.DB.First(&target, targetID).Error; err != nil {
-				_ = removeQueuePayloadAt(ctx, key, idx, payload)
-				continue
-			}
-			if target.Status != "QUEUED" {
-				_ = removeQueuePayloadAt(ctx, key, idx, payload)
-				continue
-			}
-
-			var owner models.User
-			if err := database.DB.First(&owner, target.CreatedByUserID).Error; err != nil {
-				continue
-			}
-			if !userHasFreeScanSlot(owner) {
-				break
-			}
-			if countActiveScans() >= int64(maxGlobal) {
-				return "", nil
-			}
-			if err := removeQueuePayloadAt(ctx, key, idx, payload); err != nil {
-				return "", err
-			}
-			return payload, nil
-		}
-	}
-
-	return "", nil
-}
-
-func countActiveScans() int64 {
-	var count int64
-	// We count targets that are in 'SCANNING' status.
-	database.DB.Model(&models.Target{}).Where("status = ?", "SCANNING").Count(&count)
-	return count
 }
 
 func cleanupLegacyToolTmp() {
