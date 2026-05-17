@@ -30,6 +30,7 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/discovery"
 	passivetools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/passive"
 	discoverytools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/tools"
+	probing "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/probing"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/utils"
 	"gorm.io/gorm"
 )
@@ -873,138 +874,45 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 // PHASE 2: Probing Implementation
 // =================================================================
 func runProbingPhase(targetID uint, rootDomain string) {
-	if checkStopRequest(targetID) {
-		return
-	}
+	probing.Run(probing.Context{
+		TargetID:   targetID,
+		RootDomain: rootDomain,
+		BatchSize:  getBatchSize(),
 
-	tempDir, username, err := utils.GetTargetTempDir(targetID)
-	if err != nil {
-		log.Printf("❌ Failed to init temp dir for target %d: %v\n", targetID, err)
-		return
-	}
-	log.Printf("🗂️ Temp workspace: %s (owner: %s)\n", tempDir, username)
-
-	probingInputFile := filepath.Join(tempDir, "httpx_input.txt")
-	probingOutputFile := filepath.Join(tempDir, "httpx_output.json")
-
-	batchSize := getBatchSize()
-	log.Printf("🚀 Starting PHASE 2 (PROBING) for target ID: %d (Batch Size: %d)\n", targetID, batchSize)
-	updateTargetPhase(targetID, "PHASE 2: INITIALIZING")
-	startTime := time.Now()
-
-	_, _ = ensureScanState(targetID)
-	if scanIsStepDone(targetID, "PROBING", "DONE") {
-		log.Printf("⏩ Resume: PROBING already completed. Chaining next module.\n")
-		triggerNextModule(targetID, rootDomain, "PROBING")
-		return
-	}
-
-	var totalLive int64
-	database.DB.Model(&models.Asset{}).Where("target_id = ? AND is_live = true", targetID).Count(&totalLive)
-
-	if totalLive == 0 {
-		log.Println("⚠️ No live assets found. Aborting probing.")
-		triggerNextModule(targetID, rootDomain, "PROBING")
-		return
-	}
-	log.Printf("✅ Found %d live assets in DB. Starting batch processing...\n", totalLive)
-
-	meta := scanGetMeta(targetID)
-	processedCount := 0
-	offset := 0
-	if pm, ok := meta["probing"].(map[string]interface{}); ok {
-		if v, ok := pm["offset"].(float64); ok && int(v) > 0 {
-			offset = int(v)
-		}
-		if v, ok := pm["processed_count"].(float64); ok && int(v) > 0 {
-			processedCount = int(v)
-		}
-	}
-	totalBatches := int(totalLive)/batchSize + 1
-	currentBatch := (offset / batchSize) + 1
-
-	for {
-		if checkStopRequest(targetID) {
-			// persist checkpoint so resume continues from this offset
-			meta["probing"] = map[string]interface{}{
-				"offset":          offset,
-				"processed_count": processedCount,
-				"batch_size":      batchSize,
-				"total_live":      totalLive,
+		CheckStop:         checkStopRequest,
+		UpdateTargetPhase: updateTargetPhase,
+		EnsureScanState: func(targetID uint) {
+			_, _ = ensureScanState(targetID)
+		},
+		ScanIsStepDone:    scanIsStepDone,
+		ScanGetMeta:       scanGetMeta,
+		ScanSetMeta:       scanSetMeta,
+		ScanMarkRunning:   scanMarkRunning,
+		ScanMarkStepDone:  scanMarkStepDone,
+		TriggerNextModule: triggerNextModule,
+		RunCommand:        runCommandWithKillSwitch,
+		UpdateAssets: func(targetID uint, results map[string]probing.HTTPXResult) {
+			converted := make(map[string]HttpxResult, len(results))
+			for host, result := range results {
+				converted[host] = HttpxResult{
+					Input:         result.Input,
+					URL:           result.URL,
+					StatusCode:    result.StatusCode,
+					Title:         result.Title,
+					ContentLength: result.ContentLength,
+					A:             result.A,
+					WebServer:     result.WebServer,
+					CDNName:       result.CDNName,
+					Technologies:  result.Technologies,
+					BodyHash:      result.BodyHash,
+					HeaderHash:    result.HeaderHash,
+					ResponseTime:  result.ResponseTime,
+					RawJSON:       result.RawJSON,
+				}
 			}
-			scanSetMeta(targetID, meta)
-			return
-		}
-
-		statusMsg := fmt.Sprintf("PHASE 2: BATCH %d/%d", currentBatch, totalBatches)
-		updateTargetPhase(targetID, statusMsg)
-		scanMarkRunning(targetID, "PROBING", "HTTPX_BATCH")
-
-		var batchAssets []models.Asset
-		err := database.DB.Where("target_id = ? AND is_live = true", targetID).
-			Order("id").
-			Limit(batchSize).
-			Offset(offset).
-			Find(&batchAssets).Error
-
-		if err != nil || len(batchAssets) == 0 {
-			break
-		}
-
-		log.Printf("🔄 Processing batch: Offset %d, Size %d...\n", offset, len(batchAssets))
-
-		var hosts []string
-		for _, asset := range batchAssets {
-			hosts = append(hosts, asset.Value)
-		}
-		if err := utils.WriteSliceToFile(probingInputFile, hosts); err != nil {
-			log.Printf("❌ Error writing batch input file: %v\n", err)
-			break
-		}
-
-		_, err = runCommandWithKillSwitch(targetID, "httpx",
-			"-l", probingInputFile,
-			"-json",
-			"-o", probingOutputFile,
-			"-silent",
-			"-threads", "50",
-			"-tech-detect",
-			"-follow-redirects",
-		)
-		if err != nil {
-			if err.Error() == "process killed by user request" {
-				return
-			}
-			log.Printf("⚠️ Httpx batch finished with issues: %v\n", err)
-		}
-
-		httpxResults, err := readHttpxResults(probingOutputFile)
-		if err != nil {
-			log.Printf("❌ Error reading batch httpx output: %v\n", err)
-		} else {
-			UpdateAssetsWithDiff(targetID, httpxResults)
-			processedCount += len(batchAssets)
-		}
-		// پاکسازی فایل‌های موقت هر batch
-		_ = os.Remove(probingOutputFile)
-		_ = os.Remove(probingInputFile)
-
-		offset += batchSize
-		currentBatch++
-
-		// persist checkpoint after each batch
-		meta["probing"] = map[string]interface{}{
-			"offset":          offset,
-			"processed_count": processedCount,
-			"batch_size":      batchSize,
-			"total_live":      totalLive,
-		}
-		scanSetMeta(targetID, meta)
-	}
-
-	log.Printf("🏁 PHASE 2 finished. Total processed: %d in %s.\n", processedCount, time.Since(startTime))
-	scanMarkStepDone(targetID, "PROBING", "DONE")
-	triggerNextModule(targetID, rootDomain, "PROBING")
+			UpdateAssetsWithDiff(targetID, converted)
+		},
+	})
 }
 
 // =================================================================
