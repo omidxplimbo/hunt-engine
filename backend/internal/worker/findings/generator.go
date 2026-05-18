@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/url"
+	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -44,6 +47,7 @@ type findingCandidate struct {
 	Evidence       string
 	Recommendation string
 	FingerprintKey string
+	StableSubject  string
 }
 
 // GenerateBuiltinFindings runs all built-in generators. It is safe to call after a full scan.
@@ -202,20 +206,26 @@ func candidatesFromURL(foundURL models.FoundURL) []findingCandidate {
 	urlID := foundURL.ID
 	assetID := foundURL.AssetID
 
-	parsed, err := url.Parse(foundURL.Value)
+	canonicalURL := canonicalURLForFinding(foundURL.Value)
+	analysisURL := canonicalURL
+	if analysisURL == "" {
+		analysisURL = foundURL.Value
+	}
+
+	parsed, err := url.Parse(analysisURL)
 	pathValue := ""
 	queryValue := ""
 	if err == nil {
 		pathValue = strings.ToLower(parsed.Path)
 		queryValue = strings.ToLower(parsed.RawQuery)
 	}
-
 	if pathValue == "" {
-		pathValue = strings.ToLower(foundURL.Value)
+		pathValue = strings.ToLower(analysisURL)
 	}
 
 	baseName := strings.ToLower(filepath.Base(pathValue))
-	fullLower := strings.ToLower(foundURL.Value)
+	fullLower := strings.ToLower(analysisURL)
+	stableSubject := "url:" + analysisURL
 
 	add := func(title, description, severity, category, recommendation, key string) {
 		candidates = append(candidates, findingCandidate{
@@ -225,9 +235,10 @@ func candidatesFromURL(foundURL models.FoundURL) []findingCandidate {
 			Description:    description,
 			Severity:       severity,
 			Category:       category,
-			Evidence:       urlEvidence(foundURL),
+			Evidence:       urlEvidence(foundURL, analysisURL),
 			Recommendation: recommendation,
 			FingerprintKey: key,
+			StableSubject:  stableSubject,
 		})
 	}
 
@@ -434,6 +445,20 @@ func markMissingBuiltinFindingsFixed(targetID uint, categories []string, seen ma
 }
 
 func stableFingerprint(targetID uint, candidate findingCandidate) string {
+	if candidate.StableSubject != "" {
+		h := sha1.New()
+		_, _ = h.Write([]byte(fmt.Sprintf(
+			"builtin:v3:%d:%s:%s:%s:%s",
+			targetID,
+			candidate.StableSubject,
+			candidate.Category,
+			candidate.Title,
+			candidate.FingerprintKey,
+		)))
+
+		return hex.EncodeToString(h.Sum(nil))
+	}
+
 	assetID := uint(0)
 	if candidate.AssetID != nil {
 		assetID = *candidate.AssetID
@@ -483,9 +508,13 @@ func assetEvidence(asset models.Asset) string {
 	return strings.Join(parts, " ")
 }
 
-func urlEvidence(foundURL models.FoundURL) string {
+func urlEvidence(foundURL models.FoundURL, canonicalURL string) string {
 	parts := []string{
-		fmt.Sprintf("url=%s", foundURL.Value),
+		fmt.Sprintf("canonical_url=%s", canonicalURL),
+	}
+
+	if foundURL.Value != "" && foundURL.Value != canonicalURL {
+		parts = append(parts, fmt.Sprintf("sample_raw_url=%s", shortenEvidenceValue(foundURL.Value, 240)))
 	}
 
 	if foundURL.Source != "" {
@@ -497,6 +526,188 @@ func urlEvidence(foundURL models.FoundURL) string {
 	}
 
 	return strings.Join(parts, " ")
+}
+
+func canonicalURLForFinding(rawValue string) string {
+	rawValue = strings.TrimSpace(rawValue)
+	if rawValue == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(rawValue)
+	if err != nil {
+		return compactRawURL(rawValue)
+	}
+
+	parsed.Fragment = ""
+	parsed.User = nil
+
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = canonicalHost(parsed)
+	parsed.Path = canonicalPath(parsed.Path)
+	parsed.RawQuery = canonicalQuery(parsed.Query())
+	parsed.ForceQuery = false
+
+	if parsed.Scheme == "" && parsed.Host == "" {
+		result := parsed.Path
+		if parsed.RawQuery != "" {
+			result += "?" + parsed.RawQuery
+		}
+		return result
+	}
+
+	return parsed.String()
+}
+
+func canonicalHost(parsed *url.URL) string {
+	hostname := strings.ToLower(parsed.Hostname())
+	port := parsed.Port()
+
+	if hostname == "" {
+		return strings.ToLower(parsed.Host)
+	}
+
+	if port == "" || (parsed.Scheme == "http" && port == "80") || (parsed.Scheme == "https" && port == "443") {
+		return hostname
+	}
+
+	return net.JoinHostPort(hostname, port)
+}
+
+func canonicalPath(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "/"
+	}
+
+	cleaned := path.Clean("/" + value)
+	if cleaned != "/" {
+		cleaned = strings.TrimRight(cleaned, "/")
+	}
+
+	return cleaned
+}
+
+func canonicalQuery(values url.Values) string {
+	if len(values) == 0 {
+		return ""
+	}
+
+	keys := make([]string, 0, len(values))
+	seen := make(map[string]struct{})
+
+	for key, vals := range values {
+		canonicalKey := strings.ToLower(strings.TrimSpace(key))
+		if canonicalKey == "" {
+			continue
+		}
+
+		if isVolatileQueryParam(canonicalKey) || hasVolatileQueryValue(vals) {
+			continue
+		}
+
+		if _, ok := seen[canonicalKey]; ok {
+			continue
+		}
+
+		seen[canonicalKey] = struct{}{}
+		keys = append(keys, canonicalKey)
+	}
+
+	sort.Strings(keys)
+
+	return strings.Join(keys, "&")
+}
+
+func isVolatileQueryParam(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return true
+	}
+
+	if strings.HasPrefix(name, "utm_") {
+		return true
+	}
+
+	exact := map[string]struct{}{
+		"fbclid":       {},
+		"gclid":        {},
+		"msclkid":      {},
+		"mc_cid":       {},
+		"mc_eid":       {},
+		"sid":          {},
+		"jsessionid":   {},
+		"phpsessid":    {},
+		"aspsessionid": {},
+		"ts":           {},
+		"t":            {},
+		"sig":          {},
+		"cache":        {},
+		"cachebuster":  {},
+		"cb":           {},
+		"rand":         {},
+		"random":       {},
+		"captcha":      {},
+	}
+	if _, ok := exact[name]; ok {
+		return true
+	}
+
+	volatileSubstrings := []string{
+		"csrf",
+		"nonce",
+		"token",
+		"session",
+		"signature",
+		"timestamp",
+		"authenticity",
+		"anti-forgery",
+		"xsrf",
+	}
+
+	for _, needle := range volatileSubstrings {
+		if strings.Contains(name, needle) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func hasVolatileQueryValue(values []string) bool {
+	for _, value := range values {
+		lower := strings.ToLower(value)
+		if strings.Contains(lower, "csrf") || strings.Contains(lower, "nonce") || strings.Contains(lower, "session") || strings.Contains(lower, "token") {
+			return true
+		}
+	}
+
+	return false
+}
+
+func compactRawURL(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+
+	if idx := strings.Index(value, "#"); idx >= 0 {
+		value = value[:idx]
+	}
+
+	return value
+}
+
+func shortenEvidenceValue(value string, maxLen int) string {
+	if len(value) <= maxLen {
+		return value
+	}
+
+	if maxLen <= 3 {
+		return value[:maxLen]
+	}
+
+	return value[:maxLen-3] + "..."
 }
 
 func containsAny(value string, needles []string) bool {
