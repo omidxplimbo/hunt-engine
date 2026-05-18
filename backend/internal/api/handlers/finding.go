@@ -39,6 +39,91 @@ func normalizeFindingStatus(status string) string {
 	return strings.ToLower(strings.TrimSpace(status))
 }
 
+type findingStatsRow struct {
+	Key   string `gorm:"column:key"`
+	Count int64  `gorm:"column:count"`
+}
+
+func emptyFindingStats() dto.FindingStatsResponse {
+	return dto.FindingStatsResponse{
+		BySeverity: map[string]int64{
+			models.FindingSeverityCritical: 0,
+			models.FindingSeverityHigh:     0,
+			models.FindingSeverityMedium:   0,
+			models.FindingSeverityLow:      0,
+			models.FindingSeverityInfo:     0,
+		},
+		ByStatus: map[string]int64{
+			models.FindingStatusOpen:          0,
+			models.FindingStatusAccepted:      0,
+			models.FindingStatusFalsePositive: 0,
+			models.FindingStatusFixed:         0,
+		},
+		BySource:   map[string]int64{},
+		ByCategory: map[string]int64{},
+	}
+}
+
+func countFindingsBy(base *gorm.DB, field string) (map[string]int64, error) {
+	rows := make([]findingStatsRow, 0)
+	query := base.Session(&gorm.Session{}).
+		Select(field + " AS key, COUNT(*) AS count").
+		Where(field + " <> ''").
+		Group(field)
+
+	if err := query.Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		result[row.Key] = row.Count
+	}
+
+	return result, nil
+}
+
+func buildFindingStats(base *gorm.DB) (dto.FindingStatsResponse, error) {
+	stats := emptyFindingStats()
+
+	if err := base.Session(&gorm.Session{}).Count(&stats.Total).Error; err != nil {
+		return stats, err
+	}
+
+	bySeverity, err := countFindingsBy(base, "severity")
+	if err != nil {
+		return stats, err
+	}
+	for key, count := range bySeverity {
+		stats.BySeverity[key] = count
+	}
+
+	byStatus, err := countFindingsBy(base, "status")
+	if err != nil {
+		return stats, err
+	}
+	for key, count := range byStatus {
+		stats.ByStatus[key] = count
+	}
+
+	stats.Open = stats.ByStatus[models.FindingStatusOpen]
+	stats.Accepted = stats.ByStatus[models.FindingStatusAccepted]
+	stats.FalsePositive = stats.ByStatus[models.FindingStatusFalsePositive]
+	stats.Fixed = stats.ByStatus[models.FindingStatusFixed]
+
+	stats.BySource, err = countFindingsBy(base, "source_tool")
+	if err != nil {
+		return stats, err
+	}
+
+	stats.ByCategory, err = countFindingsBy(base, "category")
+	if err != nil {
+		return stats, err
+	}
+
+	return stats, nil
+}
+
 func isValidFindingStatus(status string) bool {
 	switch normalizeFindingStatus(status) {
 	case models.FindingStatusOpen,
@@ -142,6 +227,26 @@ func GetFindings(c *fiber.Ctx) error {
 		"total_count": total,
 		"page":        page,
 	})
+}
+
+// GetTargetFindingsStats returns aggregate finding counts for one accessible target.
+func GetTargetFindingsStats(c *fiber.Ctx) error {
+	id := c.Params("id")
+	var targetID uint
+	_, _ = fmt.Sscanf(id, "%d", &targetID)
+
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	base := database.DB.Model(&models.Finding{}).Where("target_id = ?", target.ID)
+	stats, err := buildFindingStats(base)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	return c.JSON(fiber.Map{"status": "success", "data": stats})
 }
 
 // GetTargetFindings lists findings for one accessible target.

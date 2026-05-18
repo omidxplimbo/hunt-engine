@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import type { Finding, FindingSeverity, FindingStatus, FindingsResponse } from '../types/finding';
+import type { Finding, FindingSeverity, FindingStatus, FindingsResponse, FindingStatsResponse } from '../types/finding';
 
 export interface FindingFilters {
   status?: FindingStatus | 'all';
@@ -23,14 +23,14 @@ const cleanParams = (filters?: FindingFilters) => {
 };
 
 export const getTargetFindings = async (targetId: number, filters?: FindingFilters) => {
-  const response = await apiClient.get<FindingsResponse>(`/targets/${targetId}/findings`, {
+  const response = await apiClient.get<FindingsResponse, FindingStatsResponse>(`/targets/${targetId}/findings`, {
     params: cleanParams(filters),
   });
   return response.data;
 };
 
 export const getFindings = async (filters?: FindingFilters) => {
-  const response = await apiClient.get<FindingsResponse>('/findings', {
+  const response = await apiClient.get<FindingsResponse, FindingStatsResponse>('/findings', {
     params: cleanParams(filters),
   });
   return response.data;
@@ -40,5 +40,10 @@ export const updateFindingStatus = async (findingId: number, status: FindingStat
   const response = await apiClient.patch<{ status: string; data: Finding }>(`/findings/${findingId}/status`, {
     status,
   });
+  return response.data;
+};
+
+export const getTargetFindingStats = async (targetId: number) => {
+  const response = await apiClient.get<FindingStatsResponse>(`/targets/${targetId}/findings/stats`);
   return response.data;
 };

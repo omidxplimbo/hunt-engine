@@ -25,3 +25,15 @@ type FindingResponse struct {
 type UpdateFindingStatusRequest struct {
 	Status string `json:"status"`
 }
+
+type FindingStatsResponse struct {
+	Total         int64            `json:"total"`
+	Open          int64            `json:"open"`
+	Accepted      int64            `json:"accepted"`
+	FalsePositive int64            `json:"false_positive"`
+	Fixed         int64            `json:"fixed"`
+	BySeverity    map[string]int64 `json:"by_severity"`
+	ByStatus      map[string]int64 `json:"by_status"`
+	BySource      map[string]int64 `json:"by_source"`
+	ByCategory    map[string]int64 `json:"by_category"`
+}

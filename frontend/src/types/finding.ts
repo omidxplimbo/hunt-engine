@@ -29,3 +29,20 @@ export interface FindingsResponse {
   total_count?: number;
   page?: number;
 }
+
+export interface FindingStats {
+  total: number;
+  open: number;
+  accepted: number;
+  false_positive: number;
+  fixed: number;
+  by_severity: Record<FindingSeverity, number> & Record<string, number>;
+  by_status: Record<FindingStatus, number> & Record<string, number>;
+  by_source: Record<string, number>;
+  by_category: Record<string, number>;
+}
+
+export interface FindingStatsResponse {
+  status: string;
+  data: FindingStats;
+}
