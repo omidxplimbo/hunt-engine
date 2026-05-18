@@ -1,18 +1,42 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { getTargetAssets, getTargetDetails, getTargetURLs, exportTargetIPs, downloadAssets, downloadURLs } from '../api/targets';
-import { ArrowLeft, Globe, CheckCircle, XCircle, Search, Monitor, Loader2, Network, ArrowUp, ArrowDown, Link2, FileText, Database, FileCode, Shield, Download, Cloud, Terminal } from 'lucide-react';
+import {
+  getTargetAssets,
+  getTargetDetails,
+  getTargetURLs,
+  exportTargetIPs,
+  downloadAssets,
+  downloadURLs,
+} from '../api/targets';
+import FindingsPanel from '../components/FindingsPanel';
+import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowUp,
+  CheckCircle,
+  Cloud,
+  Database,
+  Download,
+  FileCode,
+  FileText,
+  Globe,
+  Link2,
+  Loader2,
+  Network,
+  Search,
+  Shield,
+  Terminal,
+  XCircle,
+} from 'lucide-react';
 import clsx from 'clsx';
-
-
 
 const KNOWN_SOURCES = [
   { id: 'wayback', label: 'Wayback' },
   { id: 'gau', label: 'GAU' },
   { id: 'katana', label: 'Katana' },
   { id: 'waymore', label: 'Waymore' },
-  { id: 'virustotal', label: 'VirusTotal' }, // <--- اضافه شده
+  { id: 'virustotal', label: 'VirusTotal' },
 ];
 
 const KNOWN_ASSET_PROVIDERS = [
@@ -21,20 +45,85 @@ const KNOWN_ASSET_PROVIDERS = [
   { id: 'crtsh', label: 'crt.sh' },
   { id: 'cero', label: 'Cero' },
   { id: 'alterx', label: 'Alterx' },
-  { id: 'puredns', label: 'Puredns' },
+  { id: 'puredns', label: 'PureDNS' },
   { id: 'abusedb', label: 'AbuseDB' },
-    { id: 'amass', label: 'Amass' }, // <--- این خط اضافه شود
+  { id: 'amass', label: 'Amass' },
 ];
+
+type ActiveTab = 'assets' | 'urls' | 'findings';
+
+const parseJSONList = (value: unknown): string[] => {
+  if (Array.isArray(value)) return value.map(String);
+  if (typeof value === 'string' && value.trim() !== '') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed.map(String) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
+
+const sourceColor = (source: string) => {
+  const colors: Record<string, string> = {
+    subfinder: 'border-blue-400 text-blue-400 bg-blue-900/20',
+    assetfinder: 'border-green-400 text-green-400 bg-green-900/20',
+    cero: 'border-purple-400 text-purple-400 bg-purple-900/20',
+    crtsh: 'border-orange-400 text-orange-400 bg-orange-900/20',
+    alterx: 'border-yellow-400 text-yellow-400 bg-yellow-900/20',
+    abusedb: 'border-red-500 text-red-500 bg-red-900/20',
+    puredns: 'border-cyan-400 text-cyan-300 bg-cyan-950/30',
+    amass: 'border-hack-primary text-hack-primary bg-hack-primary/10',
+  };
+  return colors[source.toLowerCase()] || 'border-hack-border text-hack-dim bg-black/30';
+};
+
+const renderPortsCell = (openPorts: unknown) => {
+  let obj: Record<string, number[]> = {};
+  try {
+    if (typeof openPorts === 'string') obj = JSON.parse(openPorts || '{}');
+    else if (openPorts && typeof openPorts === 'object') obj = openPorts as Record<string, number[]>;
+  } catch {
+    obj = {};
+  }
+
+  const union = new Set<number>();
+  Object.values(obj || {}).forEach((ports) => {
+    (ports || []).forEach((port) => union.add(Number(port)));
+  });
+
+  const portsSorted = Array.from(union).filter(Number.isFinite).sort((a, b) => a - b);
+  if (portsSorted.length === 0) return <span className="text-hack-dim">-</span>;
+
+  return (
+    <div className="flex flex-wrap gap-1">
+      {portsSorted.slice(0, 12).map((port) => (
+        <span key={port} className="rounded border border-hack-border bg-black/30 px-1.5 py-0.5 text-[10px] text-hack-dim">
+          {port}
+        </span>
+      ))}
+      {portsSorted.length > 12 && (
+        <span className="rounded border border-hack-border bg-black/30 px-1.5 py-0.5 text-[10px] text-hack-dim">
+          +{portsSorted.length - 12}
+        </span>
+      )}
+    </div>
+  );
+};
 
 const TargetAssets = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const targetId = Number(id);
 
-  const [activeTab, setActiveTab] = useState<'assets' | 'urls'>('assets');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('assets');
   const [page, setPage] = useState(1);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [sortBy, setSortBy] = useState('created_at');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
-  // Asset Filters
   const [filterLive, setFilterLive] = useState<boolean | undefined>(undefined);
   const [filterHttpx, setFilterHttpx] = useState<boolean | undefined>(undefined);
   const [filterDnsOnly, setFilterDnsOnly] = useState<boolean | undefined>(undefined);
@@ -43,144 +132,107 @@ const TargetAssets = () => {
   const [filterHasCdn, setFilterHasCdn] = useState<boolean | undefined>(undefined);
   const [filterHasWaf, setFilterHasWaf] = useState<boolean | undefined>(undefined);
   const [filterHasCloud, setFilterHasCloud] = useState<boolean | undefined>(undefined);
-  const [filterAssetProvider, setFilterAssetProvider] = useState<string | null>(null); // 👈 single provider filter (null = ALL)
-  const [filterStatusCode, setFilterStatusCode] = useState<string>(""); // 👈 "" = ALL, "200" or "2xx"...
+  const [filterAssetProvider, setFilterAssetProvider] = useState<string | null>(null);
+  const [filterStatusCode, setFilterStatusCode] = useState('');
 
-  // URL Filters
-  const [filterJsOnly, setFilterJsOnly] = useState<boolean>(false);
-  const [filterSources, setFilterSources] = useState<string[]>([]); // 👈 استیت جدید برای فیلتر سورس‌ها
-
-  const [searchTerm, setSearchTerm] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [sortBy, setSortBy] = useState<string>('created_at');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [filterJsOnly, setFilterJsOnly] = useState(false);
+  const [filterSources, setFilterSources] = useState<string[]>([]);
 
   useEffect(() => {
-    const timer = setTimeout(() => { setDebouncedSearch(searchTerm); setPage(1); }, 500);
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchTerm);
+      setPage(1);
+    }, 500);
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
-  // اضافه شدن filterSources و filterNoCdn به وابستگی‌ها
   useEffect(() => {
     setPage(1);
-    setSearchTerm("");
-  }, [filterLive, filterHttpx, filterDnsOnly, filterHasPorts, filterNoCdn, filterHasCdn, filterHasWaf, filterHasCloud, filterAssetProvider, filterStatusCode, filterJsOnly, filterSources, activeTab]);
+  }, [activeTab, filterLive, filterHttpx, filterDnsOnly, filterHasPorts, filterNoCdn, filterHasCdn, filterHasWaf, filterHasCloud, filterAssetProvider, filterStatusCode, filterJsOnly, filterSources]);
 
-  const toggleHttpx = () => {
-    if (!filterHttpx) { setFilterDnsOnly(undefined); setFilterHttpx(true); } else { setFilterHttpx(undefined); }
-  };
-  const toggleDnsOnly = () => {
-    if (!filterDnsOnly) { setFilterHttpx(undefined); setFilterDnsOnly(true); } else { setFilterDnsOnly(undefined); }
-  };
-  const toggleHasPorts = () => {
-    setFilterHasPorts(prev => !prev ? true : undefined);
-  };
-  const toggleNoCdn = () => {
-    setFilterNoCdn(prev => !prev ? true : undefined);
-  };
-  const toggleHasCdn = () => {
-    setFilterHasCdn(prev => !prev ? true : undefined);
-  };
-  const toggleHasWaf = () => {
-    setFilterHasWaf(prev => !prev ? true : undefined);
-  };
-  const toggleHasCloud = () => {
-    setFilterHasCloud(prev => !prev ? true : undefined);
-  };
-
-  // تابع جدید برای مدیریت انتخاب سورس‌ها
-  const toggleSource = (sourceId: string) => {
-    setFilterSources(prev =>
-      prev.includes(sourceId)
-        ? prev.filter(s => s !== sourceId)
-        : [...prev, sourceId]
-    );
-  };
-
-  const handleSort = (field: string) => {
-    if (sortBy === field) { setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc'); } else { setSortBy(field); setSortOrder('asc'); }
-  };
-
-  const SortableHeader = ({ field, label, className }: { field: string, label: string, className?: string }) => (
-    <th className={clsx("px-6 py-3 cursor-pointer hover:text-hack-primary transition-colors select-none group border-b border-hack-border font-mono text-xs text-hack-dim uppercase tracking-wider", className)} onClick={() => handleSort(field)}>
-      <div className={clsx("flex items-center gap-1", className?.includes("text-right") && "justify-end")}>
-        {label}
-        {sortBy === field && (sortOrder === 'asc' ? <ArrowUp size={12} className="text-hack-primary" /> : <ArrowDown size={12} className="text-hack-primary" />)}
-      </div>
-    </th>
-  );
-
-  const renderPortsCell = (openPorts: any) => {
-    let obj: Record<string, number[]> = {};
-    try {
-      if (typeof openPorts === 'string') obj = JSON.parse(openPorts || '{}');
-      else if (openPorts && typeof openPorts === 'object') obj = openPorts;
-    } catch {
-      obj = {};
-    }
-
-    const union = new Set<number>();
-    Object.values(obj || {}).forEach((ports) => {
-      (ports || []).forEach((p) => union.add(Number(p)));
-    });
-    const portsSorted = Array.from(union).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
-
-    if (portsSorted.length === 0) return <span className="text-hack-dim">-</span>;
-
-    const tooltip = Object.entries(obj)
-      .map(([ip, ports]) => `${ip}: ${(ports || []).join(', ')}`)
-      .join(' | ');
-
-    return (
-      <div className="flex flex-wrap gap-1" title={tooltip}>
-        {portsSorted.slice(0, 12).map((p) => (
-          <span key={p} className="px-1 py-0.5 bg-hack-primary/5 text-[9px] border border-hack-primary/20 text-hack-primary whitespace-nowrap">
-            {p}
-          </span>
-        ))}
-        {portsSorted.length > 12 && (
-          <span className="text-[9px] text-hack-dim border border-hack-border px-1 py-0.5 whitespace-nowrap">
-            +{portsSorted.length - 12}
-          </span>
-        )}
-      </div>
-    );
-  };
-
-  const targetQuery = useQuery({ queryKey: ['target', targetId], queryFn: () => getTargetDetails(targetId), enabled: !!targetId });
+  const targetQuery = useQuery({
+    queryKey: ['target', targetId],
+    queryFn: () => getTargetDetails(targetId),
+    enabled: Boolean(targetId),
+  });
 
   const assetsQuery = useQuery({
     queryKey: ['assets', targetId, page, filterLive, filterHttpx, filterDnsOnly, filterHasPorts, filterNoCdn, filterHasCdn, filterHasWaf, filterHasCloud, filterAssetProvider, filterStatusCode, debouncedSearch, sortBy, sortOrder],
-    queryFn: () =>
-      getTargetAssets(
-        targetId,
-        page,
-        50,
-        {
-          is_live: filterLive,
-          search: debouncedSearch,
-          has_httpx: filterHttpx,
-          dns_only: filterDnsOnly,
-          has_ports: filterHasPorts,
-          no_cdn: filterNoCdn,
-          has_cdn: filterHasCdn,
-          has_waf: filterHasWaf,
-          has_cloud: filterHasCloud,
-          status_code: filterStatusCode || undefined,
-          sources: filterAssetProvider ? [filterAssetProvider] : undefined,
-        },
-        sortBy,
-        sortOrder
-      ),
-    enabled: !!targetId && activeTab === 'assets',
+    queryFn: () => getTargetAssets(
+      targetId,
+      page,
+      50,
+      {
+        is_live: filterLive,
+        search: debouncedSearch,
+        has_httpx: filterHttpx,
+        dns_only: filterDnsOnly,
+        has_ports: filterHasPorts,
+        no_cdn: filterNoCdn,
+        has_cdn: filterHasCdn,
+        has_waf: filterHasWaf,
+        has_cloud: filterHasCloud,
+        status_code: filterStatusCode || undefined,
+        sources: filterAssetProvider ? [filterAssetProvider] : undefined,
+      },
+      sortBy,
+      sortOrder
+    ),
+    enabled: Boolean(targetId) && activeTab === 'assets',
   });
 
-  // آپدیت کوئری URLها با پارامترهای جدید
   const urlsQuery = useQuery({
     queryKey: ['urls', targetId, page, debouncedSearch, filterJsOnly, sortBy, sortOrder, filterSources],
     queryFn: () => getTargetURLs(targetId, page, 50, debouncedSearch, filterJsOnly, sortBy, sortOrder, filterSources),
-    enabled: !!targetId && activeTab === 'urls'
+    enabled: Boolean(targetId) && activeTab === 'urls',
   });
+
+  const isFetching = activeTab === 'assets' ? assetsQuery.isFetching : activeTab === 'urls' ? urlsQuery.isFetching : false;
+  const displayedAssets = assetsQuery.data?.data || [];
+  const displayedUrls = urlsQuery.data?.data || [];
+  const totalRecords = activeTab === 'assets'
+    ? (assetsQuery.data?.total ?? 0)
+    : activeTab === 'urls'
+      ? ((urlsQuery.data as any)?.total ?? (urlsQuery.data as any)?.total_count ?? 0)
+      : 0;
+
+  if (!targetId) return <div className="p-6 text-hack-danger">FATAL ERROR: Invalid Target ID</div>;
+
+  const toggleHttpx = () => {
+    if (!filterHttpx) {
+      setFilterDnsOnly(undefined);
+      setFilterHttpx(true);
+    } else {
+      setFilterHttpx(undefined);
+    }
+  };
+
+  const toggleDnsOnly = () => {
+    if (!filterDnsOnly) {
+      setFilterHttpx(undefined);
+      setFilterDnsOnly(true);
+    } else {
+      setFilterDnsOnly(undefined);
+    }
+  };
+
+  const toggleSource = (sourceId: string) => {
+    setFilterSources((prev) => prev.includes(sourceId) ? prev.filter((source) => source !== sourceId) : [...prev, sourceId]);
+  };
+
+  const handleSort = (field: string) => {
+    if (sortBy === field) setSortOrder((prev) => prev === 'asc' ? 'desc' : 'asc');
+    else {
+      setSortBy(field);
+      setSortOrder('asc');
+    }
+  };
+
+  const SortableHeader = ({ field, label, className }: { field: string; label: string; className?: string }) => (
+    <th onClick={() => handleSort(field)} className={clsx('cursor-pointer select-none px-3 py-2 text-left text-xs uppercase tracking-wider text-hack-dim hover:text-white', className)}>
+      {label} {sortBy === field && (sortOrder === 'asc' ? <ArrowUp className="inline h-3 w-3" /> : <ArrowDown className="inline h-3 w-3" />)}
+    </th>
+  );
 
   const handleDownloadAssets = async () => {
     await downloadAssets(
@@ -205,428 +257,227 @@ const TargetAssets = () => {
   };
 
   const handleDownloadURLs = async () => {
-    await downloadURLs(
-      targetId,
-      targetQuery.data?.root_domain || 'target',
-      debouncedSearch,
-      filterJsOnly,
-      sortBy,
-      sortOrder,
-      filterSources
-    );
+    await downloadURLs(targetId, targetQuery.data?.root_domain || 'target', debouncedSearch, filterJsOnly, sortBy, sortOrder, filterSources);
   };
 
-  const currentData = activeTab === 'assets' ? assetsQuery.data : urlsQuery.data;
-  const isFetching = activeTab === 'assets' ? assetsQuery.isFetching : urlsQuery.isFetching;
-
-  const displayedUrls = urlsQuery.data?.data || [];
-  const displayedAssets = assetsQuery.data?.data || [];
-
-  if (!targetId) return <div className="p-8 text-hack-danger font-mono"> FATAL ERROR: Invalid Target ID</div>;
-
   return (
-    <div className="flex flex-col h-full space-y-6">
-      <div className="flex flex-col md:flex-row items-start md:items-center gap-4 flex-shrink-0 border-b border-hack-border/50 pb-4">
-        <button onClick={() => navigate('/targets')} className="p-2 hover:bg-white/5 rounded text-hack-dim hover:text-white transition-colors">
-          <ArrowLeft size={20} />
-        </button>
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="hack-title text-lg md:text-xl truncate">
-              {targetQuery.isLoading ? 'LOADING...' : targetQuery.data?.name}
+    <div className="space-y-5 p-4 md:p-6">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex items-center gap-3">
+          <button onClick={() => navigate('/targets')} className="rounded p-2 text-hack-dim transition-colors hover:bg-white/5 hover:text-white">
+            <ArrowLeft size={18} />
+          </button>
+          <div>
+            <h1 className="font-mono text-xl font-bold text-white">
+              # {targetQuery.isLoading ? 'LOADING...' : targetQuery.data?.name}
             </h1>
-            <span className="hack-badge border-hack-primary/30 text-hack-primary bg-hack-primary/10 font-mono lowercase truncate max-w-[200px]">
-              {targetQuery.data?.root_domain}
-            </span>
-            {isFetching && <Loader2 size={16} className="animate-spin text-hack-primary" />}
+            <div className="flex items-center gap-2 text-sm text-hack-dim">
+              <Globe className="h-4 w-4" /> {targetQuery.data?.root_domain}
+              {isFetching && <Loader2 className="h-3 w-3 animate-spin" />}
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="flex gap-2 items-center">
-        <button onClick={() => setActiveTab('assets')} className={clsx("hack-btn flex-1 md:flex-none justify-center", activeTab === 'assets' ? "bg-hack-primary text-black" : "bg-transparent text-hack-dim border-hack-dim/30")}>
-          <Database size={14} /> Assets
-        </button>
-        <button onClick={() => setActiveTab('urls')} className={clsx("hack-btn flex-1 md:flex-none justify-center", activeTab === 'urls' ? "bg-hack-primary text-black" : "bg-transparent text-hack-dim border-hack-dim/30")}>
-          <Link2 size={14} /> Intel / URLs
-        </button>
-        {activeTab === 'assets' && targetQuery.data && (
-          <>
-            <button
-              onClick={() => exportTargetIPs(targetId, targetQuery.data.root_domain)}
-              className="hack-btn-ghost border border-hack-border flex items-center gap-2 px-3"
-              title="Download all unique IPs as TXT file"
-            >
-              <Download size={14} />
-              <span className="hidden md:inline">Export IPs</span>
-            </button>
-            <button
-              onClick={handleDownloadAssets}
-              className="hack-btn-ghost border border-hack-border flex items-center gap-2 px-3"
-              title="Download Filtered Assets"
-            >
-              <Download size={14} />
-              <span className="hidden md:inline">Export Assets</span>
-            </button>
-          </>
-        )}
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => setActiveTab('assets')} className={clsx('hack-btn flex-1 justify-center md:flex-none', activeTab === 'assets' ? 'bg-hack-primary text-black' : 'bg-transparent text-hack-dim border-hack-dim/30')}>
+            <Database className="mr-1 h-4 w-4" /> Assets
+          </button>
+          <button onClick={() => setActiveTab('urls')} className={clsx('hack-btn flex-1 justify-center md:flex-none', activeTab === 'urls' ? 'bg-hack-primary text-black' : 'bg-transparent text-hack-dim border-hack-dim/30')}>
+            <Link2 className="mr-1 h-4 w-4" /> Intel / URLs
+          </button>
+          <button onClick={() => setActiveTab('findings')} className={clsx('hack-btn flex-1 justify-center md:flex-none', activeTab === 'findings' ? 'bg-hack-primary text-black' : 'bg-transparent text-hack-dim border-hack-dim/30')}>
+            <Shield className="mr-1 h-4 w-4" /> Findings
+          </button>
 
-        {activeTab === 'urls' && (
-            <button
-              onClick={handleDownloadURLs}
-              className="hack-btn-ghost border border-hack-border flex items-center gap-2 px-3"
-              title="Download Filtered URLs"
-            >
-              <Download size={14} />
-              <span className="hidden md:inline">Export URLs</span>
-            </button>
-        )}
-      </div>
-
-      <div className="hack-box p-3 flex flex-col md:flex-row flex-wrap items-stretch md:items-center gap-4 justify-between flex-shrink-0">
-        <div className="relative flex-1 min-w-[200px] flex items-center bg-black/40 border border-hack-border px-3 rounded-none">
-          <Search className="text-hack-dim flex-shrink-0" size={14} />
-          <input
-            type="text"
-            placeholder={activeTab === 'assets' ? "QUERY ASSETS..." : "QUERY INTEL..."}
-            className="w-full bg-transparent border-none text-hack-primary pl-3 py-2 focus:ring-0 text-sm font-mono placeholder-hack-dim/50 min-w-0"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-        </div>
-
-        {activeTab === 'assets' && (
-          <div className="flex flex-wrap items-center gap-2 md:gap-4">
-            <span className="text-[10px] uppercase text-hack-dim tracking-widest hidden md:inline">Filters:</span>
-            <div className="flex gap-1">
-              <button onClick={() => setFilterLive(undefined)} className={clsx("hack-btn-ghost border border-transparent px-2", filterLive === undefined && "border-hack-dim/50 text-white")}>All</button>
-              <button onClick={() => setFilterLive(true)} className={clsx("hack-btn-ghost flex items-center gap-1 px-2", filterLive === true && "!text-hack-primary border border-hack-primary/50")}><CheckCircle size={12} /> Live</button>
-              <button onClick={() => setFilterLive(false)} className={clsx("hack-btn-ghost flex items-center gap-1 px-2", filterLive === false && "!text-hack-danger border border-hack-danger/50")}><XCircle size={12} /> Dead</button>
-            </div>
-            <div className="hidden md:block w-px bg-hack-border h-4"></div>
-            <div className="flex gap-2 w-full md:w-auto">
-              <button onClick={toggleHttpx} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterHttpx ? "border-hack-primary text-hack-primary" : "border-hack-border")}><Monitor size={12} /> Web</button>
-              <button onClick={toggleDnsOnly} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterDnsOnly ? "border-hack-warning text-hack-warning" : "border-hack-border")}><Network size={12} /> DNS</button>
-              <button onClick={toggleHasPorts} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterHasPorts ? "border-hack-primary text-hack-primary bg-hack-primary/10" : "border-hack-border")}><Terminal size={12} /> Ports</button>
-              <button onClick={toggleNoCdn} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterNoCdn ? "border-hack-danger text-hack-danger bg-hack-danger/5" : "border-hack-border")}><Shield size={12} /> No CDN</button>
-              <button onClick={toggleHasCdn} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterHasCdn ? "border-hack-warning text-hack-warning bg-hack-warning/5" : "border-hack-border")}><Shield size={12} /> CDN</button>
-              <button onClick={toggleHasWaf} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterHasWaf ? "border-hack-secondary text-hack-secondary bg-hack-secondary/5" : "border-hack-border")}><Shield size={12} /> WAF</button>
-              <button onClick={toggleHasCloud} className={clsx("hack-btn-ghost flex flex-1 md:flex-none justify-center items-center gap-1 border", filterHasCloud ? "border-hack-primary text-hack-primary bg-hack-primary/10" : "border-hack-border")}><Cloud size={12} /> CLOUD</button>
-            </div>
-            <div className="hidden md:block w-px bg-hack-border h-4"></div>
-            <div className="flex items-center gap-2 w-full md:w-auto">
-              <span className="text-[10px] uppercase text-hack-dim tracking-widest whitespace-nowrap">Provider:</span>
-              <div className="flex items-center gap-2 min-w-[180px]">
-                <select
-                  className="bg-black/40 border border-hack-border text-hack-primary text-[11px] font-mono px-2 py-1 rounded-none focus:outline-none focus:border-hack-primary/60 min-w-[180px]"
-                  value={filterAssetProvider ?? ""}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setFilterAssetProvider(v === "" ? null : v);
-                  }}
-                  title="Filter assets by discovery provider"
-                >
-                  <option value="">ALL PROVIDERS</option>
-                  {KNOWN_ASSET_PROVIDERS.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.label}
-                    </option>
-                  ))}
-                </select>
-
-                {filterAssetProvider && (
-                  <button
-                    onClick={() => setFilterAssetProvider(null)}
-                    className="hack-btn-ghost border border-hack-border px-2 py-1 text-[10px] uppercase tracking-wider text-hack-dim hover:text-white whitespace-nowrap"
-                    title="Clear provider filter (back to ALL)"
-                  >
-                    Clear
-                  </button>
-                )}
-              </div>
-            </div>
-            <div className="hidden md:block w-px bg-hack-border h-4"></div>
-            <div className="flex items-center gap-2 w-full md:w-auto">
-              <span className="text-[10px] uppercase text-hack-dim tracking-widest whitespace-nowrap">Status:</span>
-              <div className="flex items-center gap-2 min-w-[160px]">
-                <select
-                  className="bg-black/40 border border-hack-border text-hack-primary text-[11px] font-mono px-2 py-1 rounded-none focus:outline-none focus:border-hack-primary/60 min-w-[160px]"
-                  value={filterStatusCode}
-                  onChange={(e) => setFilterStatusCode(e.target.value)}
-                  title="Filter assets by HTTP status code"
-                >
-                  <option value="">ALL STATUS</option>
-                  <option value="2xx">2xx (Success)</option>
-                  <option value="3xx">3xx (Redirect)</option>
-                  <option value="4xx">4xx (Client Err)</option>
-                  <option value="5xx">5xx (Server Err)</option>
-                  <option value="200">200</option>
-                  <option value="301">301</option>
-                  <option value="302">302</option>
-                  <option value="401">401</option>
-                  <option value="403">403</option>
-                  <option value="404">404</option>
-                  <option value="429">429</option>
-                  <option value="500">500</option>
-                  <option value="502">502</option>
-                  <option value="503">503</option>
-                </select>
-
-                {filterStatusCode && (
-                  <button
-                    onClick={() => setFilterStatusCode("")}
-                    className="hack-btn-ghost border border-hack-border px-2 py-1 text-[10px] uppercase tracking-wider text-hack-dim hover:text-white whitespace-nowrap"
-                    title="Clear status filter (back to ALL)"
-                  >
-                    Clear
-                  </button>
-                )}
-              </div>
-            </div>
-            <div className="hidden md:block w-px bg-hack-border h-4"></div>
-          </div>
-        )}
-
-        {activeTab === 'urls' && (
-          <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto">
-            <button onClick={() => setFilterJsOnly(!filterJsOnly)} className={clsx("hack-btn-ghost flex justify-center items-center gap-1 border px-3 whitespace-nowrap", filterJsOnly ? "border-hack-warning text-hack-warning bg-hack-warning/5" : "border-hack-border")}>
-              <FileCode size={12} /> JS Files
-            </button>
-
-            <div className="w-px h-4 bg-hack-border mx-1 hidden md:block"></div>
-
-            {KNOWN_SOURCES.map(src => (
-              <button
-                key={src.id}
-                onClick={() => toggleSource(src.id)}
-                className={clsx(
-                  "hack-btn-ghost flex justify-center items-center gap-1 border px-2 py-1 text-[10px] uppercase tracking-wider",
-                  filterSources.includes(src.id)
-                    ? "border-hack-primary text-hack-primary bg-hack-primary/10"
-                    : "border-hack-border text-hack-dim hover:text-white"
-                )}
-              >
-                {src.label}
+          {activeTab === 'assets' && targetQuery.data && (
+            <>
+              <button onClick={() => exportTargetIPs(targetId, targetQuery.data.root_domain)} className="hack-btn-ghost flex items-center gap-2 border border-hack-border px-3" title="Download all unique IPs as TXT file">
+                <Network className="h-4 w-4" /> Export IPs
               </button>
-            ))}
-          </div>
-        )}
+              <button onClick={handleDownloadAssets} className="hack-btn-ghost flex items-center gap-2 border border-hack-border px-3">
+                <Download className="h-4 w-4" /> Export Assets
+              </button>
+            </>
+          )}
+
+          {activeTab === 'urls' && (
+            <button onClick={handleDownloadURLs} className="hack-btn-ghost flex items-center gap-2 border border-hack-border px-3">
+              <Download className="h-4 w-4" /> Export URLs
+            </button>
+          )}
+        </div>
       </div>
 
-      <div className="hack-box flex flex-col flex-1 overflow-hidden relative">
-        <div className="absolute top-0 right-0 p-1 border-b border-l border-hack-primary/20 bg-hack-primary/5 text-[8px] text-hack-primary font-mono hidden md:block">DATA_GRID_V1</div>
+      {activeTab !== 'findings' && (
+        <div className="space-y-3 border border-hack-border bg-black/20 p-3">
+          <div className="relative">
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-hack-dim" />
+            <input
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder={activeTab === 'assets' ? 'Search assets...' : 'Search URLs...'}
+              className="w-full border border-hack-border bg-black/30 py-2 pl-9 pr-3 font-mono text-sm text-white outline-none focus:border-hack-primary"
+            />
+          </div>
 
-        <div className="overflow-x-auto w-full flex-1">
-          <table className="w-full text-left min-w-[1100px] table-fixed">
-            <thead className="sticky top-0 z-10 bg-black/90 backdrop-blur-sm">
-              <tr>
-                {activeTab === 'assets' ? (
-                  <>
-                    <SortableHeader field="value" label="Asset" className="w-[300px]" />
-                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[220px]">Providers</th>
-                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[150px]">DNS IP</th>
-                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[150px]">HTTP IP</th>
-                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[190px]">Ports</th>
-                    <SortableHeader field="status_code" label="Stat" className="w-[80px]" />
-                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[170px]">CDN</th>
-                    <SortableHeader field="title" label="Title" className="w-[280px]" />
-                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[220px]">Stack</th>
-                    <SortableHeader field="content_length" label="Size" className="w-[100px] text-right" />
-                  </>
-                ) : (
-                  <>
-                    <th className="px-6 py-3 font-mono text-xs text-hack-dim uppercase tracking-wider border-b border-hack-border w-[60%]">Resource Locator</th>
-                    <SortableHeader field="source" label="Source" className="w-[20%]" />
-                    <SortableHeader field="created_at" label="Timestamp" className="w-[20%] text-right" />
-                  </>
-                )}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-hack-border/30">
-              {activeTab === 'assets' ? displayedAssets.map((asset) => {
-                const statusCode = asset.status_code ?? 0;
+          {activeTab === 'assets' && (
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="uppercase tracking-wider text-hack-dim">Filters:</span>
+              <button onClick={() => setFilterLive(undefined)} className={clsx('hack-btn-ghost border border-transparent px-2', filterLive === undefined && 'border-hack-dim/50 text-white')}>All</button>
+              <button onClick={() => setFilterLive(true)} className={clsx('hack-btn-ghost flex items-center gap-1 px-2', filterLive === true && '!text-hack-primary border border-hack-primary/50')}><CheckCircle className="h-3 w-3" /> Live</button>
+              <button onClick={() => setFilterLive(false)} className={clsx('hack-btn-ghost flex items-center gap-1 px-2', filterLive === false && '!text-hack-danger border border-hack-danger/50')}><XCircle className="h-3 w-3" /> Dead</button>
+              <button onClick={toggleHttpx} className={clsx('hack-btn-ghost border px-2', filterHttpx && 'border-hack-primary text-hack-primary')}>Web</button>
+              <button onClick={toggleDnsOnly} className={clsx('hack-btn-ghost border px-2', filterDnsOnly && 'border-hack-primary text-hack-primary')}>DNS</button>
+              <button onClick={() => setFilterHasPorts((prev) => !prev ? true : undefined)} className={clsx('hack-btn-ghost border px-2', filterHasPorts && 'border-hack-primary text-hack-primary')}>Ports</button>
+              <button onClick={() => setFilterNoCdn((prev) => !prev ? true : undefined)} className={clsx('hack-btn-ghost border px-2', filterNoCdn && 'border-hack-warning text-hack-warning')}>No CDN</button>
+              <button onClick={() => setFilterHasCdn((prev) => !prev ? true : undefined)} className={clsx('hack-btn-ghost border px-2', filterHasCdn && 'border-hack-primary text-hack-primary')}>CDN</button>
+              <button onClick={() => setFilterHasWaf((prev) => !prev ? true : undefined)} className={clsx('hack-btn-ghost border px-2', filterHasWaf && 'border-hack-primary text-hack-primary')}>WAF</button>
+              <button onClick={() => setFilterHasCloud((prev) => !prev ? true : undefined)} className={clsx('hack-btn-ghost border px-2', filterHasCloud && 'border-hack-primary text-hack-primary')}>Cloud</button>
 
-                let dnsxIps: string[] = [];
-                try {
-                  if (asset.dnsx_ip && asset.dnsx_ip !== "[]") {
-                    const p = JSON.parse(asset.dnsx_ip);
-                    dnsxIps = Array.isArray(p) ? p : [p];
-                  }
-                } catch (e) { console.error("IP Parse Error", e); }
+              <select value={filterAssetProvider || ''} onChange={(event) => setFilterAssetProvider(event.target.value || null)} className="border border-hack-border bg-black/30 px-2 py-1 text-xs text-white outline-none">
+                <option value="">ALL PROVIDERS</option>
+                {KNOWN_ASSET_PROVIDERS.map((provider) => (
+                  <option key={provider.id} value={provider.id}>{provider.label}</option>
+                ))}
+              </select>
 
-                let httpxIps: string[] = [];
-                try {
-                  if (asset.host_ip && asset.host_ip !== "[]") {
-                    const p = JSON.parse(asset.host_ip);
-                    httpxIps = Array.isArray(p) ? p : [p];
-                  }
-                } catch (e) { console.error("HostIP Parse Error", e); }
+              <select value={filterStatusCode} onChange={(event) => setFilterStatusCode(event.target.value)} className="border border-hack-border bg-black/30 px-2 py-1 text-xs text-white outline-none">
+                <option value="">ALL STATUS</option>
+                <option value="2xx">2xx</option>
+                <option value="3xx">3xx</option>
+                <option value="4xx">4xx</option>
+                <option value="5xx">5xx</option>
+                {[200, 301, 302, 401, 403, 404, 429, 500, 502, 503].map((code) => (
+                  <option key={code} value={String(code)}>{code}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
-                let techs: string[] = [];
-                if (Array.isArray(asset.technologies)) {
-                  techs = asset.technologies as string[];
-                } else if (typeof asset.technologies === 'string') {
-                  try { techs = JSON.parse(asset.technologies); } catch { }
-                }
+          {activeTab === 'urls' && (
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <button onClick={() => setFilterJsOnly(!filterJsOnly)} className={clsx('hack-btn-ghost flex items-center gap-1 border px-3', filterJsOnly ? 'border-hack-warning text-hack-warning bg-hack-warning/5' : 'border-hack-border')}>
+                <FileCode className="h-3 w-3" /> JS Files
+              </button>
+              {KNOWN_SOURCES.map((source) => (
+                <button key={source.id} onClick={() => toggleSource(source.id)} className={clsx('hack-btn-ghost border px-2 py-1 text-[10px] uppercase tracking-wider', filterSources.includes(source.id) ? 'border-hack-primary text-hack-primary bg-hack-primary/10' : 'border-hack-border text-hack-dim hover:text-white')}>
+                  {source.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
-                // Parse sources
-                let sources: string[] = [];
-                if (Array.isArray(asset.sources)) {
-                  sources = asset.sources;
-                } else if (typeof asset.sources === 'string') {
-                  try { sources = JSON.parse(asset.sources); } catch { }
-                }
+      {activeTab === 'findings' ? (
+        <FindingsPanel targetId={targetId} />
+      ) : (
+        <div className="overflow-hidden border border-hack-border bg-black/20">
+          <div className="border-b border-hack-border px-3 py-2 font-mono text-xs uppercase tracking-wider text-hack-dim">
+            DATA_GRID_V1
+          </div>
 
-                // رنگ‌های مختلف برای هر provider
-                // رنگ‌های مختلف برای هر provider
-                const getSourceColor = (source: string) => {
-                  const colors: Record<string, string> = {
-                    'subfinder': 'border-blue-400 text-blue-400 bg-blue-900/20',
-                    'assetfinder': 'border-green-400 text-green-400 bg-green-900/20',
-                    'cero': 'border-purple-400 text-purple-400 bg-purple-900/20',
-                    'crtsh': 'border-orange-400 text-orange-400 bg-orange-900/20',
-                    'alterx': 'border-yellow-400 text-yellow-400 bg-yellow-900/20',
-                    'abusedb': 'border-red-500 text-red-500 bg-red-900/20',
-  'amass': 'border-hack-primary text-hack-primary bg-hack-primary/10', // <--- این خط اضافه شود
-                  };
-                  return colors[source.toLowerCase()] || 'border-hack-border text-hack-dim bg-black/30';
-                };
+          <div className="overflow-x-auto">
+            {activeTab === 'assets' ? (
+              <table className="min-w-full border-collapse text-sm">
+                <thead className="border-b border-hack-border bg-black/30">
+                  <tr>
+                    <SortableHeader field="value" label="Providers / DNS" />
+                    <th className="px-3 py-2 text-left text-xs uppercase tracking-wider text-hack-dim">DNS IP</th>
+                    <th className="px-3 py-2 text-left text-xs uppercase tracking-wider text-hack-dim">HTTP IP</th>
+                    <th className="px-3 py-2 text-left text-xs uppercase tracking-wider text-hack-dim">Ports</th>
+                    <th className="px-3 py-2 text-left text-xs uppercase tracking-wider text-hack-dim">CDN</th>
+                    <SortableHeader field="status_code" label="Status" />
+                    <th className="px-3 py-2 text-left text-xs uppercase tracking-wider text-hack-dim">Stack</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {displayedAssets.map((asset: any) => {
+                    const sources = parseJSONList(asset.sources);
+                    const dnsxIps = parseJSONList(asset.dnsx_ip);
+                    const httpxIps = parseJSONList(asset.host_ip);
+                    const techs = parseJSONList(asset.technologies);
+                    const statusCode = asset.status_code || 0;
 
-                return (
-                  <tr key={asset.id} className="hover:bg-hack-primary/5 transition-colors font-mono text-sm group">
-                    <td className="px-6 py-3 align-top">
-                      <div className="flex items-start gap-3">
-                        <Globe size={14} className={asset.is_live ? "text-hack-primary mt-1 flex-shrink-0" : "text-hack-dim mt-1 flex-shrink-0"} />
-                        <div className="min-w-0 flex-1">
-                          <a
-                            href={`http://${asset.value}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            title={asset.value}
-                            className="text-gray-300 hover:text-hack-primary transition-colors group-hover:underline underline-offset-4 truncate whitespace-nowrap block max-w-full"
-                          >
+                    return (
+                      <tr key={asset.id || asset.value} className="border-b border-hack-border/50 hover:bg-white/[0.02]">
+                        <td className="max-w-md px-3 py-3 align-top">
+                          <a href={asset.final_url || `http://${asset.value}`} target="_blank" rel="noreferrer" className="font-mono text-hack-primary hover:underline">
                             {asset.value}
                           </a>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-3 align-top">
-                      <div className="flex flex-wrap gap-1">
-                        {sources.length > 0 ? (
-                          sources.map((source, idx) => (
-                            <span
-                              key={idx}
-                              className={clsx("text-[9px] px-1.5 py-0.5 border uppercase tracking-wider", getSourceColor(source))}
-                              title={`Found by ${source}`}
-                            >
-                              {source}
-                            </span>
-                          ))
-                        ) : (
-                          <span className="text-hack-dim text-[9px]">-</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-6 py-3 align-top"><div className="flex flex-col gap-1">{dnsxIps.length > 0 ? dnsxIps.map((ip, idx) => <span key={idx} className="text-[10px] text-hack-secondary">{ip}</span>) : <span className="text-hack-dim">-</span>}</div></td>
-                    <td className="px-6 py-3 align-top"><div className="flex flex-col gap-1">{httpxIps.length > 0 ? httpxIps.map((ip, idx) => <span key={idx} className="text-[10px] text-hack-dim">{ip}</span>) : <span className="text-hack-dim">-</span>}</div></td>
-                    <td className="px-6 py-3 align-top">{renderPortsCell((asset as any).open_ports)}</td>
-                    <td className="px-6 py-3 align-top">{asset.is_live ? (statusCode > 0 ? <span className={`px-1.5 py-0.5 text-[10px] font-bold border ${statusCode >= 200 && statusCode < 300 ? 'border-hack-primary text-hack-primary' : statusCode >= 300 && statusCode < 400 ? 'border-hack-warning text-hack-warning' : 'border-hack-danger text-hack-danger'}`}>{statusCode}</span> : <span className="text-hack-dim">-</span>) : <span className="text-[10px] text-hack-dim border border-hack-dim px-1">DEAD</span>}</td>
-                    <td className="px-6 py-3 align-top">
-                      <div className="flex flex-col gap-1">
-                        {/* نمایش CDN از httpx */}
-                        {asset.cdn_name && asset.cdn_name.trim() !== '' ? (
-                          <div className="flex flex-col gap-1">
-                            <div className="flex items-center gap-1">
-                              <span className="px-1.5 py-0.5 text-[9px] font-bold border border-hack-warning/50 text-hack-warning bg-hack-warning/10 uppercase tracking-wider">CDN</span>
-                            </div>
-                            <span className="text-[10px] text-hack-warning/80 font-mono">{asset.cdn_name}</span>
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {sources.length > 0 ? sources.map((source, index) => (
+                              <span key={`${source}-${index}`} className={clsx('rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wider', sourceColor(source))}>
+                                {source}
+                              </span>
+                            )) : <span className="text-hack-dim">-</span>}
                           </div>
-                        ) : null}
-
-                        {/* نمایش CDN از cdncheck */}
-                        {asset.cdncheck && asset.cdncheck_name && asset.cdncheck_name.trim() !== '' ? (
-                          <div className="flex flex-col gap-1">
-                            <div className="flex items-center gap-1">
-                              <span className="px-1.5 py-0.5 text-[9px] font-bold border border-hack-secondary/50 text-hack-secondary bg-hack-secondary/10 uppercase tracking-wider">CDN✓</span>
-                            </div>
-                            <span className="text-[10px] text-hack-secondary/80 font-mono">{asset.cdncheck_name}</span>
+                        </td>
+                        <td className="px-3 py-3 align-top text-xs text-hack-dim">{dnsxIps.length > 0 ? dnsxIps.join(', ') : '-'}</td>
+                        <td className="px-3 py-3 align-top text-xs text-hack-dim">{httpxIps.length > 0 ? httpxIps.join(', ') : '-'}</td>
+                        <td className="px-3 py-3 align-top">{renderPortsCell(asset.open_ports)}</td>
+                        <td className="px-3 py-3 align-top text-xs text-hack-dim">
+                          {asset.cdn_name || asset.cdncheck_name || asset.wafcheck_name || asset.cloudcheck_name || '-'}
+                          {(asset.cdncheck || asset.wafcheck || asset.cloudcheck) && <Cloud className="ml-1 inline h-3 w-3 text-hack-primary" />}
+                        </td>
+                        <td className="px-3 py-3 align-top">
+                          {asset.is_live ? (
+                            statusCode > 0 ? (
+                              <span className={clsx('rounded border px-2 py-1 text-xs', statusCode >= 200 && statusCode < 300 ? 'border-hack-primary text-hack-primary' : statusCode >= 300 && statusCode < 400 ? 'border-hack-warning text-hack-warning' : 'border-hack-danger text-hack-danger')}>
+                                {statusCode}
+                              </span>
+                            ) : <span className="text-hack-dim">-</span>
+                          ) : <span className="text-hack-danger">DEAD</span>}
+                        </td>
+                        <td className="max-w-sm px-3 py-3 align-top text-xs text-hack-dim">
+                          <div>{asset.title || '-'}</div>
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {asset.web_server && <span className="rounded border border-hack-border px-1.5 py-0.5">{asset.web_server}</span>}
+                            {techs.map((tech, index) => <span key={`${tech}-${index}`} className="rounded border border-hack-border px-1.5 py-0.5">{tech}</span>)}
                           </div>
-                        ) : asset.cdncheck ? (
-                          <div className="flex items-center gap-1">
-                            <span className="px-1.5 py-0.5 text-[9px] font-bold border border-hack-secondary/50 text-hack-secondary bg-hack-secondary/10 uppercase tracking-wider">CDN✓</span>
-                          </div>
-                        ) : null}
-
-                        {/* نمایش WAF از cdncheck */}
-                        {asset.wafcheck && asset.wafcheck_name && asset.wafcheck_name.trim() !== '' ? (
-                          <div className="flex flex-col gap-1">
-                            <div className="flex items-center gap-1">
-                              <span className="px-1.5 py-0.5 text-[9px] font-bold border border-hack-danger/50 text-hack-danger bg-hack-danger/10 uppercase tracking-wider">WAF✓</span>
-                            </div>
-                            <span className="text-[10px] text-hack-danger/80 font-mono">{asset.wafcheck_name}</span>
-                          </div>
-                        ) : asset.wafcheck ? (
-                          <div className="flex items-center gap-1">
-                            <span className="px-1.5 py-0.5 text-[9px] font-bold border border-hack-danger/50 text-hack-danger bg-hack-danger/10 uppercase tracking-wider">WAF✓</span>
-                          </div>
-                        ) : null}
-
-                        {/* نمایش CLOUD از cdncheck */}
-                        {asset.cloudcheck && asset.cloudcheck_name && asset.cloudcheck_name.trim() !== '' ? (
-                          <div className="flex flex-col gap-1">
-                            <div className="flex items-center gap-1">
-                              <span className="px-1.5 py-0.5 text-[9px] font-bold border border-hack-primary/50 text-hack-primary bg-hack-primary/10 uppercase tracking-wider">CLOUD✓</span>
-                            </div>
-                            <span className="text-[10px] text-hack-primary/80 font-mono">{asset.cloudcheck_name}</span>
-                          </div>
-                        ) : asset.cloudcheck ? (
-                          <div className="flex items-center gap-1">
-                            <span className="px-1.5 py-0.5 text-[9px] font-bold border border-hack-primary/50 text-hack-primary bg-hack-primary/10 uppercase tracking-wider">CLOUD✓</span>
-                          </div>
-                        ) : null}
-
-                        {/* اگر هیچ چیزی وجود نداشت */}
-                        {(!asset.cdn_name || asset.cdn_name.trim() === '') && !asset.cdncheck && !asset.wafcheck && !asset.cloudcheck ? (
-                          <span className="text-hack-dim text-[10px]">-</span>
-                        ) : null}
-                      </div>
-                    </td>
-                    <td className="px-6 py-3 align-top"><span className="text-xs text-hack-text block line-clamp-2 opacity-80 min-w-[200px]" title={asset.title}>{asset.title || '-'}</span></td>
-                    <td className="px-6 py-3 align-top"><div className="flex flex-wrap gap-1 max-h-[60px] overflow-y-auto min-w-[150px]">{asset.web_server && <span className="px-1 py-0.5 bg-white/5 text-[9px] border border-white/10 text-hack-text whitespace-nowrap">{asset.web_server}</span>}{techs.map((tech, i) => <span key={i} className="px-1 py-0.5 bg-hack-primary/5 text-[9px] border border-hack-primary/20 text-hack-primary whitespace-nowrap">{tech}</span>)}</div></td>
-                    <td className="px-6 py-3 align-top text-right text-xs text-hack-dim">{asset.content_length ? `${(asset.content_length / 1024).toFixed(1)} KB` : '-'}</td>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ) : (
+              <table className="min-w-full border-collapse text-sm">
+                <thead className="border-b border-hack-border bg-black/30">
+                  <tr>
+                    <SortableHeader field="value" label="Resource Locator" />
+                    <SortableHeader field="source" label="Source" />
+                    <SortableHeader field="created_at" label="Created" />
                   </tr>
-                )
-              }) : displayedUrls.map((url) => (
-                <tr key={url.id} className="hover:bg-hack-primary/5 transition-colors group font-mono text-sm">
-                  <td className="px-6 py-3 align-top">
-                    <div className="flex items-start gap-3">
-                      {url.value.endsWith('.js') ? <FileCode size={14} className="text-hack-warning mt-1 flex-shrink-0" /> : <FileText size={14} className="text-hack-dim mt-1 group-hover:text-hack-primary flex-shrink-0" />}
-                      <a href={url.value} target="_blank" rel="noreferrer" className={clsx("transition-colors break-all block leading-relaxed hover:underline underline-offset-4 min-w-0", url.value.endsWith('.js') ? "text-hack-warning hover:text-white" : "text-hack-dim hover:text-hack-primary")}>{url.value}</a>
-                    </div>
-                  </td>
-                  <td className="px-6 py-3 align-top">
-                    <span className={clsx("text-[10px] px-1.5 py-0.5 border uppercase tracking-wider",
-                      url.source === 'waymore' ? "border-blue-500 text-blue-400 bg-blue-900/20" :
-                        url.source?.includes('katana') ? "border-hack-danger text-hack-danger bg-hack-danger/10" :
-                          url.source?.includes('virustotal') ? "border-yellow-500 text-yellow-400 bg-yellow-900/20" :
-                          "border-hack-border text-hack-dim")}>
-                      {url.source || 'UNKNOWN'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-3 align-top text-right text-xs text-hack-dim whitespace-nowrap">{new Date(url.created_at).toLocaleString()}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                </thead>
+                <tbody>
+                  {displayedUrls.map((url: any) => (
+                    <tr key={url.id || url.value} className="border-b border-hack-border/50 hover:bg-white/[0.02]">
+                      <td className="max-w-3xl px-3 py-3 align-top">
+                        {String(url.value).endsWith('.js') ? <FileCode className="mr-1 inline h-4 w-4 text-hack-warning" /> : <FileText className="mr-1 inline h-4 w-4 text-hack-dim" />}
+                        <a href={url.value} target="_blank" rel="noreferrer" className="break-all font-mono text-hack-primary hover:underline">{url.value}</a>
+                      </td>
+                      <td className="px-3 py-3 align-top text-xs uppercase tracking-wider text-hack-dim">{url.source || 'UNKNOWN'}</td>
+                      <td className="px-3 py-3 align-top text-xs text-hack-dim">{url.created_at ? new Date(url.created_at).toLocaleString() : '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
 
-        <div className="border-t border-hack-border p-2 flex justify-between items-center bg-black/60 text-xs font-mono sticky bottom-0">
-          <span className="text-hack-dim px-2">PAGE {page} // RECORDS: {((currentData as any)?.total ?? (currentData as any)?.total_count ?? 0).toLocaleString()}</span>
-          <div className="flex gap-1">
-            <button disabled={page === 1 || isFetching} onClick={() => setPage(p => Math.max(1, p - 1))} className="hack-btn-ghost hover:bg-white/5 disabled:opacity-30">PREV</button>
-            <button disabled={!currentData?.data || currentData.data.length < 50 || isFetching} onClick={() => setPage(p => p + 1)} className="hack-btn-ghost hover:bg-white/5 disabled:opacity-30">NEXT</button>
+          <div className="flex items-center justify-between border-t border-hack-border px-3 py-2 text-xs text-hack-dim">
+            <span>PAGE {page} // RECORDS: {Number(totalRecords || 0).toLocaleString()}</span>
+            <div className="flex gap-2">
+              <button onClick={() => setPage((prev) => Math.max(1, prev - 1))} disabled={page <= 1} className="hack-btn-ghost hover:bg-white/5 disabled:opacity-30">PREV</button>
+              <button onClick={() => setPage((prev) => prev + 1)} className="hack-btn-ghost hover:bg-white/5 disabled:opacity-30">NEXT</button>
+            </div>
           </div>
         </div>
+      )}
+
+      <div className="hidden text-hack-dim">
+        <Terminal />
       </div>
     </div>
   );
