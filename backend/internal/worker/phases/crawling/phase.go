@@ -1,6 +1,7 @@
 package crawling
 
 import (
+	workerfindings "github.com/omidxplimbo/hunt-engine/backend/internal/worker/findings"
 	"log"
 	"os"
 	"path/filepath"
@@ -34,7 +35,10 @@ func Run(ctx Context) {
 	_, _ = ctx.EnsureScanState(ctx.TargetID)
 
 	if ctx.ScanIsStepDone(ctx.TargetID, "CRAWLING", "DONE") {
-		log.Printf("⏩ Resume: CRAWLING already completed. Chaining next module.\n")
+		log.Printf("⏩ Resume: CRAWLING already completed. Generating URL findings and chaining next module.\n")
+		if err := workerfindings.GenerateURLFindings(ctx.TargetID); err != nil {
+			log.Printf("⚠️ Failed to generate URL findings for target %d: %v\n", ctx.TargetID, err)
+		}
 		ctx.TriggerNextModule(ctx.TargetID, ctx.RootDomain, "CRAWLING")
 		return
 	}
@@ -164,5 +168,9 @@ func Run(ctx Context) {
 
 	log.Printf(" PHASE 3 finished for %s.\n", ctx.RootDomain)
 	ctx.ScanMarkStepDone(ctx.TargetID, "CRAWLING", "DONE")
+	ctx.UpdateTargetPhase(ctx.TargetID, "PHASE 3: GENERATING FINDINGS")
+	if err := workerfindings.GenerateURLFindings(ctx.TargetID); err != nil {
+		log.Printf("⚠️ Failed to generate URL findings for target %d: %v\n", ctx.TargetID, err)
+	}
 	ctx.TriggerNextModule(ctx.TargetID, ctx.RootDomain, "CRAWLING")
 }
