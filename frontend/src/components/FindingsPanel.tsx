@@ -1,6 +1,15 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bug, CheckCircle2, Download, Filter, Loader2, ShieldAlert, TrendingUp } from 'lucide-react';
+import {
+  Bug,
+  CheckCircle2,
+  Download,
+  Filter,
+  Loader2,
+  ShieldAlert,
+  TrendingUp,
+  X,
+} from 'lucide-react';
 import clsx from 'clsx';
 
 import {
@@ -10,11 +19,17 @@ import {
   updateFindingStatus,
   type FindingExportFormat,
 } from '../api/findings';
-import type { Finding, FindingSeverity, FindingStatus } from '../types/finding';
+import type { Finding, FindingSeverity, FindingStats, FindingStatus } from '../types/finding';
 
 interface Props {
   targetId: number;
 }
+
+type TriageModalState = {
+  finding: Finding;
+  nextStatus: FindingStatus;
+  note: string;
+};
 
 const severityOrder: FindingSeverity[] = ['critical', 'high', 'medium', 'low', 'info'];
 const statusOptions: Array<FindingStatus | 'all'> = ['all', 'open', 'accepted', 'false_positive', 'fixed'];
@@ -54,6 +69,7 @@ export const FindingsPanel = ({ targetId }: Props) => {
   const [status, setStatus] = useState<FindingStatus | 'all'>('all');
   const [severity, setSeverity] = useState<FindingSeverity | 'all'>('all');
   const [search, setSearch] = useState('');
+  const [triageModal, setTriageModal] = useState<TriageModalState | null>(null);
 
   const currentFilters = { status, severity, search, limit: 100 };
 
@@ -70,9 +86,17 @@ export const FindingsPanel = ({ targetId }: Props) => {
   });
 
   const updateStatusMutation = useMutation({
-    mutationFn: ({ findingId, nextStatus, triageNote }: { findingId: number; nextStatus: FindingStatus; triageNote?: string }) =>
-      updateFindingStatus(findingId, nextStatus, triageNote || ''),
+    mutationFn: ({
+      findingId,
+      nextStatus,
+      triageNote,
+    }: {
+      findingId: number;
+      nextStatus: FindingStatus;
+      triageNote?: string;
+    }) => updateFindingStatus(findingId, nextStatus, triageNote || ''),
     onSuccess: () => {
+      setTriageModal(null);
       queryClient.invalidateQueries({ queryKey: ['target-findings', targetId] });
       queryClient.invalidateQueries({ queryKey: ['target-findings-stats', targetId] });
     },
@@ -90,7 +114,7 @@ export const FindingsPanel = ({ targetId }: Props) => {
   });
 
   const findings = findingsQuery.data?.data || [];
-  const stats = statsQuery.data?.data;
+  const stats = statsQuery.data as FindingStats | undefined;
   const highPlus = countValue(stats?.by_severity?.critical) + countValue(stats?.by_severity?.high);
 
   const summaryCards = [
@@ -100,6 +124,24 @@ export const FindingsPanel = ({ targetId }: Props) => {
     { label: 'Fixed', value: countValue(stats?.fixed), icon: CheckCircle2, hint: 'No longer observed' },
   ];
 
+  const openTriageModal = (finding: Finding, nextStatus: FindingStatus) => {
+    setTriageModal({
+      finding,
+      nextStatus,
+      note: finding.triage_note || '',
+    });
+  };
+
+  const submitTriage = () => {
+    if (!triageModal) return;
+
+    updateStatusMutation.mutate({
+      findingId: triageModal.finding.id,
+      nextStatus: triageModal.nextStatus,
+      triageNote: triageModal.note,
+    });
+  };
+
   return (
     <div className="space-y-5">
       <div className="grid gap-3 md:grid-cols-4">
@@ -107,8 +149,8 @@ export const FindingsPanel = ({ targetId }: Props) => {
           const Icon = card.icon;
           return (
             <div key={card.label} className="border border-hack-border bg-black/20 p-4">
-              <div className="flex items-center justify-between text-xs font-bold uppercase tracking-[0.2em] text-hack-dim">
-                <span>{card.label}</span>
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-bold uppercase tracking-[0.2em] text-hack-dim">{card.label}</div>
                 <Icon className="h-4 w-4 text-hack-primary" />
               </div>
               <div className="mt-2 font-mono text-2xl font-bold text-white">
@@ -242,9 +284,21 @@ export const FindingsPanel = ({ targetId }: Props) => {
                   </div>
                 )}
 
-                <div className="mt-3 text-[10px] uppercase tracking-wider text-hack-dim">
-                  First seen: {finding.first_seen ? new Date(finding.first_seen).toLocaleString() : '-'} · Last seen:{' '}
-                  {finding.last_seen ? new Date(finding.last_seen).toLocaleString() : '-'}
+                {finding.triage_note && (
+                  <div className="mt-3 rounded border border-hack-border bg-black/30 p-3 text-xs leading-5 text-hack-dim">
+                    <span className="font-bold uppercase tracking-wider text-hack-primary">Triage Note: </span>
+                    {finding.triage_note}
+                    {finding.triaged_at && (
+                      <span className="ml-2 text-[10px] text-hack-dim">
+                        ({new Date(finding.triaged_at).toLocaleString()})
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wider text-hack-dim">
+                  <span>First seen: {finding.first_seen ? new Date(finding.first_seen).toLocaleString() : '-'}</span>
+                  <span>Last seen: {finding.last_seen ? new Date(finding.last_seen).toLocaleString() : '-'}</span>
                 </div>
 
                 <div className="mt-4 flex flex-wrap gap-2">
@@ -253,10 +307,7 @@ export const FindingsPanel = ({ targetId }: Props) => {
                       key={nextStatus}
                       type="button"
                       disabled={finding.status === nextStatus || updateStatusMutation.isPending}
-                      onClick={() => {
-                        const triageNote = window.prompt(`Optional triage note for ${label(nextStatus)}:`, finding.triage_note || '') || '';
-                        updateStatusMutation.mutate({ findingId: finding.id, nextStatus, triageNote });
-                      }}
+                      onClick={() => openTriageModal(finding, nextStatus)}
                       className="border border-hack-border px-2 py-1 text-[10px] uppercase tracking-wider text-hack-dim hover:border-hack-primary hover:text-hack-primary disabled:opacity-40"
                     >
                       {nextStatus === 'fixed' && <CheckCircle2 className="mr-1 inline h-3 w-3" />}
@@ -269,6 +320,62 @@ export const FindingsPanel = ({ targetId }: Props) => {
           </div>
         ))}
       </div>
+
+      {triageModal && (
+        <div className="fixed top-0 bottom-0 left-0 right-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm lg:left-[320px]">
+          <div className="w-full max-w-xl border border-hack-primary/40 bg-hack-bg shadow-2xl shadow-hack-primary/10">
+            <div className="flex items-center justify-between border-b border-hack-primary/20 px-5 py-4">
+              <div>
+                <h3 className="font-mono text-sm font-bold uppercase tracking-[0.2em] text-hack-primary">
+                  Triage Finding
+                </h3>
+                <p className="mt-1 text-xs text-hack-dim">
+                  Change status to <span className="font-bold text-white">{label(triageModal.nextStatus)}</span>
+                </p>
+              </div>
+              <button type="button" onClick={() => setTriageModal(null)} className="text-hack-dim hover:text-white">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <div className="rounded border border-hack-border bg-black/20 p-3">
+                <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-hack-dim">Finding</div>
+                <div className="mt-1 font-mono text-sm font-bold text-white">{triageModal.finding.title}</div>
+              </div>
+
+              <label className="block space-y-2">
+                <span className="text-xs font-bold uppercase tracking-[0.2em] text-hack-dim">Optional triage note</span>
+                <textarea
+                  value={triageModal.note}
+                  onChange={(event) => setTriageModal({ ...triageModal, note: event.target.value })}
+                  rows={5}
+                  placeholder="Why is this accepted, false positive, fixed, or reopened?"
+                  className="w-full border border-hack-border bg-black/30 px-3 py-2 font-mono text-xs text-white outline-none focus:border-hack-primary"
+                />
+              </label>
+
+              <div className="flex justify-end gap-3 border-t border-hack-border pt-4">
+                <button
+                  type="button"
+                  onClick={() => setTriageModal(null)}
+                  className="px-4 py-2 text-xs font-bold uppercase tracking-wider text-hack-dim hover:text-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={submitTriage}
+                  disabled={updateStatusMutation.isPending}
+                  className="border border-hack-primary bg-hack-primary/10 px-4 py-2 text-xs font-bold uppercase tracking-wider text-hack-primary hover:bg-hack-primary/20 disabled:opacity-50"
+                >
+                  {updateStatusMutation.isPending ? 'Saving...' : 'Save Status'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,4 +1,5 @@
 export type FindingSeverity = 'info' | 'low' | 'medium' | 'high' | 'critical';
+
 export type FindingStatus = 'open' | 'accepted' | 'false_positive' | 'fixed';
 
 export interface Finding {
@@ -39,8 +40,8 @@ export interface FindingStats {
   accepted: number;
   false_positive: number;
   fixed: number;
-  by_severity: Record<FindingSeverity, number> & Record<string, number>;
-  by_status: Record<FindingStatus, number> & Record<string, number>;
+  by_severity: Record<FindingSeverity, number>;
+  by_status: Record<FindingStatus, number>;
   by_source: Record<string, number>;
   by_category: Record<string, number>;
 }
