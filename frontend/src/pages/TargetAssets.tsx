@@ -5,6 +5,8 @@ import { getTargetAssets, getTargetDetails, getTargetURLs, exportTargetIPs, down
 import { ArrowLeft, Globe, CheckCircle, XCircle, Search, Monitor, Loader2, Network, ArrowUp, ArrowDown, Link2, FileText, Database, FileCode, Shield, Download, Cloud, Terminal } from 'lucide-react';
 import clsx from 'clsx';
 
+
+
 const KNOWN_SOURCES = [
   { id: 'wayback', label: 'Wayback' },
   { id: 'gau', label: 'GAU' },
@@ -20,7 +22,8 @@ const KNOWN_ASSET_PROVIDERS = [
   { id: 'cero', label: 'Cero' },
   { id: 'alterx', label: 'Alterx' },
   { id: 'puredns', label: 'Puredns' },
-  { id: 'abusedb', label: 'AbuseDB' }, // <--- این خط اضافه شود
+  { id: 'abusedb', label: 'AbuseDB' },
+    { id: 'amass', label: 'Amass' }, // <--- این خط اضافه شود
 ];
 
 const TargetAssets = () => {
@@ -483,7 +486,8 @@ const TargetAssets = () => {
                     'cero': 'border-purple-400 text-purple-400 bg-purple-900/20',
                     'crtsh': 'border-orange-400 text-orange-400 bg-orange-900/20',
                     'alterx': 'border-yellow-400 text-yellow-400 bg-yellow-900/20',
-                    'abusedb': 'border-red-500 text-red-500 bg-red-900/20', // <--- این خط اضافه شود
+                    'abusedb': 'border-red-500 text-red-500 bg-red-900/20',
+  'amass': 'border-hack-primary text-hack-primary bg-hack-primary/10', // <--- این خط اضافه شود
                   };
                   return colors[source.toLowerCase()] || 'border-hack-border text-hack-dim bg-black/30';
                 };
