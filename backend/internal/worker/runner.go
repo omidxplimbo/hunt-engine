@@ -516,6 +516,10 @@ func runCommandWithStdinAndKillSwitch(targetID uint, stdin io.Reader, name strin
 	return workerruntime.RunCommandWithStdinAndKillSwitch(targetID, stdin, scanHeartbeat, checkStopRequest, name, args...)
 }
 
+func runCommandWithTimeoutAndKillSwitch(targetID uint, timeout time.Duration, name string, args ...string) ([]byte, error) {
+	return workerruntime.RunCommandWithTimeoutAndKillSwitch(targetID, timeout, scanHeartbeat, checkStopRequest, name, args...)
+}
+
 // runCommandWithKillSwitchCombined مثل runCommandWithKillSwitch ولی stdout/stderr را با هم برمی‌گرداند (برای ابزارهایی مثل nmap)
 func runCommandWithKillSwitchCombined(targetID uint, name string, args ...string) ([]byte, error) {
 	return workerruntime.RunCommandWithKillSwitchCombined(targetID, scanHeartbeat, checkStopRequest, name, args...)
@@ -617,6 +621,9 @@ func runPassiveCollection(targetID uint, domain string) ([]string, map[string][]
 		},
 		RunCombinedCommand: func(name string, args ...string) ([]byte, error) {
 			return runCommandWithKillSwitchCombined(targetID, name, args...)
+		},
+		RunCombinedCommandWithTimeout: func(timeout time.Duration, name string, args ...string) ([]byte, error) {
+			return workerruntime.RunCommandWithKillSwitchCombinedTimeout(targetID, timeout, scanHeartbeat, checkStopRequest, name, args...)
 		},
 	})
 }

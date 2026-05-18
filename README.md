@@ -795,3 +795,22 @@ Pause the affected target from the UI when possible, then restart backend:
 docker compose up -d backend
 ```
 <!-- HUNTENGINE_V31_TROUBLESHOOTING_END -->
+
+
+### Amass Discovery Option
+
+Amass is available as an optional per-target passive Discovery source. When enabled, Hunt Engine runs:
+
+```bash
+amass enum -passive -norecursive -noalts -d <domain>
+```
+
+Amass output is written to a temporary file and parsed line-by-line so large passive result sets do not need to be held as one stdout buffer in backend memory. Results are source-tagged as `amass` and then flow into the normal Discovery merge and DNSX validation pipeline.
+
+Runtime tuning:
+
+```env
+AMASS_TIMEOUT_SECONDS=900
+```
+
+Set `AMASS_TIMEOUT_SECONDS=0` to disable the Amass-specific timeout. Stop Scan still uses the worker process-group kill path.

@@ -141,3 +141,175 @@ func killProcessGroup(cmd *exec.Cmd) error {
 
 	return nil
 }
+
+// RunCommandWithTimeoutAndKillSwitch runs an external command with a maximum wall-clock duration.
+// A zero or negative timeout disables timeout handling and behaves like RunCommandWithKillSwitch.
+func RunCommandWithTimeoutAndKillSwitch(targetID uint, timeout time.Duration, heartbeat HeartbeatFunc, shouldStop StopRequestedFunc, name string, args ...string) ([]byte, error) {
+	if timeout <= 0 {
+		return RunCommandWithKillSwitch(targetID, heartbeat, shouldStop, name, args...)
+	}
+
+	cmd := exec.Command(name, args...)
+	prepareCommand(targetID, cmd)
+
+	var outBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &outBuf
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start command %s: %w", name, err)
+	}
+
+	return waitCommandWithTimeout(targetID, cmd, timeout, heartbeat, shouldStop, name, args, &outBuf)
+}
+
+func waitCommandWithTimeout(
+	targetID uint,
+	cmd *exec.Cmd,
+	timeout time.Duration,
+	heartbeat HeartbeatFunc,
+	shouldStop StopRequestedFunc,
+	name string,
+	args []string,
+	outBuf *bytes.Buffer,
+) ([]byte, error) {
+	taskKey := fmt.Sprintf("%d-%d", targetID, cmd.Process.Pid)
+	storeRunningProcess(taskKey, TaskInfo{
+		TargetID:  targetID,
+		Command:   name + " " + strings.Join(args, " "),
+		StartTime: time.Now(),
+		PID:       cmd.Process.Pid,
+	})
+	defer deleteRunningProcess(taskKey)
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	for {
+		select {
+		case err := <-done:
+			return outBuf.Bytes(), err
+		case <-timer.C:
+			log.Printf("⏰ Command timeout reached for target %d. Killing process group for %s after %s", targetID, name, timeout)
+			if err := killProcessGroup(cmd); err != nil {
+				log.Printf("⚠️ Failed to kill timed-out process group for %s: %v", name, err)
+			}
+			select {
+			case <-done:
+				return nil, fmt.Errorf("command timed out after %s", timeout)
+			case <-time.After(5 * time.Second):
+				return nil, fmt.Errorf("command timed out after %s", timeout)
+			}
+		case <-ticker.C:
+			if heartbeat != nil {
+				heartbeat(targetID)
+			}
+			if shouldStop != nil && shouldStop(targetID) {
+				log.Printf("Kill switch activated for target %d. Killing process group for %s...", targetID, name)
+				if err := killProcessGroup(cmd); err != nil {
+					log.Printf("⚠️ Failed to kill process group for %s: %v", name, err)
+				}
+				select {
+				case <-done:
+					return nil, fmt.Errorf("process killed by user request")
+				case <-time.After(5 * time.Second):
+					log.Printf("⚠️ Timed out waiting for killed process group to exit for %s", name)
+					return nil, fmt.Errorf("process killed by user request")
+				}
+			}
+		}
+	}
+}
+
+// RunCommandWithKillSwitchCombinedTimeout runs an external command with stdout+stderr,
+// kills the full process group on stop or timeout, and preserves process monitoring.
+func RunCommandWithKillSwitchCombinedTimeout(
+	targetID uint,
+	timeout time.Duration,
+	heartbeat HeartbeatFunc,
+	shouldStop StopRequestedFunc,
+	name string,
+	args ...string,
+) ([]byte, error) {
+	if timeout <= 0 {
+		return RunCommandWithKillSwitchCombined(targetID, heartbeat, shouldStop, name, args...)
+	}
+
+	cmd := exec.Command(name, args...)
+	prepareCommand(targetID, cmd)
+
+	var outBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &outBuf
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start command %s: %w", name, err)
+	}
+
+	taskKey := fmt.Sprintf("%d-%d", targetID, cmd.Process.Pid)
+	storeRunningProcess(taskKey, TaskInfo{
+		TargetID:  targetID,
+		Command:   name + " " + strings.Join(args, " "),
+		StartTime: time.Now(),
+		PID:       cmd.Process.Pid,
+	})
+	defer deleteRunningProcess(taskKey)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	for {
+		select {
+		case err := <-done:
+			return outBuf.Bytes(), err
+
+		case <-timer.C:
+			log.Printf("⚠️ Timeout reached for target %d. Killing process group for %s...", targetID, name)
+			if err := killProcessGroup(cmd); err != nil {
+				log.Printf("⚠️ Failed to kill timed-out process group for %s: %v", name, err)
+			}
+
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				log.Printf("⚠️ Timed out waiting for killed process group to exit for %s", name)
+			}
+
+			return outBuf.Bytes(), fmt.Errorf("command timed out after %s: %s", timeout, name)
+
+		case <-ticker.C:
+			if heartbeat != nil {
+				heartbeat(targetID)
+			}
+
+			if shouldStop != nil && shouldStop(targetID) {
+				log.Printf(" Kill switch activated for target %d. Killing process group for %s...", targetID, name)
+				if err := killProcessGroup(cmd); err != nil {
+					log.Printf("⚠️ Failed to kill process group for %s: %v", name, err)
+				}
+
+				select {
+				case <-done:
+					return nil, fmt.Errorf("process killed by user request")
+				case <-time.After(5 * time.Second):
+					log.Printf("⚠️ Timed out waiting for killed process group to exit for %s", name)
+					return nil, fmt.Errorf("process killed by user request")
+				}
+			}
+		}
+	}
+}

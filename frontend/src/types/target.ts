@@ -17,6 +17,7 @@ export interface Target {
   use_crtsh?: boolean;
   use_puredns?: boolean;
   use_abusedb?: boolean;
+  use_amass?: boolean;
   puredns_wordlists?: string[];
   scan_modules: string;
   created_by_user_id?: number;
