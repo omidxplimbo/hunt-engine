@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"bytes"
+	"encoding/csv"
 	"fmt"
 	"strconv"
 	"strings"
@@ -322,4 +324,116 @@ func UpdateFindingStatus(c *fiber.Ctx) error {
 
 	finding.Status = status
 	return c.JSON(fiber.Map{"status": "success", "message": "Finding status updated", "data": toFindingResponse(finding)})
+}
+
+// ExportTargetFindings exports findings for a single accessible target as CSV or JSON.
+func ExportTargetFindings(c *fiber.Ctx) error {
+	id := c.Params("id")
+	var targetID uint
+	_, _ = fmt.Sscanf(id, "%d", &targetID)
+
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	format := strings.ToLower(strings.TrimSpace(c.Query("format", "csv")))
+	if format == "" {
+		format = "csv"
+	}
+	if format != "csv" && format != "json" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "Invalid export format. Use csv or json"})
+	}
+
+	db := database.DB.Model(&models.Finding{}).Where("target_id = ?", target.ID)
+	db = applyFindingFilters(db, c)
+
+	var findings []models.Finding
+	if err := db.Order("severity desc, last_seen desc, id desc").Find(&findings).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	responses := make([]dto.FindingResponse, len(findings))
+	for i, finding := range findings {
+		responses[i] = toFindingResponse(finding)
+	}
+
+	if format == "json" {
+		c.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSONCharsetUTF8)
+		c.Attachment(fmt.Sprintf("target-%d-findings.json", target.ID))
+		return c.JSON(fiber.Map{
+			"status": "success",
+			"data":   responses,
+			"count":  len(responses),
+		})
+	}
+
+	var buffer bytes.Buffer
+	writer := csv.NewWriter(&buffer)
+
+	header := []string{
+		"id",
+		"target_id",
+		"asset_id",
+		"url_id",
+		"title",
+		"severity",
+		"status",
+		"category",
+		"source_tool",
+		"evidence",
+		"recommendation",
+		"fingerprint",
+		"first_seen",
+		"last_seen",
+		"created_at",
+		"updated_at",
+	}
+	if err := writer.Write(header); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	for _, finding := range responses {
+		assetID := ""
+		if finding.AssetID != nil {
+			assetID = strconv.FormatUint(uint64(*finding.AssetID), 10)
+		}
+
+		urlID := ""
+		if finding.URLID != nil {
+			urlID = strconv.FormatUint(uint64(*finding.URLID), 10)
+		}
+
+		record := []string{
+			strconv.FormatUint(uint64(finding.ID), 10),
+			strconv.FormatUint(uint64(finding.TargetID), 10),
+			assetID,
+			urlID,
+			finding.Title,
+			finding.Severity,
+			finding.Status,
+			finding.Category,
+			finding.SourceTool,
+			finding.Evidence,
+			finding.Recommendation,
+			finding.Fingerprint,
+			finding.FirstSeen.Format(time.RFC3339),
+			finding.LastSeen.Format(time.RFC3339),
+			finding.CreatedAt.Format(time.RFC3339),
+			finding.UpdatedAt.Format(time.RFC3339),
+		}
+
+		if err := writer.Write(record); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+		}
+	}
+
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	c.Set(fiber.HeaderContentType, "text/csv; charset=utf-8")
+	c.Attachment(fmt.Sprintf("target-%d-findings.csv", target.ID))
+	return c.Send(buffer.Bytes())
 }

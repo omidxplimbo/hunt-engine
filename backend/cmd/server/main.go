@@ -129,6 +129,7 @@ func main() {
 
 	// Finding Routes
 	api.Get("/findings", handlers.GetFindings)
+	api.Get("/targets/:id/findings/export", handlers.ExportTargetFindings)
 	api.Get("/targets/:id/findings/stats", handlers.GetTargetFindingsStats)
 	api.Get("/targets/:id/findings", handlers.GetTargetFindings)
 	api.Patch("/findings/:id/status", handlers.UpdateFindingStatus)
