@@ -34,8 +34,8 @@ The system is built on a modern, containerized microservice-like architecture:
     * **Monitoring Server:** (Admin Only) Real-time CPU/RAM usage charts and active process list.
     * **Target Management:** Create, Edit, Delete, **Stop/Resume** scans, with target owner visibility for admins.
     * **Configurable Scans:** Toggle modules like `Alterx`, `Waymore` or `Crawling` per target.
-    * **Asset Explorer:** Advanced data grid with Filtering, Search, **Tabs for Assets vs URLs**.
-    * **Intel Filtering:** Specific **JS Filtering** and **Multi-Source Filtering** (Wayback, Gau, Katana, Waymore) with **Sorting** capabilities.
+    * **Asset Explorer:** Advanced data grid with Filtering, Search, **Tabs for Assets, URLs, and Findings**.
+    * **Intel Filtering:** Specific **JS Filtering**, **Multi-Source Filtering** (Wayback, Gau, Katana, Waymore), Findings filtering, and sorting capabilities.
     * **Data Import/Export:** Export targets with all related data (Assets, URLs) and import them back with duplicate handling.
     * **User Management:** Admin-only panel to manage team access, roles, status, and per-user scan slot limits.
     * **Account:** Self-service account page (view profile, change password, subfinder provider keys, and personal scan queue controls).
@@ -998,3 +998,115 @@ find /tmp/hunt-engine -type f \(   -name "alterx_results.txt" -o   -name "alterx
 ```
 
 <!-- V3_1_POST_RELEASE_CLEANUP_END -->
+<!-- V3_2_FINDINGS_DOCS_START -->
+---
+
+## v3.2.0 Findings System
+
+Version `v3.2.0` introduces the first production-ready Finding layer on top of Hunt Engine's reconnaissance pipeline. The goal is to move beyond raw asset and URL collection and turn selected signals into structured, triageable, exportable security findings.
+
+### What Findings Add
+
+Findings are structured records that connect a target, optional asset, optional URL, severity, evidence, recommendation, status, and timestamps.
+
+Each finding includes:
+
+```text
+severity: info / low / medium / high / critical
+status: open / accepted / false_positive / fixed
+source_tool: builtin / builtin-url / future engines
+first_seen / last_seen
+triage_note / triaged_at / triaged_by_user_id
+fingerprint for stable deduplication
+```
+
+### Built-in Asset Findings
+
+After the Probing phase updates assets, Hunt Engine can generate lightweight builtin findings from asset metadata:
+
+- Possible exposed admin/login interfaces
+- Possible directory listings
+- HTTP 5xx server errors
+- Potentially exposed sensitive services based on risky open ports
+
+These detections are intentionally conservative and are designed to highlight items for manual review rather than claim exploitability.
+
+### Built-in URL Findings
+
+After the Crawling phase completes, Hunt Engine inspects discovered URLs and creates findings for patterns such as:
+
+- Admin/login/dashboard paths
+- Exposed configuration or secret-looking paths such as `.env`, `config.php`, `wp-config.php`, `database.yml`
+- Version-control paths such as `.git`, `.svn`, `.hg`
+- API documentation and schema paths such as `swagger`, `openapi`, `graphql`
+- Debug and monitoring paths such as `actuator`, `metrics`, `server-status`, `phpinfo`
+- Backup/archive artifacts such as `.bak`, `.old`, `.zip`, `.sql`, `.dump`
+
+### URL Canonicalization and Noise Reduction
+
+URL findings use canonical URLs to reduce duplicate noise caused by volatile query parameters.
+
+Examples of volatile parameters removed from finding fingerprints include:
+
+```text
+csrf, nonce, token, session, sid, signature, timestamp, cache, utm_*, fbclid, gclid
+```
+
+Meaningful parameter names can still be preserved while values are removed. For example:
+
+```text
+/product?id=123
+/product?id=456
+```
+
+can be treated as:
+
+```text
+/product?id
+```
+
+Finding evidence stores a cleaner canonical URL plus a shortened raw sample URL:
+
+```text
+canonical_url=https://example.com/login
+sample_raw_url=https://example.com/login?csrf=...
+source=wayback
+```
+
+### Canonical URL Storage Dedupe
+
+Newly stored crawled URLs are also deduplicated by canonical hash. This keeps noisy archival variants from creating unnecessary database growth while preserving a representative raw sample URL, occurrence count, last seen timestamp, and merged sources.
+
+> Existing historical URL records are not automatically merged. This avoids destructive migrations and keeps the upgrade safe.
+
+### Findings UI
+
+The target details page includes a dedicated **Findings** tab with:
+
+- Summary cards for total, open, high+, and fixed findings
+- Severity, status, and search filters
+- Evidence and recommendation display
+- Triage status changes
+- Optional triage notes through an in-app modal
+- CSV and JSON export actions
+
+### Findings API
+
+Key endpoints:
+
+```text
+GET   /api/findings
+GET   /api/targets/:id/findings
+GET   /api/targets/:id/findings/stats
+GET   /api/targets/:id/findings/export?format=csv
+GET   /api/targets/:id/findings/export?format=json
+PATCH /api/findings/:id/status
+```
+
+All Findings endpoints enforce the same target ownership rules as the rest of the platform: admins can access all targets; regular users can only access findings for their own targets.
+
+### AI-Ready Direction
+
+The Findings layer is intentionally structured so future AI features can operate as a safe, optional analysis layer. AI should analyze findings, evidence, stats, and scan history asynchronously without blocking the core scan pipeline. If AI is disabled or fails, scans, findings, exports, and triage continue to work normally.
+<!-- V3_2_FINDINGS_DOCS_END -->
+
