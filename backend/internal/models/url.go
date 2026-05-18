@@ -16,7 +16,11 @@ type FoundURL struct {
 	AssetID *uint `gorm:"index" json:"asset_id"`
 
 	// آدرس پیدا شده (یونیک بودن در سطح تارگت برای جلوگیری از تکرار)
-	Value string `gorm:"type:text;not null" json:"value"`
+	Value           string     `gorm:"type:text;not null" json:"value"`
+	CanonicalValue  string     `gorm:"type:text;index" json:"canonical_value"`
+	CanonicalHash   string     `gorm:"size:64;index" json:"canonical_hash"`
+	OccurrenceCount int        `gorm:"default:1" json:"occurrence_count"`
+	LastSeen        *time.Time `json:"last_seen"`
 
 	// ابزاری که این را پیدا کرده (مثلاً: "wayback,gau")
 	Source string `gorm:"size:100" json:"source"`
