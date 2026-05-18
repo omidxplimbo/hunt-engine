@@ -127,6 +127,11 @@ func main() {
 	adminUsers.Patch("/:id", handlers.UpdateUser)
 	adminUsers.Delete("/:id", handlers.DeleteUser)
 
+	// Finding Routes
+	api.Get("/findings", handlers.GetFindings)
+	api.Get("/targets/:id/findings", handlers.GetTargetFindings)
+	api.Patch("/findings/:id/status", handlers.UpdateFindingStatus)
+
 	api.Get("/dashboard/stats", handlers.GetDashboardStats)
 	api.Get("/monitor/stats", handlers.GetMonitorData)
 
