@@ -19,7 +19,7 @@ The system is built on a modern, containerized microservice-like architecture:
 * **Core:** Golang (Fiber Framework) for high-performance APIs and concurrent workers.
 * **Persistence:** PostgreSQL with GORM for structured data storage and JSONB for flexible raw data.
 * **Job Queue:** Redis-backed per-user scan queues for long-running reconnaissance tasks, with configurable concurrent scan slots per user.
-* **Notification System:** Buffered Go Channels with rate-limiting to prevent data loss and API blocking (Telegram).
+* **Notification System:** Buffered Go Channels with rate-limiting to prevent data loss and API blocking (Telegram). Runtime secrets are loaded from environment variables.
 * **Security:** JWT Authentication & Role-Based Access Control (RBAC).
 * **Infrastructure:** Fully Dockerized environment with multi-stage builds.
 
@@ -93,8 +93,8 @@ The platform integrates industry-standard security tools within its isolated env
   * `cero` (**Optional per target**) - Scrape domain names from SSL certificates
   * `crtsh` (**Optional per target**) - Query crt.sh API for subdomain discovery
   * `puredns` (**Optional per target**) - Subdomain bruteforce (wordlist-based) using trusted resolvers (**only live/resolved** results are stored). Puredns is an optional Discovery step and does not gate Probing.
-* **Permutation/Mutation:** `alterx` (Optional per target)
-* **Validation/Resolution:** `dnsx` (w/ fixed resolvers)
+* **Permutation/Mutation:** `alterx` (Optional per target, file-based output with streaming post-processing for large targets)
+* **Validation/Resolution:** `dnsx` (streaming batch validation with fixed resolvers)
 * **Probing:** `httpx` (Rich JSON output, WAF/CDN detection)
 * **Edge Tech Detection:** `cdncheck` (Early detection from DNS results: **CDN / WAF / CLOUD**, separate from httpx)
 * **Port Scanning:** `nmap` (**Optional per target**, runs in Phase 1 on **non-CDN** DNS-resolved IPs)
@@ -611,3 +611,187 @@ This project is licensed under the MIT License.
 ## ⚠️ Disclaimer
 
 This tool is for **authorized security testing and research purposes only**. Users are responsible for ensuring they have proper authorization before scanning any targets.
+
+<!-- HUNTENGINE_V31_RUNTIME_START -->
+## Runtime Stability & Large Target Processing
+
+Hunt Engine v3.1 adds resource-aware execution paths for large reconnaissance targets.
+
+### Large Alterx Output Handling
+
+Alterx can generate millions of permutation candidates for large root domains. The worker now treats this as a streaming workload:
+
+- Alterx writes output to disk instead of returning huge stdout payloads to the Go backend.
+- Alterx output is normalized and de-duplicated line-by-line.
+- Long Alterx post-processing updates target progress in the UI, sends scan heartbeats, and reacts to Stop requests.
+- Discovery candidate merging streams large mutation files into the DNSX input artifact without materializing the full mutation set in memory.
+- Full DNSX validation coverage is preserved; candidates are not dropped just because the target is large.
+- Dead Alterx-only candidates are not persisted as millions of database assets; only passive candidates, live DNSX/PureDNS results, and existing assets are persisted.
+
+### Streaming DNSX Validation
+
+DNSX validation runs in configurable batches while reading the input file progressively. This prevents the backend from loading multi-million-line DNS candidate files into memory.
+
+Recommended values:
+
+```env
+# Smaller VPS
+DNSX_BATCH_SIZE=1000
+DNSX_THREADS=20
+
+# Medium server
+DNSX_BATCH_SIZE=2000
+DNSX_THREADS=30
+
+# Larger server
+DNSX_BATCH_SIZE=5000
+DNSX_THREADS=50
+```
+
+`DNSX_BATCH_SIZE` controls how many candidates are sent to DNSX per execution. It does **not** limit coverage.
+
+### Stop Scan Reliability
+
+External tools are started in their own process group. When a Stop request is issued, the backend kills the full process group instead of only the parent process. This helps prevent child processes from tools such as `dnsx`, `httpx`, `katana`, `puredns`, `massdns`, or shell pipelines from surviving after a scan is stopped.
+
+### Scheduler and Queue Safety
+
+- Scheduled scans reset stale checkpoint state before enqueueing a new periodic run.
+- Per-user Redis queues use round-robin selection to reduce cross-user starvation.
+- Dispatcher failures, invalid job payloads, unknown job types, and panic recovery now fail/pause the target instead of leaving it stuck in `QUEUED` or `SCANNING`.
+- Phase chaining checks Redis enqueue errors so a target is not left `QUEUED` without a corresponding worker job.
+<!-- HUNTENGINE_V31_RUNTIME_END -->
+
+
+<!-- HUNTENGINE_V31_PHASE_START -->
+### ✅ Phase 5.2: v3.1 Runtime Hardening & Large Target Stability (COMPLETED)
+**Goal:** Make long-running scans safer, more observable, and more resilient for large targets and multi-user deployments.
+
+* [x] **Scheduler Reset Safety:** Periodic scans reset stale scan-state/checkpoint metadata before starting a fresh scheduled run.
+* [x] **Process Group Kill:** Stop Scan now terminates full external tool process groups, reducing orphaned child processes.
+* [x] **Fair Queue Selection:** Per-user scan queues are selected with round-robin fairness instead of always scanning sorted queue keys from the beginning.
+* [x] **Dispatcher Hardening:** Invalid payloads, unknown job types, missing handlers, and panics now fail/pause targets instead of leaving them stuck.
+* [x] **Safe Phase Chaining:** Redis enqueue failures while scheduling the next phase now fail/pause the scan instead of leaving a target queued without a job.
+* [x] **Streaming Alterx Pipeline:** Alterx output is file-based and post-processed line-by-line with visible progress and heartbeat updates.
+* [x] **Streaming DNSX Validation:** DNSX reads candidate files progressively in configurable batches to avoid loading massive candidate sets into backend memory.
+* [x] **Resource-Aware Large Target Handling:** Full validation coverage is preserved while avoiding persistence of millions of dead Alterx-only candidates.
+<!-- HUNTENGINE_V31_PHASE_END -->
+
+
+<!-- HUNTENGINE_V31_ENV_START -->
+## Environment Configuration
+
+Create a local `.env` file from `.env.example` before starting the stack:
+
+```bash
+cp .env.example .env
+nano .env
+```
+
+Required production values:
+
+```env
+DB_USER=hunter
+DB_PASSWORD=change_me_to_a_strong_database_password
+DB_NAME=huntdb
+JWT_SECRET=change_me_to_a_32_plus_character_random_secret
+DOMAIN_NAME=yourdomain.com
+SSL_EMAIL=admin@yourdomain.com
+SERVER_IP=YOUR_SERVER_PUBLIC_IP
+```
+
+Generate a strong JWT secret with:
+
+```bash
+openssl rand -hex 32
+```
+
+Optional integrations:
+
+```env
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+VIRUSTOTAL_API_KEY=
+```
+
+If `VIRUSTOTAL_API_KEY` is empty, the VirusTotal crawling source is skipped cleanly. Telegram notification variables can be left empty when notifications are not required.
+
+Large-target runtime tuning:
+
+```env
+DNSX_BATCH_SIZE=2000
+DNSX_THREADS=30
+PROBE_BATCH_SIZE=1000
+```
+
+For smaller servers, reduce `DNSX_BATCH_SIZE`, `DNSX_THREADS`, and `PROBE_BATCH_SIZE`. For larger servers, increase them carefully while monitoring CPU/RAM usage.
+<!-- HUNTENGINE_V31_ENV_END -->
+
+
+<!-- HUNTENGINE_V31_TROUBLESHOOTING_START -->
+## Troubleshooting Large Discovery Runs
+
+### Alterx appears stuck but Active Processes is empty
+
+For very large targets, Alterx may finish as an external process while the Go backend continues normalizing and de-duplicating the output file. During this time the Active Processes table can show `0`, because the work is internal backend post-processing rather than a child process.
+
+Check progress with:
+
+```bash
+docker compose logs -f backend
+```
+
+And inspect temporary discovery artifacts:
+
+```bash
+docker compose exec backend sh -lc '
+find /tmp/hunt-engine -type f \( \
+  -name "alterx_results.txt" -o \
+  -name "alterx_results.txt.raw" -o \
+  -name "dnsx_all_found.txt" \
+\) -exec ls -lh {} \; -exec wc -l {} \;
+'
+```
+
+If `alterx_results.txt` is still increasing, the backend is actively post-processing. The UI should show an `ALTERX POST-PROCESSING` progress phase.
+
+### DNSX is slow on large targets
+
+DNSX can be CPU-intensive when validating millions of candidates. Reduce runtime pressure on smaller servers:
+
+```env
+DNSX_BATCH_SIZE=1000
+DNSX_THREADS=20
+```
+
+This does not reduce coverage; it only lowers the amount of work performed per DNSX batch.
+
+### Emergency recovery for a stuck scan
+
+If a scan must be manually interrupted:
+
+```bash
+docker compose stop backend
+```
+
+Then inspect queued jobs and scanning targets:
+
+```bash
+docker compose exec redis redis-cli keys 'discovery_tasks*'
+
+docker compose exec postgres sh -lc '
+psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "
+SELECT id, root_domain, status, current_phase
+FROM targets
+WHERE status IN ('\''SCANNING'\'','\''QUEUED'\'')
+ORDER BY updated_at DESC;
+"
+'
+```
+
+Pause the affected target from the UI when possible, then restart backend:
+
+```bash
+docker compose up -d backend
+```
+<!-- HUNTENGINE_V31_TROUBLESHOOTING_END -->
