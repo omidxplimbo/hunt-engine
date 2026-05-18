@@ -1,0 +1,42 @@
+name: Docker Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker-build:
+    name: Build Docker images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        env:
+          DB_USER: hunter
+          DB_PASSWORD: ci_postgres_password_change_me
+          DB_NAME: huntdb
+          JWT_SECRET: ci_jwt_secret_0123456789abcdef0123456789abcdef
+          TELEGRAM_BOT_TOKEN: ""
+          TELEGRAM_CHAT_ID: ""
+          VIRUSTOTAL_API_KEY: ""
+          DNSX_BATCH_SIZE: "2000"
+          DNSX_THREADS: "30"
+          AMASS_TIMEOUT_SECONDS: "900"
+        run: docker compose build backend
+
+      - name: Build frontend image
+        run: docker compose build frontend
+
+      - name: Build DNS image
+        run: docker compose build dns
