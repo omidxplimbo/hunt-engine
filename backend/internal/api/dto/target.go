@@ -17,6 +17,7 @@ type CreateTargetRequest struct {
 	UseCrtsh         *bool    `json:"use_crtsh"`   // Use crt.sh API for subdomain discovery
 	UsePuredns       *bool    `json:"use_puredns"` // Use puredns for bruteforce subdomain discovery
 	UseAbusedb       *bool    `json:"use_abusedb"`
+	UseAmass         *bool    `json:"use_amass"`
 	PurednsWordlists []string `json:"puredns_wordlists"` // Selected wordlists for puredns
 }
 
@@ -37,6 +38,7 @@ type UpdateTargetRequest struct {
 	UseCrtsh         *bool    `json:"use_crtsh"`   // Use crt.sh API for subdomain discovery
 	UsePuredns       *bool    `json:"use_puredns"` // Use puredns for bruteforce subdomain discovery
 	UseAbusedb       *bool    `json:"use_abusedb"`
+	UseAmass         *bool    `json:"use_amass"`
 	PurednsWordlists []string `json:"puredns_wordlists"` // Selected wordlists for puredns
 }
 
@@ -64,6 +66,7 @@ type TargetExportItem struct {
 	UseCrtsh         bool     `json:"use_crtsh"`
 	UsePuredns       bool     `json:"use_puredns"`
 	UseAbusedb       bool     `json:"use_abusedb"`
+	UseAmass         bool     `json:"use_amass"`
 	PurednsWordlists []string `json:"puredns_wordlists"`
 
 	// داده‌های مرتبط

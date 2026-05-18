@@ -44,13 +44,15 @@ type Target struct {
 	UseCrtsh         bool   `gorm:"default:false" json:"use_crtsh"`   // Use crt.sh API for subdomain discovery
 	UsePuredns       bool   `gorm:"default:false" json:"use_puredns"` // Use puredns for bruteforce subdomain discovery
 	UseAbusedb       bool   `gorm:"default:false" json:"use_abusedb"`
+	UseAmass         bool   `gorm:"default:false" json:"use_amass"`
 	PurednsWordlists string `gorm:"type:jsonb;default:'[]'" json:"puredns_wordlists"` // Selected wordlists for puredns (e.g. ["wordlist1.txt", "wordlist2.txt"])
 
 	ScanModules string `gorm:"type:jsonb;default:'[\"DISCOVERY\", \"PROBING\"]'" json:"scan_modules"`
 
 	Assets []Asset `json:"-"`
 
-	CreatedByUser User `gorm:"foreignKey:CreatedByUserID" json:"-"`}
+	CreatedByUser User `gorm:"foreignKey:CreatedByUserID" json:"-"`
+}
 
 // ==========================================
 // Asset Model

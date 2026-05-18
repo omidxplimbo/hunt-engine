@@ -197,12 +197,12 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	}
 
 	// 2. Mutation (Alterx)
-	var mutatedResults []string
+	alterxCandidateCount := 0
 	mutatedSources := make(map[string][]string)
 	if scanIsStepDone(targetID, "DISCOVERY", "ALTERX") {
-		mutatedResults, _ = utils.ReadSliceFromFile(alterxResultsFile)
+		alterxCandidateCount = discoverytools.CountLines(alterxResultsFile)
 		_ = utils.ReadJSONFromFile(alterxSourcesFile, &mutatedSources)
-		log.Printf("⏩ Resume: skipping ALTERX (loaded %d results from checkpoint)\n", len(mutatedResults))
+		log.Printf("⏩ Resume: skipping ALTERX (loaded %d candidates from checkpoint)\n", alterxCandidateCount)
 	} else if targetConf.UseAlterx {
 		if checkStopRequest(targetID) {
 			return
@@ -212,23 +212,20 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		_ = utils.WriteSliceToFile(allFoundFile, passiveResults)
 
 		var err error
-		mutatedResults, err = runAlterx(targetID, allFoundFile, rootDomain)
+		alterxCandidateCount, err = runAlterx(targetID, allFoundFile, rootDomain, alterxResultsFile)
 		if err != nil {
 			if err.Error() == "process killed by user request" {
 				return
 			}
 			log.Printf("❌ Alterx failed: %v. Proceeding without mutations.\n", err)
-			mutatedResults = []string{}
-		} else {
-			for _, subdomain := range mutatedResults {
-				mutatedSources[subdomain] = []string{"alterx"}
-			}
+			alterxCandidateCount = 0
+			_ = utils.WriteSliceToFile(alterxResultsFile, []string{})
 		}
-		if err := utils.WriteSliceToFile(alterxResultsFile, mutatedResults); err != nil {
-			log.Printf("❌ Failed to write alterx results checkpoint: %v\n", err)
-			scanMarkFailed(targetID, fmt.Sprintf("alterx checkpoint failed: %v", err))
-			return
-		}
+
+		// Do not create a per-candidate Alterx source map here. Large targets can
+		// produce millions of candidates and a million-entry source map can exhaust
+		// backend memory. The full candidate list is preserved in alterx_results.txt.
+		mutatedSources = map[string][]string{}
 		if err := utils.WriteJSONToFile(alterxSourcesFile, mutatedSources); err != nil {
 			log.Printf("❌ Failed to write alterx sources checkpoint: %v\n", err)
 			scanMarkFailed(targetID, fmt.Sprintf("alterx sources checkpoint failed: %v", err))
@@ -241,7 +238,6 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		_ = utils.WriteJSONToFile(alterxSourcesFile, mutatedSources)
 		scanMarkStepDone(targetID, "DISCOVERY", "ALTERX")
 	}
-
 	// 2.5. Puredns Bruteforce (فقط subdomain‌های لایو)
 	var purednsResults map[string][]string
 	purednsSources := make(map[string][]string)
@@ -296,46 +292,47 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		scanMarkStepDone(targetID, "DISCOVERY", "PUREDNS")
 	}
 
-	// 3. Merge & History (creates master list + allSources map)
-	var masterList []string
+	// 3. Merge & History (writes DNSX candidate file without keeping huge mutation streams in memory)
 	allSources := make(map[string][]string)
+	var existingAssets []string
+	database.DB.Model(&models.Asset{}).Where("target_id = ?", targetID).Pluck("value", &existingAssets)
+
+	mergeCandidateCount := 0
 	mergeDone := scanIsStepDone(targetID, "DISCOVERY", "MERGE")
 	if mergeDone {
-		var readErr error
-		masterList, readErr = utils.ReadSliceFromFile(allFoundFile)
-		_ = utils.ReadJSONFromFile(allSourcesFile, &allSources)
-		if readErr != nil || len(masterList) == 0 {
-			log.Printf("⚠️ MERGE checkpoint artifact is missing or empty; rebuilding MERGE before DNSX. err=%v\n", readErr)
+		if _, err := os.Stat(allFoundFile); err != nil {
+			log.Printf("⚠️ MERGE checkpoint artifact is missing; rebuilding MERGE before DNSX. err=%v\n", err)
 			mergeDone = false
 			allSources = make(map[string][]string)
 		} else {
-			log.Printf("⏩ Resume: skipping MERGE (loaded %d items from checkpoint)\n", len(masterList))
+			mergeCandidateCount = discoverytools.CountLines(allFoundFile)
+			_ = utils.ReadJSONFromFile(allSourcesFile, &allSources)
+			log.Printf("⏩ Resume: skipping MERGE (candidate file has %d entries)\n", mergeCandidateCount)
 		}
 	}
 
 	if !mergeDone {
 		scanMarkRunning(targetID, "DISCOVERY", "MERGE")
+		discoverymerge.MergeSources(allSources, passiveSources)
+		discoverymerge.MergeSources(allSources, mutatedSources)
+		discoverymerge.MergeSources(allSources, purednsSources)
 
-		var existingAssets []string
-		database.DB.Model(&models.Asset{}).Where("target_id = ?", targetID).Pluck("value", &existingAssets)
-
-		mergeResult := discoverymerge.Build(discoverymerge.Input{
-			PassiveResults: passiveResults,
-			PassiveSources: passiveSources,
-			MutatedResults: mutatedResults,
-			MutatedSources: mutatedSources,
-			PurednsResults: purednsResults,
-			PurednsSources: purednsSources,
-			ExistingAssets: existingAssets,
+		var err error
+		mergeCandidateCount, err = discoverymerge.WriteCandidatesToFile(discoverymerge.CandidateFileInput{
+			PassiveResults:     passiveResults,
+			MutatedResultsFile: alterxResultsFile,
+			PurednsResults:     purednsResults,
+			ExistingAssets:     existingAssets,
+			OutputFile:         allFoundFile,
+			CheckStop: func() bool {
+				return checkStopRequest(targetID)
+			},
 		})
-
-		masterList = mergeResult.MasterList
-		allSources = mergeResult.Sources
-
-		// DNSX reads allFoundFile. This file must contain the final merged list
-		// from passive + alterx + optional puredns + existing assets.
-		if err := utils.WriteSliceToFile(allFoundFile, masterList); err != nil {
-			log.Printf("❌ Failed to write DNSX input file: %v\n", err)
+		if err != nil {
+			if err == os.ErrClosed {
+				return
+			}
+			log.Printf("❌ Failed to write DNSX candidate file: %v\n", err)
 			scanMarkFailed(targetID, fmt.Sprintf("merge checkpoint failed: %v", err))
 			return
 		}
@@ -345,11 +342,10 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 			scanMarkFailed(targetID, fmt.Sprintf("merged sources checkpoint failed: %v", err))
 			return
 		}
-
 		scanMarkStepDone(targetID, "DISCOVERY", "MERGE")
 	}
 
-	log.Printf("📊 Master list created with %d potential subdomains. Starting validation (DNSX)...\n", len(masterList))
+	log.Printf(" Master candidate file created with %d potential subdomain entries. Starting validation (DNSX)...\n", mergeCandidateCount)
 
 	// 4. Validation (DNSX)
 	var dnsxResults map[string][]string
@@ -396,7 +392,13 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		updateTargetPhase(targetID, "PHASE 1: SAVING RESULTS")
 		var target models.Target
 		database.DB.First(&target, targetID)
-		saveDiscoveryResultsToDB(target, masterList, dnsxResults, allSources)
+		saveList := discoverymerge.BuildSaveList(discoverymerge.SaveListInput{
+			PassiveResults: passiveResults,
+			LiveResults:    dnsxResults,
+			PurednsResults: purednsResults,
+			ExistingAssets: existingAssets,
+		})
+		saveDiscoveryResultsToDB(target, saveList, dnsxResults, allSources)
 		scanMarkStepDone(targetID, "DISCOVERY", "SAVE")
 	}
 
@@ -514,6 +516,10 @@ func runCommandWithStdinAndKillSwitch(targetID uint, stdin io.Reader, name strin
 	return workerruntime.RunCommandWithStdinAndKillSwitch(targetID, stdin, scanHeartbeat, checkStopRequest, name, args...)
 }
 
+func runCommandWithTimeoutAndKillSwitch(targetID uint, timeout time.Duration, name string, args ...string) ([]byte, error) {
+	return workerruntime.RunCommandWithTimeoutAndKillSwitch(targetID, timeout, scanHeartbeat, checkStopRequest, name, args...)
+}
+
 // runCommandWithKillSwitchCombined مثل runCommandWithKillSwitch ولی stdout/stderr را با هم برمی‌گرداند (برای ابزارهایی مثل nmap)
 func runCommandWithKillSwitchCombined(targetID uint, name string, args ...string) ([]byte, error) {
 	return workerruntime.RunCommandWithKillSwitchCombined(targetID, scanHeartbeat, checkStopRequest, name, args...)
@@ -584,6 +590,8 @@ func buildDiscoveryToolContext(targetID uint, rootDomain string) discoverytools.
 		RunCommand:         runCommandWithKillSwitch,
 		CheckStop:          checkStopRequest,
 		NormalizeSubdomain: discoverytools.NormalizeSubdomain,
+		UpdateTargetPhase:  updateTargetPhase,
+		Heartbeat:          scanHeartbeat,
 	}
 }
 
@@ -614,11 +622,14 @@ func runPassiveCollection(targetID uint, domain string) ([]string, map[string][]
 		RunCombinedCommand: func(name string, args ...string) ([]byte, error) {
 			return runCommandWithKillSwitchCombined(targetID, name, args...)
 		},
+		RunCombinedCommandWithTimeout: func(timeout time.Duration, name string, args ...string) ([]byte, error) {
+			return workerruntime.RunCommandWithKillSwitchCombinedTimeout(targetID, timeout, scanHeartbeat, checkStopRequest, name, args...)
+		},
 	})
 }
 
-func runAlterx(targetID uint, inputFile, rootDomain string) ([]string, error) {
-	return discoverytools.RunAlterx(buildDiscoveryToolContext(targetID, rootDomain), inputFile, rootDomain)
+func runAlterx(targetID uint, inputFile, rootDomain, outputFile string) (int, error) {
+	return discoverytools.RunAlterx(buildDiscoveryToolContext(targetID, rootDomain), inputFile, rootDomain, outputFile)
 }
 
 // runCdnCheckForLiveAssets چک کردن CDN برای همه IPهای لایو که dnsx resolve کرده

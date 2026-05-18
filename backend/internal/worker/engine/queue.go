@@ -12,6 +12,8 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 )
 
+const roundRobinCursorKey = redisq.QueueName + ":round_robin_cursor"
+
 // ParsePayloadTargetID extracts the target id from queue payloads formatted as
 // MODULE:targetID:rootDomain.
 func ParsePayloadTargetID(payload string) (uint, bool) {
@@ -70,7 +72,6 @@ func RemoveQueuePayloadAt(ctx context.Context, key string, index int, payload st
 	if err != nil {
 		return err
 	}
-
 	if current != payload {
 		return fmt.Errorf("queue changed while selecting job")
 	}
@@ -82,14 +83,10 @@ func RemoveQueuePayloadAt(ctx context.Context, key string, index int, payload st
 	return redisq.Client.LRem(ctx, key, 1, placeholder).Err()
 }
 
-// PopNextEligiblePayload scans per-user queues and returns the first job that
-// can run under both the global engine cap and the target owner's slot limit.
-func PopNextEligiblePayload(maxGlobal int) (string, error) {
-	ctx := context.Background()
-
+func queueKeysWithLegacy(ctx context.Context) ([]string, error) {
 	keys, err := redisq.UserQueueKeys(ctx)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	// Legacy fallback: drain old global queue if it still has jobs from before
@@ -98,8 +95,81 @@ func PopNextEligiblePayload(maxGlobal int) (string, error) {
 		keys = append(keys, redisq.QueueName)
 	}
 
-	for _, key := range keys {
-		items, err := redisq.Client.LRange(ctx, key, 0, -1).Result()
+	return keys, nil
+}
+
+func getRoundRobinCursor(ctx context.Context, keyCount int) int {
+	if keyCount <= 0 {
+		return 0
+	}
+
+	raw, err := redisq.Client.Get(ctx, roundRobinCursorKey).Int()
+	if err != nil {
+		return 0
+	}
+
+	if raw < 0 {
+		raw = 0
+	}
+
+	return raw % keyCount
+}
+
+func setRoundRobinCursor(ctx context.Context, keyCount int, selectedIndex int) {
+	if keyCount <= 0 {
+		return
+	}
+
+	next := (selectedIndex + 1) % keyCount
+	_ = redisq.Client.Set(ctx, roundRobinCursorKey, next, 0).Err()
+}
+
+func orderedQueueKeys(keys []string, start int) []struct {
+	Index int
+	Key   string
+} {
+	ordered := make([]struct {
+		Index int
+		Key   string
+	}, 0, len(keys))
+
+	if len(keys) == 0 {
+		return ordered
+	}
+
+	start = start % len(keys)
+	for offset := 0; offset < len(keys); offset++ {
+		idx := (start + offset) % len(keys)
+		ordered = append(ordered, struct {
+			Index int
+			Key   string
+		}{
+			Index: idx,
+			Key:   keys[idx],
+		})
+	}
+
+	return ordered
+}
+
+// PopNextEligiblePayload returns one runnable payload using fair round-robin
+// selection across per-user queues. Each call starts from the queue after the
+// last successfully selected queue, so busy users do not permanently starve
+// later user queues.
+func PopNextEligiblePayload(maxGlobal int) (string, error) {
+	ctx := context.Background()
+
+	keys, err := queueKeysWithLegacy(ctx)
+	if err != nil {
+		return "", err
+	}
+	if len(keys) == 0 {
+		return "", nil
+	}
+
+	start := getRoundRobinCursor(ctx, len(keys))
+	for _, queuedKey := range orderedQueueKeys(keys, start) {
+		items, err := redisq.Client.LRange(ctx, queuedKey.Key, 0, -1).Result()
 		if err != nil {
 			return "", err
 		}
@@ -107,18 +177,18 @@ func PopNextEligiblePayload(maxGlobal int) (string, error) {
 		for idx, payload := range items {
 			targetID, ok := ParsePayloadTargetID(payload)
 			if !ok {
-				_ = RemoveQueuePayloadAt(ctx, key, idx, payload)
+				_ = RemoveQueuePayloadAt(ctx, queuedKey.Key, idx, payload)
 				continue
 			}
 
 			var target models.Target
 			if err := database.DB.First(&target, targetID).Error; err != nil {
-				_ = RemoveQueuePayloadAt(ctx, key, idx, payload)
+				_ = RemoveQueuePayloadAt(ctx, queuedKey.Key, idx, payload)
 				continue
 			}
 
 			if target.Status != "QUEUED" {
-				_ = RemoveQueuePayloadAt(ctx, key, idx, payload)
+				_ = RemoveQueuePayloadAt(ctx, queuedKey.Key, idx, payload)
 				continue
 			}
 
@@ -135,10 +205,11 @@ func PopNextEligiblePayload(maxGlobal int) (string, error) {
 				return "", nil
 			}
 
-			if err := RemoveQueuePayloadAt(ctx, key, idx, payload); err != nil {
+			if err := RemoveQueuePayloadAt(ctx, queuedKey.Key, idx, payload); err != nil {
 				return "", err
 			}
 
+			setRoundRobinCursor(ctx, len(keys), queuedKey.Index)
 			return payload, nil
 		}
 	}

@@ -27,10 +27,7 @@ import (
 func sortScanModules(modules []string) []string {
 	// نقشه اولویت‌بندی مراحل
 	priority := map[string]int{
-		"DISCOVERY": 1,
-		"PROBING":   2,
-		"CRAWLING":  3,
-	}
+		"DISCOVERY": 1, "PROBING": 2, "CRAWLING": 3}
 
 	sort.Slice(modules, func(i, j int) bool {
 		p1, ok1 := priority[modules[i]]
@@ -91,9 +88,7 @@ func CreateTarget(c *fiber.Ctx) error {
 	req.RootDomain = normalizeRootDomain(req.RootDomain)
 	if req.RootDomain == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"status":  "error",
-			"message": "Root domain is required",
-		})
+			"status": "error", "message": "Root domain is required"})
 	}
 
 	var existingTarget models.Target
@@ -103,16 +98,11 @@ func CreateTarget(c *fiber.Ctx) error {
 
 	if lookupErr == nil {
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
-			"status":  "error",
-			"message": "Target already exists for this user",
-		})
+			"status": "error", "message": "Target already exists for this user"})
 	}
 	if lookupErr != nil && !stderrors.Is(lookupErr, gorm.ErrRecordNotFound) {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"status":  "error",
-			"message": "Failed to check existing target",
-			"error":   lookupErr.Error(),
-		})
+			"status": "error", "message": "Failed to check existing target", "error": lookupErr.Error()})
 	}
 
 	// 👇 مرتب‌سازی ماژول‌ها قبل از ذخیره
@@ -125,24 +115,7 @@ func CreateTarget(c *fiber.Ctx) error {
 	modulesJSON, _ := json.Marshal(req.Modules)
 
 	target := models.Target{
-		CreatedByUserID:  uid,
-		Name:             req.Name,
-		RootDomain:       req.RootDomain,
-		Description:      req.Description,
-		InScope:          true,
-		Frequency:        req.Frequency,
-		ScanModules:      string(modulesJSON),
-		Status:           "QUEUED",
-		CurrentPhase:     "QUEUED",
-		UseAlterx:        true,
-		UseWaymore:       false,
-		UsePortscan:      false,
-		UseCero:          false,
-		UseCrtsh:         false,
-		UsePuredns:       false,
-		UseAbusedb:       false,
-		PurednsWordlists: "[]",
-	}
+		CreatedByUserID: uid, Name: req.Name, RootDomain: req.RootDomain, Description: req.Description, InScope: true, Frequency: req.Frequency, ScanModules: string(modulesJSON), Status: "QUEUED", CurrentPhase: "QUEUED", UseAlterx: true, UseWaymore: false, UsePortscan: false, UseCero: false, UseCrtsh: false, UsePuredns: false, UseAbusedb: false, UseAmass: false, PurednsWordlists: "[]"}
 
 	if req.UseAlterx != nil {
 		target.UseAlterx = *req.UseAlterx
@@ -162,6 +135,9 @@ func CreateTarget(c *fiber.Ctx) error {
 	if req.UseAbusedb != nil {
 		target.UseAbusedb = *req.UseAbusedb
 	}
+	if req.UseAmass != nil {
+		target.UseAmass = *req.UseAmass
+	}
 	if req.UsePuredns != nil {
 		target.UsePuredns = *req.UsePuredns
 	}
@@ -173,10 +149,7 @@ func CreateTarget(c *fiber.Ctx) error {
 	if err := database.DB.Create(&target).Error; err != nil {
 		if isDuplicateTargetError(err) {
 			return c.Status(fiber.StatusConflict).JSON(fiber.Map{
-				"status":  "error",
-				"message": "Target already exists for this user",
-				"error":   err.Error(),
-			})
+				"status": "error", "message": "Target already exists for this user", "error": err.Error()})
 		}
 
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Could not save target", "error": err.Error()})
@@ -244,6 +217,9 @@ func UpdateTarget(c *fiber.Ctx) error {
 	if req.UseAbusedb != nil {
 		target.UseAbusedb = *req.UseAbusedb
 	}
+	if req.UseAmass != nil {
+		target.UseAmass = *req.UseAmass
+	}
 	if len(req.PurednsWordlists) > 0 {
 		wordlistsJSON, _ := json.Marshal(req.PurednsWordlists)
 		target.PurednsWordlists = string(wordlistsJSON)
@@ -267,10 +243,7 @@ func UpdateTarget(c *fiber.Ctx) error {
 	// (اگر سیستم کشینگ دارید، اینجا باید کلیدهای مربوطه را Invalidate کنید)
 
 	return c.JSON(fiber.Map{
-		"status":  "success",
-		"message": "Target updated successfully",
-		"data":    target,
-	})
+		"status": "success", "message": "Target updated successfully", "data": target})
 }
 
 // StartDiscovery هندلر شروع مجدد اسکن (هوشمند)
@@ -315,29 +288,12 @@ func StartDiscovery(c *fiber.Ctx) error {
 		newRunID := fmt.Sprintf("run_%d", time.Now().UnixNano())
 		if stErr != nil {
 			_ = database.DB.Create(&models.TargetScanState{
-				TargetID:       target.ID,
-				RunID:          newRunID,
-				Status:         "PAUSED",
-				CompletedSteps: "[]",
-				Meta:           "{}",
-				CurrentModule:  "",
-				CurrentStep:    "",
-				HeartbeatAt:    nil,
-				LastError:      "",
-			}).Error
+				TargetID: target.ID, RunID: newRunID, Status: "PAUSED", CompletedSteps: "[]", Meta: "{}", CurrentModule: "", CurrentStep: "", HeartbeatAt: nil, LastError: ""}).Error
 		} else {
 			_ = database.DB.Model(&models.TargetScanState{}).
 				Where("target_id = ?", target.ID).
 				Updates(map[string]interface{}{
-					"run_id":          newRunID,
-					"status":          "PAUSED",
-					"completed_steps": "[]",
-					"meta":            "{}",
-					"current_module":  "",
-					"current_step":    "",
-					"heartbeat_at":    nil,
-					"last_error":      "",
-				}).Error
+					"run_id": newRunID, "status": "PAUSED", "completed_steps": "[]", "meta": "{}", "current_module": "", "current_step": "", "heartbeat_at": nil, "last_error": ""}).Error
 		}
 		// reset target "paused by user" etc
 		_ = database.DB.Model(target).Update("current_phase", "QUEUED: STARTING...").Error
@@ -365,10 +321,7 @@ func StartDiscovery(c *fiber.Ctx) error {
 	}
 
 	database.DB.Model(target).Updates(map[string]interface{}{
-		"status":         "QUEUED",
-		"current_phase":  fmt.Sprintf("QUEUED: STARTING %s...", resumeModule),
-		"stop_requested": false,
-	})
+		"status": "QUEUED", "current_phase": fmt.Sprintf("QUEUED: STARTING %s...", resumeModule), "stop_requested": false})
 
 	taskPayload := fmt.Sprintf("%s:%d:%s", resumeModule, target.ID, target.RootDomain)
 
@@ -378,9 +331,7 @@ func StartDiscovery(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"status":  "success",
-		"message": fmt.Sprintf("Scan started. Next phase: %s", resumeModule),
-	})
+		"status": "success", "message": fmt.Sprintf("Scan started. Next phase: %s", resumeModule)})
 }
 
 // ResumeTargetScan is an alias for StartDiscovery (kept for clarity in UI/API).
@@ -404,9 +355,7 @@ func GetTargetScanState(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"status": "success",
-		"data":   st,
-	})
+		"status": "success", "data": st})
 }
 
 // ... (بقیه هندلرها: GetTargets, GetTargetDetails, GetTargetAssets, StartProbing, DeleteTarget, StopScan, GetTargetURLs بدون تغییر باقی می‌مانند)
@@ -488,11 +437,7 @@ func GetTargets(c *fiber.Ctx) error {
 	countDB.Count(&totalTargets)
 
 	response := fiber.Map{
-		"status": "success",
-		"data":   targetResponses,
-		"count":  len(targetResponses),
-		"total":  totalTargets,
-	}
+		"status": "success", "data": targetResponses, "count": len(targetResponses), "total": totalTargets}
 
 	cache.SetCacheWithTTL(cacheKey, response, 5*time.Second)
 	c.Set("X-Cache", "MISS")
@@ -513,9 +458,7 @@ func GetTargetDetails(c *fiber.Ctx) error {
 	database.DB.Model(&models.Asset{}).Where("target_id = ?", target.ID).Count(&count)
 
 	return c.JSON(fiber.Map{
-		"status": "success",
-		"data":   toTargetResponse(*target, count),
-	})
+		"status": "success", "data": toTargetResponse(*target, count)})
 }
 
 // GetTargetAssets لیست دارایی‌ها رو با فیلتر، صفحه‌بندی، کشینگ و مرتب‌سازی برمی‌گردونه
@@ -600,8 +543,7 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	order := c.Query("order", "asc")
 
 	validSortFields := map[string]bool{
-		"value": true, "status_code": true, "content_length": true, "title": true, "created_at": true,
-	}
+		"value": true, "status_code": true, "content_length": true, "title": true, "created_at": true}
 	if !validSortFields[sortBy] {
 		sortBy = "value"
 	}
@@ -721,11 +663,7 @@ func GetTargetAssets(c *fiber.Ctx) error {
 	}
 
 	response := fiber.Map{
-		"status":      "success",
-		"data":        assetResponses,
-		"page_count":  len(assetResponses),
-		"total_count": totalCount,
-	}
+		"status": "success", "data": assetResponses, "page_count": len(assetResponses), "total_count": totalCount}
 
 	cache.SetCache(cacheKey, response)
 	c.Set("X-Cache", "MISS")
@@ -747,10 +685,7 @@ func StartProbing(c *fiber.Ctx) error {
 	}
 
 	database.DB.Model(target).Updates(map[string]interface{}{
-		"status":         "QUEUED",
-		"current_phase":  "QUEUED: STARTING PHASE 2...",
-		"stop_requested": false,
-	})
+		"status": "QUEUED", "current_phase": "QUEUED: STARTING PHASE 2...", "stop_requested": false})
 
 	taskPayload := fmt.Sprintf("PROBING:%d:%s", target.ID, target.RootDomain)
 	if err := redisq.Client.RPush(redisq.Ctx, redisq.QueueNameForUser(target.CreatedByUserID), taskPayload).Err(); err != nil {
@@ -759,9 +694,7 @@ func StartProbing(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"status":  "success",
-		"message": fmt.Sprintf("Phase 2 started for target: %s", target.Name),
-	})
+		"status": "success", "message": fmt.Sprintf("Phase 2 started for target: %s", target.Name)})
 }
 
 // DeleteTarget حذف کامل تارگت
@@ -803,16 +736,11 @@ func DeleteTarget(c *fiber.Ctx) error {
 
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"status":  "error",
-			"message": "Failed to delete target (DB Error)",
-			"details": err.Error(),
-		})
+			"status": "error", "message": "Failed to delete target (DB Error)", "details": err.Error()})
 	}
 
 	return c.JSON(fiber.Map{
-		"status":  "success",
-		"message": "Target and all associated data deleted successfully",
-	})
+		"status": "success", "message": "Target and all associated data deleted successfully"})
 }
 
 // StopScan درخواست توقف اسکن
@@ -861,8 +789,7 @@ func GetTargetURLs(c *fiber.Ctx) error {
 	order := c.Query("order", "desc")
 
 	validSortFields := map[string]bool{
-		"value": true, "source": true, "created_at": true,
-	}
+		"value": true, "source": true, "created_at": true}
 	if !validSortFields[sortBy] {
 		sortBy = "created_at"
 	}
@@ -903,19 +830,11 @@ func GetTargetURLs(c *fiber.Ctx) error {
 	response := make([]dto.FoundURLResponse, len(urls))
 	for i, u := range urls {
 		response[i] = dto.FoundURLResponse{
-			ID:        u.ID,
-			Value:     u.Value,
-			Source:    u.Source,
-			CreatedAt: u.CreatedAt,
-		}
+			ID: u.ID, Value: u.Value, Source: u.Source, CreatedAt: u.CreatedAt}
 	}
 
 	return c.JSON(fiber.Map{
-		"status":      "success",
-		"data":        response,
-		"total_count": totalCount,
-		"page":        (offset / limit) + 1,
-	})
+		"status": "success", "data": response, "total_count": totalCount, "page": (offset / limit) + 1})
 }
 
 // ... (Helper Functions DTO - اینا رو بذار همونطور که هستن بمونن یا اگه خواستی کپی کن از فایل قبلی)
@@ -939,29 +858,8 @@ func targetOwnerUsername(t models.Target) string {
 
 func toTargetResponse(t models.Target, assetCount int64) dto.TargetResponse {
 	return dto.TargetResponse{
-		OwnerUsername:    targetOwnerUsername(t),
-		CreatedByUserID:  t.CreatedByUserID,
-		ID:               t.ID,
-		Name:             t.Name,
-		RootDomain:       t.RootDomain,
-		Description:      t.Description,
-		InScope:          t.InScope,
-		CreatedAt:        t.CreatedAt,
-		AssetCount:       assetCount,
-		Frequency:        t.Frequency,
-		LastScanAt:       t.LastScanAt,
-		Status:           t.Status,
-		CurrentPhase:     t.CurrentPhase,
-		UseAlterx:        t.UseAlterx,
-		UseWaymore:       t.UseWaymore,
-		UsePortscan:      t.UsePortscan,
-		UseCero:          t.UseCero,
-		UseCrtsh:         t.UseCrtsh,
-		UsePuredns:       t.UsePuredns,
-		UseAbusedb:       t.UseAbusedb,
-		PurednsWordlists: parseJSONToInterface(t.PurednsWordlists),
-		ScanModules:      t.ScanModules,
-	}
+		OwnerUsername: targetOwnerUsername(t), CreatedByUserID: t.CreatedByUserID, ID: t.ID, Name: t.Name, RootDomain: t.RootDomain, Description: t.Description, InScope: t.InScope, CreatedAt: t.CreatedAt, AssetCount: assetCount, Frequency: t.Frequency, LastScanAt: t.LastScanAt, Status: t.Status, CurrentPhase: t.CurrentPhase, UseAlterx: t.UseAlterx, UseWaymore: t.UseWaymore, UsePortscan: t.UsePortscan, UseCero: t.UseCero, UseCrtsh: t.UseCrtsh, UsePuredns: t.UsePuredns, UseAbusedb: t.UseAbusedb,
+		UseAmass: t.UseAmass, PurednsWordlists: parseJSONToInterface(t.PurednsWordlists), ScanModules: t.ScanModules}
 }
 
 // parseJSONToInterface پارس کردن JSON string به interface{}
@@ -997,32 +895,7 @@ func toAssetResponse(a models.Asset) dto.AssetResponse {
 	}
 
 	return dto.AssetResponse{
-		ID:             a.ID,
-		Value:          a.Value,
-		Type:           a.Type,
-		IsNew:          a.IsNew,
-		IsLive:         a.IsLive,
-		CreatedAt:      a.CreatedAt,
-		FinalURL:       a.FinalURL,
-		StatusCode:     a.StatusCode,
-		Title:          a.Title,
-		ContentLength:  a.ContentLength,
-		HostIP:         a.HostIP,
-		DnsxIP:         a.DnsxIP,
-		WebServer:      a.WebServer,
-		CDNName:        a.CDNName,
-		Cdncheck:       a.Cdncheck,
-		CdncheckName:   a.CdncheckName,
-		Wafcheck:       a.Wafcheck,
-		WafcheckName:   a.WafcheckName,
-		Cloudcheck:     a.Cloudcheck,
-		CloudcheckName: a.CloudcheckName,
-		Technologies:   techs,
-		ResponseTime:   a.ResponseTimeMs,
-		OpenPorts:      openPorts,
-		RawHttpx:       rawHttpx,
-		Sources:        sources,
-	}
+		ID: a.ID, Value: a.Value, Type: a.Type, IsNew: a.IsNew, IsLive: a.IsLive, CreatedAt: a.CreatedAt, FinalURL: a.FinalURL, StatusCode: a.StatusCode, Title: a.Title, ContentLength: a.ContentLength, HostIP: a.HostIP, DnsxIP: a.DnsxIP, WebServer: a.WebServer, CDNName: a.CDNName, Cdncheck: a.Cdncheck, CdncheckName: a.CdncheckName, Wafcheck: a.Wafcheck, WafcheckName: a.WafcheckName, Cloudcheck: a.Cloudcheck, CloudcheckName: a.CloudcheckName, Technologies: techs, ResponseTime: a.ResponseTimeMs, OpenPorts: openPorts, RawHttpx: rawHttpx, Sources: sources}
 }
 
 // ExportTargetRequest درخواست Export تارگت‌ها
@@ -1060,33 +933,23 @@ func ExportTarget(c *fiber.Ctx) error {
 		err = scopedDB.Where("id IN ?", req.TargetIDs).Find(&targets).Error
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"status":  "error",
-				"message": "Failed to fetch targets",
-				"error":   err.Error(),
-			})
+				"status": "error", "message": "Failed to fetch targets", "error": err.Error()})
 		}
 		if len(targets) == 0 {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
-				"status":  "error",
-				"message": "No targets found",
-			})
+				"status": "error", "message": "No targets found"})
 		}
 		// اگر بخشی از IDها قابل دسترسی نبودند، به صورت 404 برگردون
 		if len(targets) != len(req.TargetIDs) {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
-				"status":  "error",
-				"message": "Some targets not found",
-			})
+				"status": "error", "message": "Some targets not found"})
 		}
 	} else {
 		// Export همه تارگت‌ها
 		err = scopedDB.Find(&targets).Error
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"status":  "error",
-				"message": "Failed to fetch targets",
-				"error":   err.Error(),
-			})
+				"status": "error", "message": "Failed to fetch targets", "error": err.Error()})
 		}
 	}
 
@@ -1107,26 +970,7 @@ func ExportTarget(c *fiber.Ctx) error {
 		assetItems := make([]dto.AssetExportItem, len(assets))
 		for j, a := range assets {
 			assetItems[j] = dto.AssetExportItem{
-				Value:          a.Value,
-				Type:           a.Type,
-				IsNew:          a.IsNew,
-				IsLive:         a.IsLive,
-				FinalURL:       a.FinalURL,
-				StatusCode:     a.StatusCode,
-				Title:          a.Title,
-				ContentLength:  a.ContentLength,
-				HostIP:         a.HostIP,
-				DnsxIP:         a.DnsxIP,
-				WebServer:      a.WebServer,
-				CDNName:        a.CDNName,
-				Technologies:   a.Technologies,
-				BodyHash:       a.BodyHash,
-				HeaderHash:     a.HeaderHash,
-				ResponseTimeMs: a.ResponseTimeMs,
-				RawHttpx:       a.RawHttpx,
-				OpenPorts:      a.OpenPorts,
-				CreatedAt:      a.CreatedAt.Format(time.RFC3339),
-			}
+				Value: a.Value, Type: a.Type, IsNew: a.IsNew, IsLive: a.IsLive, FinalURL: a.FinalURL, StatusCode: a.StatusCode, Title: a.Title, ContentLength: a.ContentLength, HostIP: a.HostIP, DnsxIP: a.DnsxIP, WebServer: a.WebServer, CDNName: a.CDNName, Technologies: a.Technologies, BodyHash: a.BodyHash, HeaderHash: a.HeaderHash, ResponseTimeMs: a.ResponseTimeMs, RawHttpx: a.RawHttpx, OpenPorts: a.OpenPorts, CreatedAt: a.CreatedAt.Format(time.RFC3339)}
 		}
 
 		// دریافت URLs
@@ -1135,10 +979,7 @@ func ExportTarget(c *fiber.Ctx) error {
 		urlItems := make([]dto.URLExportItem, len(urls))
 		for j, u := range urls {
 			urlItems[j] = dto.URLExportItem{
-				Value:     u.Value,
-				Source:    u.Source,
-				CreatedAt: u.CreatedAt.Format(time.RFC3339),
-			}
+				Value: u.Value, Source: u.Source, CreatedAt: u.CreatedAt.Format(time.RFC3339)}
 		}
 
 		var wordlists []string
@@ -1147,30 +988,12 @@ func ExportTarget(c *fiber.Ctx) error {
 		}
 
 		exportItems[i] = dto.TargetExportItem{
-			Name:             t.Name,
-			RootDomain:       t.RootDomain,
-			Description:      t.Description,
-			InScope:          t.InScope,
-			Frequency:        t.Frequency,
-			Modules:          modules,
-			UseAlterx:        t.UseAlterx,
-			UseWaymore:       t.UseWaymore,
-			UsePortscan:      t.UsePortscan,
-			UseCero:          t.UseCero,
-			UseCrtsh:         t.UseCrtsh,
-			UsePuredns:       t.UsePuredns,
-			UseAbusedb:       t.UseAbusedb,
-			PurednsWordlists: wordlists,
-			Assets:           assetItems,
-			URLs:             urlItems,
-		}
+			Name: t.Name, RootDomain: t.RootDomain, Description: t.Description, InScope: t.InScope, Frequency: t.Frequency, Modules: modules, UseAlterx: t.UseAlterx, UseWaymore: t.UseWaymore, UsePortscan: t.UsePortscan, UseCero: t.UseCero, UseCrtsh: t.UseCrtsh, UsePuredns: t.UsePuredns, UseAbusedb: t.UseAbusedb,
+			UseAmass: t.UseAmass, PurednsWordlists: wordlists, Assets: assetItems, URLs: urlItems}
 	}
 
 	exportData := dto.TargetExportData{
-		Version:    "1.0",
-		ExportDate: time.Now().Format(time.RFC3339),
-		Targets:    exportItems,
-	}
+		Version: "1.0", ExportDate: time.Now().Format(time.RFC3339), Targets: exportItems}
 
 	// تنظیم هدر برای دانلود فایل
 	c.Set("Content-Type", "application/json")
@@ -1190,19 +1013,14 @@ func ImportTarget(c *fiber.Ctx) error {
 	if err := c.BodyParser(req); err != nil {
 		log.Printf("❌ Import error - BodyParser failed: %v\n", err)
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"status":  "error",
-			"message": "Invalid request body",
-			"error":   err.Error(),
-		})
+			"status": "error", "message": "Invalid request body", "error": err.Error()})
 	}
 
 	// اعتبارسنجی نسخه فرمت
 	if req.Data.Version != "1.0" {
 		log.Printf("❌ Import error - Unsupported version: %s\n", req.Data.Version)
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"status":  "error",
-			"message": fmt.Sprintf("Unsupported export format version: %s (expected: 1.0)", req.Data.Version),
-		})
+			"status": "error", "message": fmt.Sprintf("Unsupported export format version: %s (expected: 1.0)", req.Data.Version)})
 	}
 
 	log.Printf("📥 Importing %d target(s)...\n", len(req.Data.Targets))
@@ -1249,23 +1067,8 @@ func ImportTarget(c *fiber.Ctx) error {
 
 		// ایجاد تارگت جدید
 		target := models.Target{
-			CreatedByUserID: uid,
-			Name:            item.Name,
-			RootDomain:      rootDomain,
-			Description:     item.Description,
-			InScope:         item.InScope,
-			Frequency:       item.Frequency,
-			ScanModules:     string(modulesJSON),
-			Status:          "READY", // تارگت‌های import شده به صورت READY هستند (نه SCANNING)
-			CurrentPhase:    "IDLE",
-			UseAlterx:       item.UseAlterx,
-			UseWaymore:      item.UseWaymore,
-			UsePortscan:     item.UsePortscan,
-			UseCero:         item.UseCero,
-			UseCrtsh:        item.UseCrtsh,
-			UsePuredns:      item.UsePuredns,
-			UseAbusedb:      item.UseAbusedb,
-		}
+			CreatedByUserID: uid, Name: item.Name, RootDomain: rootDomain, Description: item.Description, InScope: item.InScope, Frequency: item.Frequency, ScanModules: string(modulesJSON), Status: "READY", // تارگت‌های import شده به صورت READY هستند (نه SCANNING)
+			CurrentPhase: "IDLE", UseAlterx: item.UseAlterx, UseWaymore: item.UseWaymore, UsePortscan: item.UsePortscan, UseCero: item.UseCero, UseCrtsh: item.UseCrtsh, UsePuredns: item.UsePuredns, UseAbusedb: item.UseAbusedb, UseAmass: item.UseAmass}
 		// تنظیم PurednsWordlists
 		if len(item.PurednsWordlists) > 0 {
 			wordlistsJSON, _ := json.Marshal(item.PurednsWordlists)
@@ -1300,38 +1103,14 @@ func ImportTarget(c *fiber.Ctx) error {
 				}
 
 				assets = append(assets, models.Asset{
-					TargetID:       target.ID,
-					Value:          aItem.Value,
-					Type:           aItem.Type,
-					IsNew:          aItem.IsNew,
-					IsLive:         aItem.IsLive,
-					FinalURL:       aItem.FinalURL,
-					StatusCode:     aItem.StatusCode,
-					Title:          aItem.Title,
-					ContentLength:  aItem.ContentLength,
-					HostIP:         aItem.HostIP,
-					DnsxIP:         aItem.DnsxIP,
-					WebServer:      aItem.WebServer,
-					CDNName:        aItem.CDNName,
-					Technologies:   aItem.Technologies,
-					BodyHash:       aItem.BodyHash,
-					HeaderHash:     aItem.HeaderHash,
-					ResponseTimeMs: aItem.ResponseTimeMs,
-					RawHttpx:       aItem.RawHttpx,
-					OpenPorts:      aItem.OpenPorts,
-					CreatedAt:      createdAt,
-				})
+					TargetID: target.ID, Value: aItem.Value, Type: aItem.Type, IsNew: aItem.IsNew, IsLive: aItem.IsLive, FinalURL: aItem.FinalURL, StatusCode: aItem.StatusCode, Title: aItem.Title, ContentLength: aItem.ContentLength, HostIP: aItem.HostIP, DnsxIP: aItem.DnsxIP, WebServer: aItem.WebServer, CDNName: aItem.CDNName, Technologies: aItem.Technologies, BodyHash: aItem.BodyHash, HeaderHash: aItem.HeaderHash, ResponseTimeMs: aItem.ResponseTimeMs, RawHttpx: aItem.RawHttpx, OpenPorts: aItem.OpenPorts, CreatedAt: createdAt})
 			}
 			// استفاده از CreateInBatches با ON CONFLICT برای جلوگیری از duplicate
 			if len(assets) > 0 {
 				// استفاده از ON CONFLICT DO NOTHING برای skip کردن duplicate ها
 				if err := database.DB.Clauses(clause.OnConflict{
 					Columns: []clause.Column{
-						{Name: "target_id"},
-						{Name: "value"},
-					},
-					DoNothing: true,
-				}).CreateInBatches(assets, 500).Error; err != nil {
+						{Name: "target_id"}, {Name: "value"}}, DoNothing: true}).CreateInBatches(assets, 500).Error; err != nil {
 					log.Printf("⚠️ Warning: Failed to import some assets for target '%s': %v\n", rootDomain, err)
 					errors = append(errors, fmt.Sprintf("Failed to import assets for '%s': %v", rootDomain, err))
 				} else {
@@ -1357,11 +1136,7 @@ func ImportTarget(c *fiber.Ctx) error {
 				}
 
 				urls = append(urls, models.FoundURL{
-					TargetID:  target.ID,
-					Value:     uItem.Value,
-					Source:    uItem.Source,
-					CreatedAt: createdAt,
-				})
+					TargetID: target.ID, Value: uItem.Value, Source: uItem.Source, CreatedAt: createdAt})
 			}
 			// استفاده از CreateInBatches با ON CONFLICT برای جلوگیری از duplicate
 			if len(urls) > 0 {
@@ -1403,14 +1178,8 @@ func ImportTarget(c *fiber.Ctx) error {
 	cache.ClearCache()
 
 	return c.JSON(fiber.Map{
-		"status":  "success",
-		"message": fmt.Sprintf("Import completed: %d created, %d skipped, %d errors", len(created), len(skipped), len(errors)),
-		"data": fiber.Map{
-			"created": created,
-			"skipped": skipped,
-			"errors":  errors,
-		},
-	})
+		"status": "success", "message": fmt.Sprintf("Import completed: %d created, %d skipped, %d errors", len(created), len(skipped), len(errors)), "data": fiber.Map{
+			"created": created, "skipped": skipped, "errors": errors}})
 }
 
 // ExportTargetIPs هندلر Export تمام IPهای منحصر به فرد یک تارگت به صورت فایل txt
@@ -1436,10 +1205,7 @@ func ExportTargetIPs(c *fiber.Ctx) error {
 		Where("cdncheck = ?", false).
 		Find(&assets).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"status":  "error",
-			"message": "Failed to fetch assets",
-			"error":   err.Error(),
-		})
+			"status": "error", "message": "Failed to fetch assets", "error": err.Error()})
 	}
 
 	// جمع‌آوری تمام IPهای منحصر به فرد
@@ -1500,9 +1266,7 @@ func GetWordlists(c *fiber.Ctx) error {
 
 	// وردلیست‌های پیش‌فرض در /wordlists
 	defaultWordlists := []string{
-		"/wordlists/common.txt",
-		"/wordlists/params.txt",
-	}
+		"/wordlists/common.txt", "/wordlists/params.txt"}
 
 	// وردلیست‌های سفارشی در /wordlists/custom
 	customWordlistsDir := "/wordlists/custom"
@@ -1511,10 +1275,7 @@ func GetWordlists(c *fiber.Ctx) error {
 	for _, wl := range defaultWordlists {
 		if _, err := os.Stat(wl); err == nil {
 			wordlists = append(wordlists, map[string]string{
-				"path": wl,
-				"name": filepath.Base(wl),
-				"type": "default",
-			})
+				"path": wl, "name": filepath.Base(wl), "type": "default"})
 		}
 	}
 
@@ -1524,18 +1285,13 @@ func GetWordlists(c *fiber.Ctx) error {
 			if !entry.IsDir() {
 				fullPath := filepath.Join(customWordlistsDir, entry.Name())
 				wordlists = append(wordlists, map[string]string{
-					"path": fullPath,
-					"name": entry.Name(),
-					"type": "custom",
-				})
+					"path": fullPath, "name": entry.Name(), "type": "custom"})
 			}
 		}
 	}
 
 	return c.JSON(fiber.Map{
-		"status": "success",
-		"data":   wordlists,
-	})
+		"status": "success", "data": wordlists})
 }
 
 // DownloadTargetAssets downloads the filtered assets as a text file
@@ -1660,8 +1416,7 @@ WHERE jsonb_typeof(e.value) = 'array'
 	sortBy := c.Query("sort_by", "value")
 	order := c.Query("order", "asc")
 	validSortFields := map[string]bool{
-		"value": true, "status_code": true, "content_length": true, "title": true, "created_at": true,
-	}
+		"value": true, "status_code": true, "content_length": true, "title": true, "created_at": true}
 	if !validSortFields[sortBy] {
 		sortBy = "value"
 	}
@@ -1721,8 +1476,7 @@ func DownloadTargetURLs(c *fiber.Ctx) error {
 	sortBy := c.Query("sort_by", "created_at")
 	order := c.Query("order", "desc")
 	validSortFields := map[string]bool{
-		"value": true, "source": true, "created_at": true,
-	}
+		"value": true, "source": true, "created_at": true}
 	if !validSortFields[sortBy] {
 		sortBy = "created_at"
 	}

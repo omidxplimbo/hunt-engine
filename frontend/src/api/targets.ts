@@ -2,6 +2,8 @@ import { apiClient } from './client';
 import type { Target, Asset, TargetDetails, TargetResponse } from '../types';
 import type { FoundURLResponse } from '../types/url';
 
+
+
 // --- Types ---
 
 export interface CreateTargetPayload {
@@ -16,7 +18,7 @@ export interface CreateTargetPayload {
   use_cero: boolean;
   use_crtsh: boolean;
   use_puredns: boolean;
-  use_abusedb: boolean;
+  use_abusedb: boolean; use_amass: boolean;
   puredns_wordlists: string[];
 }
 
@@ -32,7 +34,7 @@ export interface UpdateTargetPayload {
     use_cero?: boolean;
     use_crtsh?: boolean;
     use_puredns?: boolean;
-    use_abusedb?: boolean;
+    use_abusedb?: boolean; use_amass?: boolean;
     puredns_wordlists?: string[];
     in_scope?: boolean;
 }

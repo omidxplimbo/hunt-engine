@@ -21,6 +21,7 @@ func Collect(ctx Context) ([]string, map[string][]string, error) {
 		target.UseCero = false
 		target.UseCrtsh = false
 		target.UseAbusedb = false
+		target.UseAmass = false
 	}
 
 	subfinderProviderConfig, err := legacydiscovery.WriteSubfinderProviderConfigFile(ctx.TargetID, target.CreatedByUserID)
@@ -92,6 +93,19 @@ func Collect(ctx Context) ([]string, map[string][]string, error) {
 		}()
 	} else {
 		log.Printf("⏩ Skipping AbuseDB for %s (Disabled in settings)\n", ctx.Domain)
+	}
+
+	if target.UseAmass {
+		wg.Add(1)
+		log.Printf(" Starting AMASS passive enumeration for %s...\\n", ctx.Domain)
+		go func() {
+			defer wg.Done()
+			amassResults := RunAmass(ctx)
+			log.Printf("✅ AMASS found %d domains for %s\\n", len(amassResults), ctx.Domain)
+			emit("amass", amassResults)
+		}()
+	} else {
+		log.Printf("⏩ Skipping AMASS for %s (Disabled in settings)\\n", ctx.Domain)
 	}
 
 	go func() {

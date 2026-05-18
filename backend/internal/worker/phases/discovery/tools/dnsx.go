@@ -8,11 +8,13 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/utils"
 )
 
 const DefaultDNSXBatchSize = 5000
+const DefaultDNSXThreads = 50
 
 type DNSXResult struct {
 	Host string   `json:"host"`
@@ -24,42 +26,49 @@ func RunDNSX(ctx Context, inputFile, outputFile string) (map[string][]string, er
 		return nil, err
 	}
 
-	results := make(map[string][]string)
-
-	domains, err := utils.ReadSliceFromFile(inputFile)
+	file, err := os.Open(inputFile)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string][]string{}, nil
+		}
 		return nil, err
 	}
-	if len(domains) == 0 {
-		return results, nil
-	}
+	defer file.Close()
 
+	results := make(map[string][]string)
 	batchSize := dnsxBatchSize()
-	totalBatches := (len(domains) + batchSize - 1) / batchSize
+	threads := dnsxThreads()
 	baseDir := filepath.Dir(outputFile)
 
-	log.Printf(" Starting DNSX validation for %d domains in %d batches (batch size: %d)\n", len(domains), totalBatches, batchSize)
+	log.Printf(" Starting streaming DNSX validation from %s (batch size: %d, threads: %d)\n", inputFile, batchSize, threads)
 
-	for start := 0; start < len(domains); start += batchSize {
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+
+	batch := make([]string, 0, batchSize)
+	batchNo := 0
+	totalCandidates := 0
+
+	flushBatch := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+
 		if ctx.stopped() {
-			return nil, fmt.Errorf("process killed by user request")
+			return fmt.Errorf("process killed by user request")
 		}
 
-		end := start + batchSize
-		if end > len(domains) {
-			end = len(domains)
-		}
-
-		batchNo := (start / batchSize) + 1
+		batchNo++
 		batchInputFile := filepath.Join(baseDir, fmt.Sprintf("dnsx_batch_%06d_input.txt", batchNo))
 		batchOutputFile := filepath.Join(baseDir, fmt.Sprintf("dnsx_batch_%06d_output.json", batchNo))
 
-		if err := utils.WriteSliceToFile(batchInputFile, domains[start:end]); err != nil {
-			return nil, err
+		if err := utils.WriteSliceToFile(batchInputFile, batch); err != nil {
+			return err
 		}
 		_ = os.Remove(batchOutputFile)
 
-		log.Printf(" DNSX batch %d/%d: validating %d domains (%d/%d)\n", batchNo, totalBatches, end-start, end, len(domains))
+		totalCandidates += len(batch)
+		log.Printf(" DNSX batch %d: validating %d domains (processed candidates: %d)\n", batchNo, len(batch), totalCandidates)
 
 		_, err := ctx.RunCommand(
 			ctx.TargetID,
@@ -70,24 +79,48 @@ func RunDNSX(ctx Context, inputFile, outputFile string) (map[string][]string, er
 			"-silent",
 			"-a",
 			"-resp",
-			"-threads", "50",
+			"-threads", strconv.Itoa(threads),
 		)
 
 		_ = os.Remove(batchInputFile)
 		if err != nil {
 			_ = os.Remove(batchOutputFile)
-			return nil, err
+			return err
 		}
 
 		if err := appendDNSXResults(results, batchOutputFile); err != nil {
 			_ = os.Remove(batchOutputFile)
-			return nil, err
+			return err
 		}
 
 		_ = os.Remove(batchOutputFile)
+		batch = batch[:0]
+		return nil
 	}
 
-	log.Printf("✅ DNSX validation completed: %d live domains resolved from %d candidates\n", len(results), len(domains))
+	for scanner.Scan() {
+		candidate := strings.TrimSpace(scanner.Text())
+		if candidate == "" {
+			continue
+		}
+
+		batch = append(batch, candidate)
+		if len(batch) >= batchSize {
+			if err := flushBatch(); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	if err := flushBatch(); err != nil {
+		return nil, err
+	}
+
+	log.Printf("✅ DNSX validation completed: %d live domains resolved from %d candidates\n", len(results), totalCandidates)
 	return results, nil
 }
 
@@ -126,4 +159,18 @@ func dnsxBatchSize() int {
 	}
 
 	return size
+}
+
+func dnsxThreads() int {
+	envStr := os.Getenv("DNSX_THREADS")
+	if envStr == "" {
+		return DefaultDNSXThreads
+	}
+
+	threads, err := strconv.Atoi(envStr)
+	if err != nil || threads <= 0 {
+		return DefaultDNSXThreads
+	}
+
+	return threads
 }
