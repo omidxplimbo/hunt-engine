@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bug, CheckCircle2, Filter, Loader2, ShieldAlert } from 'lucide-react';
+import { Activity, Bug, CheckCircle2, Clock3, Loader2, Search, ShieldAlert, XCircle } from 'lucide-react';
 import clsx from 'clsx';
 
 import { getTargetFindings, updateFindingStatus } from '../api/findings';
@@ -10,13 +10,16 @@ interface Props {
   targetId: number;
 }
 
+type StatusFilter = FindingStatus | 'all';
+type SeverityFilter = FindingSeverity | 'all';
+
 const severityOrder: FindingSeverity[] = ['critical', 'high', 'medium', 'low', 'info'];
-const statusOptions: Array<FindingStatus | 'all'> = ['all', 'open', 'accepted', 'false_positive', 'fixed'];
-const severityOptions: Array<FindingSeverity | 'all'> = ['all', ...severityOrder];
+const statusOptions: StatusFilter[] = ['all', 'open', 'accepted', 'false_positive', 'fixed'];
+const severityOptions: SeverityFilter[] = ['all', ...severityOrder];
 
 const severityClass: Record<FindingSeverity, string> = {
-  critical: 'border-red-500 text-red-400 bg-red-950/40',
-  high: 'border-orange-500 text-orange-400 bg-orange-950/40',
+  critical: 'border-red-500 text-red-300 bg-red-950/40',
+  high: 'border-orange-500 text-orange-300 bg-orange-950/40',
   medium: 'border-yellow-500 text-yellow-300 bg-yellow-950/30',
   low: 'border-blue-500 text-blue-300 bg-blue-950/30',
   info: 'border-hack-border text-hack-dim bg-black/30',
@@ -29,17 +32,59 @@ const statusClass: Record<FindingStatus, string> = {
   fixed: 'border-hack-primary/50 text-hack-primary bg-hack-primary/10',
 };
 
-const label = (value: string) => value.replace(/_/g, ' ').toUpperCase();
+const sourceClass: Record<string, string> = {
+  builtin: 'border-hack-primary/40 text-hack-primary bg-hack-primary/10',
+  'builtin-url': 'border-cyan-400/40 text-cyan-300 bg-cyan-950/20',
+  nuclei: 'border-red-400/50 text-red-300 bg-red-950/20',
+  takeover: 'border-orange-400/50 text-orange-300 bg-orange-950/20',
+};
+
+const label = (value: string) => value.replace(/_/g, ' ').replace(/-/g, ' ').toUpperCase();
+
+const formatDate = (value?: string) => {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return date.toLocaleString();
+};
+
+const SummaryCard = ({
+  title,
+  value,
+  icon: Icon,
+  className,
+}: {
+  title: string;
+  value: number;
+  icon: typeof ShieldAlert;
+  className?: string;
+}) => (
+  <div className={clsx('border bg-black/20 p-4', className || 'border-hack-border')}>
+    <div className="flex items-center justify-between gap-3">
+      <div>
+        <p className="text-[10px] uppercase tracking-[0.2em] text-hack-dim">{title}</p>
+        <p className="mt-2 font-mono text-2xl font-bold text-white">{value}</p>
+      </div>
+      <Icon className="h-6 w-6 text-hack-primary" />
+    </div>
+  </div>
+);
 
 export const FindingsPanel = ({ targetId }: Props) => {
   const queryClient = useQueryClient();
-  const [status, setStatus] = useState<FindingStatus | 'all'>('all');
-  const [severity, setSeverity] = useState<FindingSeverity | 'all'>('all');
+  const [status, setStatus] = useState<StatusFilter>('all');
+  const [severity, setSeverity] = useState<SeverityFilter>('all');
   const [search, setSearch] = useState('');
+
+  const allFindingsQuery = useQuery({
+    queryKey: ['target-findings-summary', targetId],
+    queryFn: () => getTargetFindings(targetId, { limit: 500 }),
+    enabled: Boolean(targetId),
+  });
 
   const findingsQuery = useQuery({
     queryKey: ['target-findings', targetId, status, severity, search],
-    queryFn: () => getTargetFindings(targetId, { status, severity, search, limit: 100 }),
+    queryFn: () => getTargetFindings(targetId, { status, severity, search, limit: 200 }),
     enabled: Boolean(targetId),
   });
 
@@ -48,64 +93,63 @@ export const FindingsPanel = ({ targetId }: Props) => {
       updateFindingStatus(findingId, nextStatus),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['target-findings', targetId] });
+      queryClient.invalidateQueries({ queryKey: ['target-findings-summary', targetId] });
     },
   });
 
   const findings = findingsQuery.data?.data || [];
+  const allFindings = allFindingsQuery.data?.data || [];
 
-  const stats = useMemo(() => {
-    const result: Record<FindingSeverity, number> = {
-      critical: 0,
-      high: 0,
-      medium: 0,
-      low: 0,
-      info: 0,
+  const summary = useMemo(() => {
+    const result = {
+      total: allFindings.length,
+      open: 0,
+      highRisk: 0,
+      fixed: 0,
     };
 
-    for (const finding of findings) {
-      if (finding.severity in result) result[finding.severity] += 1;
+    for (const finding of allFindings) {
+      if (finding.status === 'open') result.open += 1;
+      if (finding.status === 'fixed') result.fixed += 1;
+      if (finding.severity === 'critical' || finding.severity === 'high') result.highRisk += 1;
     }
 
     return result;
-  }, [findings]);
+  }, [allFindings]);
 
   return (
-    <div className="space-y-4">
-      <div className="grid gap-3 md:grid-cols-5">
-        {severityOrder.map((sev) => (
-          <div key={sev} className={clsx('border p-3', severityClass[sev])}>
-            <div className="text-[10px] font-bold uppercase tracking-wider opacity-80">{sev}</div>
-            <div className="mt-1 font-mono text-xl font-bold">{stats[sev]}</div>
-          </div>
-        ))}
+    <div className="space-y-5">
+      <div className="grid gap-3 md:grid-cols-4">
+        <SummaryCard title="Total" value={summary.total} icon={Bug} />
+        <SummaryCard title="Open" value={summary.open} icon={ShieldAlert} className="border-red-500/40" />
+        <SummaryCard title="High+" value={summary.highRisk} icon={Activity} className="border-orange-500/40" />
+        <SummaryCard title="Fixed" value={summary.fixed} icon={CheckCircle2} className="border-hack-primary/40" />
       </div>
 
-      <div className="flex flex-col gap-3 border border-hack-border bg-black/20 p-3 md:flex-row md:items-center md:justify-between">
-        <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-hack-dim">
-          <Filter className="h-4 w-4" /> Findings Filters
+      <div className="border border-hack-border bg-black/20 p-4">
+        <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.2em] text-hack-primary">
+          <Search className="h-4 w-4" />
+          Findings Filters
         </div>
-
-        <div className="flex flex-wrap gap-2">
+        <div className="grid gap-3 md:grid-cols-[1fr_180px_180px]">
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search findings..."
+            placeholder="Search title, evidence, category..."
             className="border border-hack-border bg-black/30 px-3 py-2 font-mono text-xs text-white outline-none focus:border-hack-primary"
           />
-
           <select
             value={severity}
-            onChange={(event) => setSeverity(event.target.value as FindingSeverity | 'all')}
+            onChange={(event) => setSeverity(event.target.value as SeverityFilter)}
             className="border border-hack-border bg-black/30 px-3 py-2 font-mono text-xs text-white outline-none focus:border-hack-primary"
           >
             {severityOptions.map((option) => (
               <option key={option} value={option}>{label(option)}</option>
             ))}
           </select>
-
           <select
             value={status}
-            onChange={(event) => setStatus(event.target.value as FindingStatus | 'all')}
+            onChange={(event) => setStatus(event.target.value as StatusFilter)}
             className="border border-hack-border bg-black/30 px-3 py-2 font-mono text-xs text-white outline-none focus:border-hack-primary"
           >
             {statusOptions.map((option) => (
@@ -116,79 +160,100 @@ export const FindingsPanel = ({ targetId }: Props) => {
       </div>
 
       {findingsQuery.isLoading && (
-        <div className="flex items-center justify-center border border-hack-border bg-black/20 p-10 text-hack-dim">
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading findings...
+        <div className="flex items-center gap-2 border border-hack-border bg-black/20 p-4 text-sm text-hack-dim">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading findings...
         </div>
       )}
 
       {!findingsQuery.isLoading && findings.length === 0 && (
-        <div className="border border-dashed border-hack-border bg-black/20 p-10 text-center text-hack-dim">
-          <ShieldAlert className="mx-auto mb-3 h-8 w-8 opacity-60" />
-          No findings yet. Future detection modules will populate this tab.
+        <div className="border border-hack-border bg-black/20 p-8 text-center">
+          <ShieldAlert className="mx-auto mb-3 h-8 w-8 text-hack-dim" />
+          <p className="font-mono text-sm text-white">No findings matched the current filters.</p>
+          <p className="mt-2 text-xs text-hack-dim">
+            Built-in detectors run after probing and crawling. Future modules such as Nuclei and takeover checks will populate this tab too.
+          </p>
         </div>
       )}
 
       <div className="space-y-3">
         {findings.map((finding: Finding) => (
-          <div key={finding.id} className="border border-hack-border bg-black/20 p-4">
-            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-              <div className="min-w-0 space-y-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className={clsx('border px-2 py-1 text-[10px] font-bold uppercase tracking-wider', severityClass[finding.severity])}>
-                    {finding.severity}
-                  </span>
-                  <span className={clsx('border px-2 py-1 text-[10px] font-bold uppercase tracking-wider', statusClass[finding.status])}>
-                    {label(finding.status)}
-                  </span>
-                  {finding.source_tool && (
-                    <span className="border border-hack-border bg-black/30 px-2 py-1 text-[10px] uppercase tracking-wider text-hack-dim">
-                      {finding.source_tool}
-                    </span>
-                  )}
-                  {finding.category && (
-                    <span className="border border-hack-border bg-black/30 px-2 py-1 text-[10px] uppercase tracking-wider text-hack-dim">
-                      {finding.category}
-                    </span>
-                  )}
+          <article key={finding.id} className="border border-hack-border bg-black/20 p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={clsx('border px-2 py-1 font-mono text-[10px] uppercase tracking-wider', severityClass[finding.severity])}>
+                {finding.severity}
+              </span>
+              <span className={clsx('border px-2 py-1 font-mono text-[10px] uppercase tracking-wider', statusClass[finding.status])}>
+                {label(finding.status)}
+              </span>
+              {finding.source_tool && (
+                <span className={clsx('border px-2 py-1 font-mono text-[10px] uppercase tracking-wider', sourceClass[finding.source_tool] || 'border-hack-border text-hack-dim bg-black/30')}>
+                  {finding.source_tool}
+                </span>
+              )}
+              {finding.category && (
+                <span className="border border-hack-border bg-black/30 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-hack-dim">
+                  {finding.category}
+                </span>
+              )}
+            </div>
+
+            <h3 className="mt-3 font-mono text-base font-bold text-white">{finding.title}</h3>
+
+            {finding.description && (
+              <p className="mt-2 text-sm leading-6 text-hack-dim">{finding.description}</p>
+            )}
+
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <div className="border border-hack-border bg-black/30 p-3">
+                <div className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-hack-primary">
+                  <Bug className="h-3.5 w-3.5" />
+                  Evidence
                 </div>
-
-                <h3 className="flex items-center gap-2 font-mono text-sm font-bold text-white">
-                  <Bug className="h-4 w-4 text-hack-primary" />
-                  {finding.title}
-                </h3>
-
-                {finding.description && (
-                  <p className="text-sm leading-6 text-hack-dim">{finding.description}</p>
-                )}
-
-                {finding.evidence && (
-                  <pre className="max-h-40 overflow-auto border border-hack-border bg-black/40 p-3 text-xs text-hack-dim">
-                    {finding.evidence}
-                  </pre>
-                )}
-
-                {finding.recommendation && (
-                  <p className="text-xs text-hack-dim">
-                    <span className="text-hack-primary">Recommendation:</span> {finding.recommendation}
-                  </p>
-                )}
+                <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-hack-dim">
+                  {finding.evidence || 'No evidence recorded.'}
+                </pre>
               </div>
 
-              <div className="flex shrink-0 flex-wrap gap-2">
+              <div className="border border-hack-border bg-black/30 p-3">
+                <div className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-hack-primary">
+                  <ShieldAlert className="h-3.5 w-3.5" />
+                  Recommendation
+                </div>
+                <p className="text-xs leading-5 text-hack-dim">
+                  {finding.recommendation || 'No recommendation recorded.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-hack-border pt-3">
+              <div className="flex flex-wrap items-center gap-3 text-[10px] uppercase tracking-wider text-hack-dim">
+                <span className="flex items-center gap-1"><Clock3 className="h-3 w-3" /> First seen: {formatDate(finding.first_seen)}</span>
+                <span>Last seen: {formatDate(finding.last_seen)}</span>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
                 {(['open', 'accepted', 'false_positive', 'fixed'] as FindingStatus[]).map((nextStatus) => (
                   <button
                     key={nextStatus}
+                    type="button"
                     disabled={finding.status === nextStatus || updateStatusMutation.isPending}
                     onClick={() => updateStatusMutation.mutate({ findingId: finding.id, nextStatus })}
-                    className="border border-hack-border px-2 py-1 text-[10px] uppercase tracking-wider text-hack-dim hover:border-hack-primary hover:text-hack-primary disabled:opacity-40"
+                    className={clsx(
+                      'border px-2 py-1 text-[10px] uppercase tracking-wider transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+                      finding.status === nextStatus
+                        ? statusClass[nextStatus]
+                        : 'border-hack-border text-hack-dim hover:border-hack-primary hover:text-hack-primary'
+                    )}
                   >
                     {nextStatus === 'fixed' && <CheckCircle2 className="mr-1 inline h-3 w-3" />}
+                    {nextStatus === 'false_positive' && <XCircle className="mr-1 inline h-3 w-3" />}
                     {label(nextStatus)}
                   </button>
                 ))}
               </div>
             </div>
-          </div>
+          </article>
         ))}
       </div>
     </div>
