@@ -70,8 +70,8 @@ export const FindingsPanel = ({ targetId }: Props) => {
   });
 
   const updateStatusMutation = useMutation({
-    mutationFn: ({ findingId, nextStatus }: { findingId: number; nextStatus: FindingStatus }) =>
-      updateFindingStatus(findingId, nextStatus),
+    mutationFn: ({ findingId, nextStatus, triageNote }: { findingId: number; nextStatus: FindingStatus; triageNote?: string }) =>
+      updateFindingStatus(findingId, nextStatus, triageNote || ''),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['target-findings', targetId] });
       queryClient.invalidateQueries({ queryKey: ['target-findings-stats', targetId] });
@@ -253,7 +253,10 @@ export const FindingsPanel = ({ targetId }: Props) => {
                       key={nextStatus}
                       type="button"
                       disabled={finding.status === nextStatus || updateStatusMutation.isPending}
-                      onClick={() => updateStatusMutation.mutate({ findingId: finding.id, nextStatus })}
+                      onClick={() => {
+                        const triageNote = window.prompt(`Optional triage note for ${label(nextStatus)}:`, finding.triage_note || '') || '';
+                        updateStatusMutation.mutate({ findingId: finding.id, nextStatus, triageNote });
+                      }}
                       className="border border-hack-border px-2 py-1 text-[10px] uppercase tracking-wider text-hack-dim hover:border-hack-primary hover:text-hack-primary disabled:opacity-40"
                     >
                       {nextStatus === 'fixed' && <CheckCircle2 className="mr-1 inline h-3 w-3" />}

@@ -294,6 +294,7 @@ func GetTargetFindings(c *fiber.Ctx) error {
 // UpdateFindingStatus updates triage status for a finding after checking target ownership.
 func UpdateFindingStatus(c *fiber.Ctx) error {
 	id := c.Params("id")
+
 	var findingID uint
 	_, _ = fmt.Sscanf(id, "%d", &findingID)
 	if findingID == 0 {
@@ -319,11 +320,30 @@ func UpdateFindingStatus(c *fiber.Ctx) error {
 		return err
 	}
 
-	if err := database.DB.Model(&finding).Update("status", status).Error; err != nil {
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	triageNote := strings.TrimSpace(req.TriageNote)
+
+	updates := map[string]interface{}{
+		"status":             status,
+		"triage_note":        triageNote,
+		"triaged_at":         &now,
+		"triaged_by_user_id": &uid,
+	}
+
+	if err := database.DB.Model(&finding).Updates(updates).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
 	}
 
 	finding.Status = status
+	finding.TriageNote = triageNote
+	finding.TriagedAt = &now
+	finding.TriagedByUserID = &uid
+
 	return c.JSON(fiber.Map{"status": "success", "message": "Finding status updated", "data": toFindingResponse(finding)})
 }
 

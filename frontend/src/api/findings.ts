@@ -52,10 +52,18 @@ export const getFindings = async (filters?: FindingFilters) => {
   return response.data;
 };
 
-export const updateFindingStatus = async (findingId: number, status: FindingStatus) => {
-  const response = await apiClient.patch<{ status: string; data: Finding }>(`/findings/${findingId}/status`, {
-    status,
-  });
+export const updateFindingStatus = async (
+  findingId: number,
+  status: FindingStatus,
+  triageNote = '',
+) => {
+  const response = await apiClient.patch<{ status: string; data: Finding }>(
+    `/findings/${findingId}/status`,
+    {
+      status,
+      triage_note: triageNote,
+    },
+  );
 
   return response.data;
 };

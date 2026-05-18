@@ -14,6 +14,9 @@ export interface Finding {
   evidence?: string;
   recommendation?: string;
   status: FindingStatus;
+  triage_note?: string;
+  triaged_at?: string | null;
+  triaged_by_user_id?: number | null;
   fingerprint?: string;
   first_seen?: string;
   last_seen?: string;

@@ -40,14 +40,17 @@ type Finding struct {
 	URLID *uint     `gorm:"index" json:"url_id"`
 	URL   *FoundURL `gorm:"foreignKey:URLID" json:"-"`
 
-	Title          string `gorm:"size:255;not null;index" json:"title"`
-	Description    string `gorm:"type:text" json:"description"`
-	Severity       string `gorm:"size:20;not null;default:'info';index" json:"severity"`
-	Category       string `gorm:"size:100;index" json:"category"`
-	SourceTool     string `gorm:"size:100;index" json:"source_tool"`
-	Evidence       string `gorm:"type:text" json:"evidence"`
-	Recommendation string `gorm:"type:text" json:"recommendation"`
-	Status         string `gorm:"size:30;not null;default:'open';index" json:"status"`
+	Title           string     `gorm:"size:255;not null;index" json:"title"`
+	Description     string     `gorm:"type:text" json:"description"`
+	Severity        string     `gorm:"size:20;not null;default:'info';index" json:"severity"`
+	Category        string     `gorm:"size:100;index" json:"category"`
+	SourceTool      string     `gorm:"size:100;index" json:"source_tool"`
+	Evidence        string     `gorm:"type:text" json:"evidence"`
+	Recommendation  string     `gorm:"type:text" json:"recommendation"`
+	Status          string     `gorm:"size:30;not null;default:'open';index" json:"status"`
+	TriageNote      string     `gorm:"type:text" json:"triage_note"`
+	TriagedAt       *time.Time `gorm:"index" json:"triaged_at"`
+	TriagedByUserID *uint      `gorm:"index" json:"triaged_by_user_id"`
 
 	// Fingerprint is used by later generators to de-duplicate findings across scans.
 	// It is indexed but not unique yet because existing/manual records can be created
