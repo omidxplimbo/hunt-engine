@@ -3,8 +3,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bug, CheckCircle2, Filter, Loader2, ShieldAlert, TrendingUp } from 'lucide-react';
 import clsx from 'clsx';
 
+
+
 import { getTargetFindingStats, getTargetFindings, updateFindingStatus } from '../api/findings';
-import type { Finding, FindingSeverity, FindingStatus } from '../types/finding';
+import type { Finding, FindingSeverity, FindingStats, FindingStatus } from '../types/finding';
 
 interface Props {
   targetId: number;
@@ -60,7 +62,7 @@ export const FindingsPanel = ({ targetId }: Props) => {
   });
 
   const findings = findingsQuery.data?.data || [];
-  const stats = statsQuery.data?.data;
+  const stats = statsQuery.data as FindingStats | undefined;
   const highPlus = countValue(stats?.by_severity?.critical) + countValue(stats?.by_severity?.high);
 
   const summaryCards = [
