@@ -35,6 +35,8 @@ func RunPureDNS(ctx Context, rootDomain string, wordlists []string) (map[string]
 	}
 
 	combinedWordlistFile := filepath.Join(tempDir, "puredns_combined_wordlist.txt")
+	ctx.updatePhase("PHASE 1: PUREDNS PREPARING WORDLIST")
+	ctx.heartbeat()
 	allWords := readPureDNSWordlists(wordlists)
 	if len(allWords) == 0 {
 		log.Printf("⚠️ No words found in wordlists, skipping puredns\n")
@@ -45,6 +47,8 @@ func RunPureDNS(ctx Context, rootDomain string, wordlists []string) (map[string]
 		return nil, fmt.Errorf("failed to write combined wordlist: %v", err)
 	}
 
+	ctx.updatePhase("PHASE 1: PUREDNS BRUTEFORCE")
+	ctx.heartbeat()
 	log.Printf(" Running puredns bruteforce with %d words for %s...\n", len(allWords), rootDomain)
 
 	output, err := ctx.RunCommand(
@@ -65,7 +69,12 @@ func RunPureDNS(ctx Context, rootDomain string, wordlists []string) (map[string]
 		return map[string][]string{}, nil
 	}
 
+	ctx.updatePhase("PHASE 1: PUREDNS PARSING RESULTS")
+	ctx.heartbeat()
 	subdomains := parsePureDNSSubdomains(ctx, string(output), rootDomain)
+
+	ctx.updatePhase("PHASE 1: PUREDNS DNSX VALIDATION")
+	ctx.heartbeat()
 	results := resolvePureDNSSubdomains(ctx, tempDir, subdomains)
 
 	log.Printf("✅ Puredns found %d live subdomains for %s\n", len(results), rootDomain)

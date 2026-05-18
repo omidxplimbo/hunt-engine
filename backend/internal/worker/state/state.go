@@ -8,6 +8,7 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
@@ -16,14 +17,36 @@ import (
 	"gorm.io/gorm"
 )
 
+const stopCheckCacheTTL = time.Second
+
+type stopCheckCacheEntry struct {
+	checkedAt time.Time
+	stopped   bool
+}
+
+var stopCheckCache sync.Map
+
+func clearStopCheckCache(targetID uint) {
+	stopCheckCache.Delete(targetID)
+}
+
 func CheckStopRequest(targetID uint) bool {
+	now := time.Now()
+
+	if cached, ok := stopCheckCache.Load(targetID); ok {
+		entry, ok := cached.(stopCheckCacheEntry)
+		if ok && now.Sub(entry.checkedAt) < stopCheckCacheTTL {
+			return entry.stopped
+		}
+	}
+
 	var t models.Target
 	if err := database.DB.Select("stop_requested").First(&t, targetID).Error; err != nil {
+		stopCheckCache.Store(targetID, stopCheckCacheEntry{checkedAt: now, stopped: false})
 		return false
 	}
 
 	if t.StopRequested {
-		now := time.Now()
 		database.DB.Model(&models.Target{}).Where("id = ?", targetID).Updates(map[string]interface{}{
 			"status":         "PAUSED",
 			"current_phase":  "PAUSED BY USER",
@@ -31,9 +54,11 @@ func CheckStopRequest(targetID uint) bool {
 			"last_scan_at":   &now,
 		})
 		MarkPaused(targetID, "paused by user")
+		stopCheckCache.Store(targetID, stopCheckCacheEntry{checkedAt: now, stopped: true})
 		return true
 	}
 
+	stopCheckCache.Store(targetID, stopCheckCacheEntry{checkedAt: now, stopped: false})
 	return false
 }
 
@@ -42,6 +67,7 @@ func UpdateTargetPhase(targetID uint, phase string) {
 }
 
 func ResetForNewRun(targetID uint) error {
+	clearStopCheckCache(targetID)
 	now := time.Now()
 	runID := fmt.Sprintf("run_%d", now.UnixNano())
 
@@ -140,6 +166,7 @@ func stepKey(module, step string) string {
 }
 
 func MarkRunning(targetID uint, module, step string) {
+	clearStopCheckCache(targetID)
 	now := time.Now()
 	_ = database.DB.Model(&models.TargetScanState{}).
 		Where("target_id = ?", targetID).
