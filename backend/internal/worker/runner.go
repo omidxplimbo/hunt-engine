@@ -15,6 +15,7 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/discovery"
 	workerengine "github.com/omidxplimbo/hunt-engine/backend/internal/worker/engine"
+	workerfindings "github.com/omidxplimbo/hunt-engine/backend/internal/worker/findings"
 	workerhelpers "github.com/omidxplimbo/hunt-engine/backend/internal/worker/helpers"
 	crawlingphase "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/crawling"
 	discoverymerge "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/merge"
@@ -466,6 +467,10 @@ func runProbingPhase(targetID uint, rootDomain string) {
 		RunCommand:        runCommandWithKillSwitch,
 		UpdateAssets: func(targetID uint, results map[string]probing.HTTPXResult) {
 			UpdateAssetsWithDiff(targetID, results)
+
+			if err := workerfindings.GenerateBuiltinFindings(targetID); err != nil {
+				log.Printf("⚠️ Failed to generate builtin findings for target %d: %v\n", targetID, err)
+			}
 		},
 	})
 }
