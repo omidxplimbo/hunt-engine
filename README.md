@@ -93,13 +93,15 @@ The platform integrates industry-standard security tools within its isolated env
   * `cero` (**Optional per target**) - Scrape domain names from SSL certificates
   * `crtsh` (**Optional per target**) - Query crt.sh API for subdomain discovery
   * `puredns` (**Optional per target**) - Subdomain bruteforce (wordlist-based) using trusted resolvers (**only live/resolved** results are stored). Puredns is an optional Discovery step and does not gate Probing.
+* `amass` (**Optional per target**) - OWASP Amass passive enumeration with `AMASS_TIMEOUT_SECONDS` support.
+* `amass` (**Optional per target**) - OWASP Amass passive enumeration with `AMASS_TIMEOUT_SECONDS` support.
 * **Permutation/Mutation:** `alterx` (Optional per target, file-based output with streaming post-processing for large targets)
 * **Validation/Resolution:** `dnsx` (streaming batch validation with fixed resolvers)
 * **Probing:** `httpx` (Rich JSON output, WAF/CDN detection)
 * **Edge Tech Detection:** `cdncheck` (Early detection from DNS results: **CDN / WAF / CLOUD**, separate from httpx)
 * **Port Scanning:** `nmap` (**Optional per target**, runs in Phase 1 on **non-CDN** DNS-resolved IPs)
 * **Crawling & Content Discovery:** `gau`, `waybackurls`, `katana` (Active & Passive), `waymore` (Deep Archival Crawl)
-* **Deep Scan:** `amass` (Integrated via Docker)
+* **Passive Discovery:** `amass` (**Optional per target**) - OWASP Amass passive enumeration with timeout support
 * **Future Integration:** `ffuf`, `nuclei` (Ready in Dockerfile)
 
 ---
@@ -419,7 +421,7 @@ Queue operations are tenant-scoped. A viewer cannot see or mutate another user's
 * **WAF:** Show only assets with WAF detected (cdncheck)
 * **CLOUD:** Show only assets with CLOUD provider detected (cdncheck)
 * **Search:** Filter by domain name
-* **Provider Filter (Dropdown):** Filter assets by the discovery provider (subfinder/assetfinder/crtsh/cero/alterx/puredns)
+* **Provider Filter (Dropdown):** Filter assets by the discovery provider (subfinder/assetfinder/crtsh/cero/alterx/puredns/amass)
 * **Status Filter (Dropdown):** Filter assets by HTTP status code (e.g. `200` or `2xx/3xx/4xx/5xx`)
 * **CDN/WAF/CLOUD Badges:** Visual indicators per asset (separate fields)
 * **Ports Column:** If Portscan is enabled, open ports (from `nmap`) are shown per asset.
@@ -814,3 +816,104 @@ AMASS_TIMEOUT_SECONDS=900
 ```
 
 Set `AMASS_TIMEOUT_SECONDS=0` to disable the Amass-specific timeout. Stop Scan still uses the worker process-group kill path.
+<!-- V3_1_RUNTIME_DOCS_START -->
+
+---
+
+## v3.1.0 Runtime Hardening & Large Target Stability
+
+Version `v3.1.0` focuses on safer large-target reconnaissance, better scan observability, and optional Amass passive enumeration.
+
+### Large Target Discovery Improvements
+
+- **Alterx streaming pipeline**
+  - Alterx output is written to files instead of being captured as a huge in-memory stdout buffer.
+  - Large Alterx outputs are normalized line-by-line.
+  - Alterx post-processing reports visible UI progress, heartbeat updates, and reacts to Stop requests.
+
+- **DNSX streaming validation**
+  - DNSX input is processed in configurable batches.
+  - The backend no longer loads the full candidate file into memory before validation.
+  - Full candidate coverage is preserved while keeping memory usage bounded.
+
+- **PureDNS runtime visibility**
+  - PureDNS internal phases are clearer in the UI.
+  - Stop-check polling is throttled so large internal loops do not hammer the database with `stop_requested` queries.
+
+### Optional Amass Passive Discovery
+
+Amass can now be enabled per target from the Create/Edit Target modals.
+
+When enabled, Amass runs during **Discovery → Passive Enumeration** and contributes source-tagged subdomains as provider `amass`.
+
+The worker includes compatibility handling for different Amass CLI behavior and supports timeout-based execution.
+
+### Amass Timeout
+
+Use:
+
+```env
+AMASS_TIMEOUT_SECONDS=900
+```
+
+Behavior:
+
+- `900` means Amass can run for up to 15 minutes.
+- `0` disables the Amass-specific timeout.
+- Stop Scan still kills the Amass process group.
+
+### Resource Tuning
+
+For small/medium servers:
+
+```env
+DNSX_BATCH_SIZE=2000
+DNSX_THREADS=30
+AMASS_TIMEOUT_SECONDS=900
+```
+
+For larger servers:
+
+```env
+DNSX_BATCH_SIZE=5000
+DNSX_THREADS=50
+AMASS_TIMEOUT_SECONDS=900
+```
+
+These values do not reduce coverage. They control batch size, runtime pressure, and timeout behavior.
+
+### Worker Stability Improvements
+
+- Scheduled scans reset stale checkpoint metadata before fresh periodic runs.
+- Stop Scan kills full external tool process groups, not just parent processes.
+- Per-user queues are scheduled with round-robin fairness.
+- Dispatcher failures pause/fail targets instead of leaving them stuck in `QUEUED` or `SCANNING`.
+- Phase chaining handles Redis enqueue failures safely.
+- Runtime secrets are read from environment variables.
+
+### Troubleshooting Large Discovery Runs
+
+If the UI shows an internal phase but Active Processes is empty, the backend may be doing internal file processing rather than running an external binary.
+
+Useful commands:
+
+```bash
+docker compose logs -f backend
+
+docker compose exec backend sh -lc '
+ps -eo pid,pgid,ppid,etime,pcpu,pmem,comm,args | grep -E "alterx|dnsx|puredns|amass|hunt-engine-api" | grep -v grep
+'
+
+docker compose exec backend sh -lc '
+find /tmp/hunt-engine -type f \( \
+  -name "alterx_results.txt" -o \
+  -name "alterx_results.txt.raw" -o \
+  -name "dnsx_all_found.txt" -o \
+  -name "*amass*" -o \
+  -name "*puredns*" \
+\) -exec ls -lh {} \; -exec wc -l {} \; 2>/dev/null
+'
+```
+
+<!-- V3_1_RUNTIME_DOCS_END -->
+
