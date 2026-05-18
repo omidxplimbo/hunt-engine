@@ -94,7 +94,6 @@ The platform integrates industry-standard security tools within its isolated env
   * `crtsh` (**Optional per target**) - Query crt.sh API for subdomain discovery
   * `puredns` (**Optional per target**) - Subdomain bruteforce (wordlist-based) using trusted resolvers (**only live/resolved** results are stored). Puredns is an optional Discovery step and does not gate Probing.
 * `amass` (**Optional per target**) - OWASP Amass passive enumeration with `AMASS_TIMEOUT_SECONDS` support.
-* `amass` (**Optional per target**) - OWASP Amass passive enumeration with `AMASS_TIMEOUT_SECONDS` support.
 * **Permutation/Mutation:** `alterx` (Optional per target, file-based output with streaming post-processing for large targets)
 * **Validation/Resolution:** `dnsx` (streaming batch validation with fixed resolvers)
 * **Probing:** `httpx` (Rich JSON output, WAF/CDN detection)
@@ -116,7 +115,7 @@ We are following a multi-phase development roadmap.
 * [x] **History Injection:** Re-scans previously dead assets to detect resurrections.
 * [x] **Smart Storage Logic:** "Upsert" logic to track live/dead status.
 * [x] **Enhanced Discovery Tools:** Added `cero` (SSL certificate scraping), `crtsh` (Certificate Transparency API), and `puredns` (bruteforce) as optional tools.
-* [x] **Source Tracking:** Each subdomain tracks which tools discovered it (subfinder, assetfinder, cero, crtsh, alterx, puredns).
+* [x] **Source Tracking:** Each subdomain tracks which tools discovered it (subfinder, assetfinder, cero, crtsh, alterx, puredns, amass).
 * [x] **Fresh Asset Logic:** Fixed notification spam - only truly new live subdomains trigger alerts.
 
 ### ✅ Phase 2: Probing & Fingerprinting (COMPLETED)
@@ -917,3 +916,85 @@ find /tmp/hunt-engine -type f \( \
 
 <!-- V3_1_RUNTIME_DOCS_END -->
 
+<!-- V3_1_POST_RELEASE_CLEANUP_START -->
+
+---
+
+## v3.1 Runtime Configuration & Operations
+
+### Required environment variables
+
+Before starting the stack, copy `.env.example` to `.env` and set production-safe values:
+
+```bash
+cp .env.example .env
+nano .env
+```
+
+Minimum required values:
+
+```env
+DB_PASSWORD=change_me_to_a_strong_database_password
+JWT_SECRET=change_me_to_a_random_64_hex_secret
+```
+
+Generate a strong JWT secret with:
+
+```bash
+openssl rand -hex 32
+```
+
+### Discovery tuning
+
+Large discovery runs can be tuned without reducing coverage:
+
+```env
+DNSX_BATCH_SIZE=2000
+DNSX_THREADS=30
+AMASS_TIMEOUT_SECONDS=900
+PROBE_BATCH_SIZE=1000
+```
+
+Recommended defaults:
+
+- Small VPS: `DNSX_BATCH_SIZE=1000`, `DNSX_THREADS=20`
+- Medium server: `DNSX_BATCH_SIZE=2000`, `DNSX_THREADS=30`
+- Larger server: `DNSX_BATCH_SIZE=5000`, `DNSX_THREADS=50`
+
+### Optional Amass passive enumeration
+
+`amass` is available as an optional per-target Discovery provider. Enable **AMASS** in the Create/Edit Target modal to run passive Amass enumeration during Discovery.
+
+Behavior:
+
+- Results are source-tagged as `amass`.
+- Provider filtering supports `amass` in the asset table.
+- `AMASS_TIMEOUT_SECONDS=900` limits Amass to 15 minutes by default.
+- `AMASS_TIMEOUT_SECONDS=0` disables the Amass-specific timeout.
+- Stop Scan still kills the Amass process group.
+
+### Large target stability
+
+v3.1 improves large-target handling:
+
+- Alterx writes output to files and normalizes large output line-by-line.
+- Alterx post-processing reports visible progress and heartbeat updates.
+- DNSX validates candidates using streaming batches instead of loading full candidate files into memory.
+- PureDNS and large discovery loops throttle stop checks to avoid excessive database polling.
+- External tools are killed by process group on Stop Scan.
+
+### Troubleshooting useful commands
+
+```bash
+docker compose logs -f backend
+
+docker compose exec backend sh -lc '
+ps -eo pid,pgid,ppid,etime,pcpu,pmem,comm,args | grep -E "alterx|dnsx|puredns|amass|hunt-engine-api" | grep -v grep
+'
+
+docker compose exec backend sh -lc '
+find /tmp/hunt-engine -type f \(   -name "alterx_results.txt" -o   -name "alterx_results.txt.raw" -o   -name "dnsx_all_found.txt" -o   -name "*amass*" -o   -name "*puredns*" \) -exec ls -lh {} \; -exec wc -l {} \; 2>/dev/null
+'
+```
+
+<!-- V3_1_POST_RELEASE_CLEANUP_END -->
