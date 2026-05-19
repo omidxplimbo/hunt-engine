@@ -161,6 +161,8 @@ func main() {
 	nucleiTemplateDrafts := api.Group("/nuclei/template-drafts", middleware.AdminOnly())
 	nucleiTemplateDrafts.Get("/status", handlers.GetNucleiTemplateDraftStatus)
 	nucleiTemplateDrafts.Post("/", handlers.GenerateNucleiTemplateDraft)
+	nucleiTemplateDrafts.Get("/targets/:id/strategy", handlers.GetNucleiTargetTemplateStrategy)
+	nucleiTemplateDrafts.Get("/targets/:id/strategy", handlers.GetNucleiTargetTemplateStrategy)
 
 	port := os.Getenv("PORT")
 	if port == "" {
