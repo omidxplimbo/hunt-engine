@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
-import { Target, Settings, LayoutDashboard, LogOut, Menu, X, User2 } from 'lucide-react';
+import { Target, Settings, LayoutDashboard, LogOut, Menu, X, User2, FileCode2 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../context/AuthContext';
 import MustacheLogo from '../components/MustacheLogo';
@@ -79,7 +79,8 @@ export const MainLayout = () => {
           </div>
           {role === 'admin' && (
           <div onClick={handleNavClick}>
-            <NavItem to="/settings" icon={Settings}>System Config</NavItem>
+            <NavItem to="/nuclei-templates" icon={FileCode2}>Nuclei Templates</NavItem>
+<NavItem to="/settings" icon={Settings}>System Config</NavItem>
           </div>
           )}
         </nav>
