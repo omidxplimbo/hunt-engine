@@ -62,6 +62,16 @@ func normalizeRootDomain(value string) string {
 	return strings.Trim(v, ". ")
 }
 
+func normalizeNucleiProfile(value string) string {
+	v := strings.ToLower(strings.TrimSpace(value))
+	switch v {
+	case "safe", "exposure", "misconfig", "cves-light", "custom", "full":
+		return v
+	default:
+		return "safe"
+	}
+}
+
 func isDuplicateTargetError(err error) bool {
 	if err == nil {
 		return false
@@ -115,7 +125,7 @@ func CreateTarget(c *fiber.Ctx) error {
 	modulesJSON, _ := json.Marshal(req.Modules)
 
 	target := models.Target{
-		CreatedByUserID: uid, Name: req.Name, RootDomain: req.RootDomain, Description: req.Description, InScope: true, Frequency: req.Frequency, ScanModules: string(modulesJSON), Status: "QUEUED", CurrentPhase: "QUEUED", UseAlterx: true, UseWaymore: false, UsePortscan: false, UseCero: false, UseCrtsh: false, UsePuredns: false, UseAbusedb: false, UseAmass: false, PurednsWordlists: "[]"}
+		CreatedByUserID: uid, Name: req.Name, RootDomain: req.RootDomain, Description: req.Description, InScope: true, Frequency: req.Frequency, ScanModules: string(modulesJSON), Status: "QUEUED", CurrentPhase: "QUEUED", UseAlterx: true, UseWaymore: false, UsePortscan: false, UseCero: false, UseCrtsh: false, UsePuredns: false, UseAbusedb: false, UseAmass: false, UseNuclei: false, NucleiProfile: "safe", PurednsWordlists: "[]"}
 
 	if req.UseAlterx != nil {
 		target.UseAlterx = *req.UseAlterx
@@ -859,7 +869,7 @@ func targetOwnerUsername(t models.Target) string {
 func toTargetResponse(t models.Target, assetCount int64) dto.TargetResponse {
 	return dto.TargetResponse{
 		OwnerUsername: targetOwnerUsername(t), CreatedByUserID: t.CreatedByUserID, ID: t.ID, Name: t.Name, RootDomain: t.RootDomain, Description: t.Description, InScope: t.InScope, CreatedAt: t.CreatedAt, AssetCount: assetCount, Frequency: t.Frequency, LastScanAt: t.LastScanAt, Status: t.Status, CurrentPhase: t.CurrentPhase, UseAlterx: t.UseAlterx, UseWaymore: t.UseWaymore, UsePortscan: t.UsePortscan, UseCero: t.UseCero, UseCrtsh: t.UseCrtsh, UsePuredns: t.UsePuredns, UseAbusedb: t.UseAbusedb,
-		UseAmass: t.UseAmass, PurednsWordlists: parseJSONToInterface(t.PurednsWordlists), ScanModules: t.ScanModules}
+		UseAmass: t.UseAmass, UseNuclei: t.UseNuclei, NucleiProfile: t.NucleiProfile, PurednsWordlists: parseJSONToInterface(t.PurednsWordlists), ScanModules: t.ScanModules}
 }
 
 // parseJSONToInterface پارس کردن JSON string به interface{}
@@ -989,7 +999,7 @@ func ExportTarget(c *fiber.Ctx) error {
 
 		exportItems[i] = dto.TargetExportItem{
 			Name: t.Name, RootDomain: t.RootDomain, Description: t.Description, InScope: t.InScope, Frequency: t.Frequency, Modules: modules, UseAlterx: t.UseAlterx, UseWaymore: t.UseWaymore, UsePortscan: t.UsePortscan, UseCero: t.UseCero, UseCrtsh: t.UseCrtsh, UsePuredns: t.UsePuredns, UseAbusedb: t.UseAbusedb,
-			UseAmass: t.UseAmass, PurednsWordlists: wordlists, Assets: assetItems, URLs: urlItems}
+			UseAmass: t.UseAmass, UseNuclei: t.UseNuclei, NucleiProfile: t.NucleiProfile, PurednsWordlists: wordlists, Assets: assetItems, URLs: urlItems}
 	}
 
 	exportData := dto.TargetExportData{

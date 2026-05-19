@@ -26,12 +26,12 @@ RUN git clone --depth 1 https://github.com/blechschmidt/massdns.git /tmp/massdns
 # فاز ۲: پروبینگ
 RUN go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
 RUN go install -v github.com/projectdiscovery/cdncheck/cmd/cdncheck@latest
+RUN go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
 
 # فاز ۳: خزش و کشف محتوا
 RUN go install github.com/tomnomnom/waybackurls@latest
 RUN go install github.com/lc/gau/v2/cmd/gau@latest
 RUN go install github.com/projectdiscovery/katana/cmd/katana@latest
-RUN go install github.com/ffuf/ffuf/v2@latest
 
 # --- بیلد برنامه اصلی ---
 COPY go.mod go.sum ./
@@ -66,10 +66,10 @@ COPY --from=go_builder /go/bin/puredns /usr/local/bin/puredns
 COPY --from=go_builder /out/massdns /usr/local/bin/massdns
 COPY --from=go_builder /go/bin/httpx /usr/local/bin/httpx
 COPY --from=go_builder /go/bin/cdncheck /usr/local/bin/cdncheck
+COPY --from=go_builder /go/bin/nuclei /usr/local/bin/nuclei
 COPY --from=go_builder /go/bin/waybackurls /usr/local/bin/waybackurls
 COPY --from=go_builder /go/bin/gau /usr/local/bin/gau
 COPY --from=go_builder /go/bin/katana /usr/local/bin/katana
-COPY --from=go_builder /go/bin/ffuf /usr/local/bin/ffuf
 
 # کپی برنامه اصلی
 COPY --from=go_builder /app/hunt-engine-api .
@@ -87,6 +87,7 @@ RUN AMASS_URL=$(wget -qO- https://api.github.com/repos/owasp-amass/amass/release
     rm -rf /tmp/amass.tar.gz /tmp/amass_extracted
 
 # دانلود وردلیست‌ها
+RUN mkdir -p /root/nuclei-templates /data/nuclei/custom
 RUN mkdir -p /wordlists
 RUN curl -sL https://raw.githubusercontent.com/v0re/dirb/master/wordlists/common.txt -o /wordlists/common.txt
 RUN curl -sL https://raw.githubusercontent.com/PortSwigger/param-miner/master/resources/params -o /wordlists/params.txt
