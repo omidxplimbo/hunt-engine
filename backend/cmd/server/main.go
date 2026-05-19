@@ -157,6 +157,11 @@ func main() {
 	nucleiTemplates.Get("/:name", handlers.GetNucleiTemplate)
 	nucleiTemplates.Delete("/:name", handlers.DeleteNucleiTemplate)
 
+	// Nuclei AI template draft foundation (Admin Only, disabled by default)
+	nucleiTemplateDrafts := api.Group("/nuclei/template-drafts", middleware.AdminOnly())
+	nucleiTemplateDrafts.Get("/status", handlers.GetNucleiTemplateDraftStatus)
+	nucleiTemplateDrafts.Post("/", handlers.GenerateNucleiTemplateDraft)
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
