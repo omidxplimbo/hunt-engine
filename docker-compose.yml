@@ -24,9 +24,11 @@ services:
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required and must be at least 32 characters}
       - VIRUSTOTAL_API_KEY=${VIRUSTOTAL_API_KEY:-} - NUCLEI_ALLOW_AI_TEMPLATES=${NUCLEI_ALLOW_AI_TEMPLATES:-false}
+      - NUCLEI_CUSTOM_TEMPLATES_DIR=/data/nuclei/custom
     volumes:
       # 👇 این خط برای وردلیست‌های سفارشی اضافه شد (برای آینده)
       - ./custom_wordlists:/wordlists/custom
+      - ./custom_nuclei_templates:/data/nuclei/custom
       # 👇 persist worker temp workspace for crash-safe resume
       - hunt_workspaces:/tmp/hunt-engine
       # 👇 Access Docker Socket for System Logs
