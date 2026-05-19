@@ -13,20 +13,6 @@ export type NucleiTemplatePlacement =
   | 'full'
   | 'custom';
 
-export const NUCLEI_TEMPLATE_PLACEMENTS: NucleiTemplatePlacement[] = [
-  'root',
-  'shared',
-  'safe',
-  'fast',
-  'exposure',
-  'balanced',
-  'misconfig',
-  'cves',
-  'cves-light',
-  'full',
-  'custom',
-];
-
 export interface NucleiTemplate {
   name: string;
   path: string;
@@ -41,6 +27,23 @@ export interface NucleiTemplateValidation {
   name?: string;
   output?: string;
   error?: string;
+}
+
+interface ListTemplatesResponse {
+  status: string;
+  data: NucleiTemplate[];
+  count: number;
+}
+
+interface TemplateResponse {
+  status: string;
+  message?: string;
+  data: NucleiTemplate;
+}
+
+interface ValidationResponse {
+  status: string;
+  data: NucleiTemplateValidation;
 }
 
 interface ValidationFailureResponse {
@@ -71,59 +74,73 @@ export interface NucleiTemplateDraftStatus {
   save_automatically: boolean;
 }
 
-export interface NucleiTemplateDraftRequest {
+export interface GenerateNucleiTemplateDraftPayload {
   name: string;
   title: string;
   description: string;
-  severity: 'info' | 'low' | 'medium' | 'high' | 'critical';
+  severity: string;
   tags: string[];
   method: string;
   path: string;
-  matcher_type: 'word' | 'regex' | 'status';
+  matcher_type: string;
   matcher_part: string;
   matcher_value: string;
   validate?: boolean;
 }
 
-export interface NucleiTemplateDraft {
+export interface NucleiTemplateDraftResponse {
   name: string;
   content: string;
-  validation?: NucleiTemplateValidation;
   draft_only: boolean;
   requires_human_review: boolean;
   saved: boolean;
+  validation?: NucleiTemplateValidation;
 }
 
-export interface NucleiTemplateStrategyActions {
-  can_select_profile?: boolean;
-  can_select_builtin_tags?: boolean;
-  can_select_custom_groups?: boolean;
-  can_auto_save_template?: boolean;
-  can_auto_execute_template?: boolean;
-  requires_human_approval?: boolean;
+export interface NucleiTemplateStrategySignal {
+  kind: string;
+  value: string;
+  confidence: string;
+  reason: string;
 }
 
 export interface NucleiTemplateStrategy {
-  target_id?: number;
   agent_ready: boolean;
   draft_only: boolean;
   ai_template_drafts_enabled: boolean;
   save_automatically: boolean;
   execute_automatically: boolean;
-  recommended_profile?: string;
-  recommended_tags?: string[];
-  recommended_placements?: string[];
-  recommended_template_sets?: string[];
-  signals?: string[];
-  rationale?: string[];
-  suggested_draft_request?: Partial<NucleiTemplateDraftRequest>;
-  allowed_actions?: NucleiTemplateStrategyActions;
-  generated_draft?: NucleiTemplateDraft;
-}
-
-export interface NucleiTemplateStrategyOptions {
-  includeDraft?: boolean;
-  validate?: boolean;
+  recommended_profile: string;
+  recommended_tags: string[];
+  recommended_placements: string[];
+  recommended_template_sets: string[];
+  signals: NucleiTemplateStrategySignal[];
+  rationale: string[];
+  suggested_draft_request?: GenerateNucleiTemplateDraftPayload;
+  generated_draft?: NucleiTemplateDraftResponse;
+  draft_error?: string;
+  target?: {
+    id: number;
+    name: string;
+    root_domain: string;
+    nuclei_profile: string;
+    use_nuclei: boolean;
+    live_asset_count: number;
+    sample_urls: string[];
+    technologies: string[];
+    web_servers: string[];
+    open_ports: number[];
+  };
+  allowed_actions?: {
+    can_select_profile: boolean;
+    can_select_builtin_tags: boolean;
+    can_select_custom_groups: boolean;
+    can_generate_draft: boolean;
+    can_save_template: boolean;
+    can_auto_save_template: boolean;
+    can_auto_execute_template: boolean;
+    requires_human_approval: boolean;
+  };
 }
 
 const extractValidationFailure = (error: unknown): NucleiTemplateValidation => {
@@ -146,75 +163,78 @@ const extractValidationFailure = (error: unknown): NucleiTemplateValidation => {
   };
 };
 
-const responseData = <T,>(response: { data: { data: T } }): T => response.data.data;
-
 export const listNucleiTemplates = async (): Promise<NucleiTemplate[]> => {
-  const response = await apiClient.get('/nuclei/templates');
+  const response = await apiClient.get<ListTemplatesResponse>('/nuclei/templates');
   return response.data.data || [];
 };
 
 export const getNucleiTemplate = async (
-  name: string,
-  placement?: NucleiTemplatePlacement
+  name: string
 ): Promise<NucleiTemplate> => {
-  const response = await apiClient.get(
-    `/nuclei/templates/${encodeURIComponent(name)}`,
-    { params: placement ? { placement } : undefined }
+  const response = await apiClient.get<TemplateResponse>(
+    `/nuclei/templates/${encodeURIComponent(name)}`
   );
-  return responseData<NucleiTemplate>(response);
+  return response.data.data;
 };
 
 export const saveNucleiTemplate = async (
   payload: UpsertNucleiTemplatePayload
 ): Promise<NucleiTemplate> => {
-  const response = await apiClient.post('/nuclei/templates', payload);
-  return responseData<NucleiTemplate>(response);
+  const response = await apiClient.post<TemplateResponse>(
+    '/nuclei/templates',
+    payload
+  );
+  return response.data.data;
 };
 
 export const validateNucleiTemplate = async (
   payload: ValidateNucleiTemplatePayload
 ): Promise<NucleiTemplateValidation> => {
   try {
-    const response = await apiClient.post('/nuclei/templates/validate', payload);
-    return responseData<NucleiTemplateValidation>(response);
+    const response = await apiClient.post<ValidationResponse>(
+      '/nuclei/templates/validate',
+      payload
+    );
+    return response.data.data;
   } catch (error) {
     return extractValidationFailure(error);
   }
 };
 
-export const deleteNucleiTemplate = async (
-  name: string,
-  placement?: NucleiTemplatePlacement
-): Promise<void> => {
-  await apiClient.delete(`/nuclei/templates/${encodeURIComponent(name)}`, {
-    params: placement ? { placement } : undefined,
-  });
+export const deleteNucleiTemplate = async (name: string): Promise<void> => {
+  await apiClient.delete(`/nuclei/templates/${encodeURIComponent(name)}`);
 };
 
 export const getNucleiTemplateDraftStatus = async (): Promise<NucleiTemplateDraftStatus> => {
-  const response = await apiClient.get('/nuclei/template-drafts/status');
-  return responseData<NucleiTemplateDraftStatus>(response);
+  const response = await apiClient.get<{ status: string; data: NucleiTemplateDraftStatus }>(
+    '/nuclei/template-drafts/status'
+  );
+  return response.data.data;
 };
 
 export const generateNucleiTemplateDraft = async (
-  payload: NucleiTemplateDraftRequest
-): Promise<NucleiTemplateDraft> => {
-  const response = await apiClient.post('/nuclei/template-drafts', payload);
-  return responseData<NucleiTemplateDraft>(response);
+  payload: GenerateNucleiTemplateDraftPayload
+): Promise<NucleiTemplateDraftResponse> => {
+  const response = await apiClient.post<{ status: string; data: NucleiTemplateDraftResponse }>(
+    '/nuclei/template-drafts',
+    payload
+  );
+  return response.data.data;
 };
 
 export const getNucleiTemplateStrategy = async (
   targetId: string | number,
-  options: NucleiTemplateStrategyOptions = {}
+  options?: { includeDraft?: boolean; validate?: boolean }
 ): Promise<NucleiTemplateStrategy> => {
-  const response = await apiClient.get(
-    `/nuclei/template-drafts/targets/${encodeURIComponent(String(targetId))}/strategy`,
-    {
-      params: {
-        include_draft: options.includeDraft || undefined,
-        validate: options.validate || undefined,
-      },
-    }
+  const params = new URLSearchParams();
+  if (options?.includeDraft) params.set('include_draft', 'true');
+  if (options?.validate) params.set('validate', 'true');
+
+  const query = params.toString();
+  const response = await apiClient.get<{ status: string; data: NucleiTemplateStrategy }>(
+    `/nuclei/template-drafts/targets/${encodeURIComponent(String(targetId))}/strategy${
+      query ? `?${query}` : ''
+    }`
   );
-  return responseData<NucleiTemplateStrategy>(response);
+  return response.data.data;
 };
