@@ -151,6 +151,12 @@ func CreateTarget(c *fiber.Ctx) error {
 	if req.UsePuredns != nil {
 		target.UsePuredns = *req.UsePuredns
 	}
+	if req.UseNuclei != nil {
+		target.UseNuclei = *req.UseNuclei
+	}
+	if strings.TrimSpace(req.NucleiProfile) != "" {
+		target.NucleiProfile = normalizeNucleiProfile(req.NucleiProfile)
+	}
 	if len(req.PurednsWordlists) > 0 {
 		wordlistsJSON, _ := json.Marshal(req.PurednsWordlists)
 		target.PurednsWordlists = string(wordlistsJSON)
@@ -229,6 +235,12 @@ func UpdateTarget(c *fiber.Ctx) error {
 	}
 	if req.UseAmass != nil {
 		target.UseAmass = *req.UseAmass
+	}
+	if req.UseNuclei != nil {
+		target.UseNuclei = *req.UseNuclei
+	}
+	if strings.TrimSpace(req.NucleiProfile) != "" {
+		target.NucleiProfile = normalizeNucleiProfile(req.NucleiProfile)
 	}
 	if len(req.PurednsWordlists) > 0 {
 		wordlistsJSON, _ := json.Marshal(req.PurednsWordlists)
