@@ -2,6 +2,9 @@ package nuclei
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
@@ -85,4 +88,155 @@ func assertContainsPair(t *testing.T, args []string, key, value string) {
 		}
 	}
 	t.Fatalf("expected args to contain %s %s, got %#v", key, value, args)
+}
+
+func TestCustomTemplateArgsSelectsSafeProfileTemplates(t *testing.T) {
+	root := t.TempDir()
+
+	writeTestTemplate(t, root, "root.yaml")
+	writeTestTemplate(t, root, "shared/shared.yaml")
+	writeTestTemplate(t, root, "safe/safe.yaml")
+	writeTestTemplate(t, root, "fast/fast.yaml")
+	writeTestTemplate(t, root, "balanced/balanced.yaml")
+	writeTestTemplate(t, root, "full/full.yaml")
+
+	args := customTemplateArgs(root, "safe")
+
+	assertHasPathSuffix(t, args, "root.yaml")
+	assertHasPathSuffix(t, args, "shared")
+	assertHasPathSuffix(t, args, "safe")
+	assertMissingPathSuffix(t, args, "fast")
+	assertMissingPathSuffix(t, args, "balanced")
+	assertMissingPathSuffix(t, args, "full")
+}
+
+func TestCustomTemplateArgsSelectsFastProfileTemplates(t *testing.T) {
+	root := t.TempDir()
+
+	writeTestTemplate(t, root, "root.yaml")
+	writeTestTemplate(t, root, "shared/shared.yaml")
+	writeTestTemplate(t, root, "safe/safe.yaml")
+	writeTestTemplate(t, root, "fast/fast.yaml")
+	writeTestTemplate(t, root, "balanced/balanced.yaml")
+	writeTestTemplate(t, root, "full/full.yaml")
+
+	args := customTemplateArgs(root, "fast")
+
+	assertHasPathSuffix(t, args, "root.yaml")
+	assertHasPathSuffix(t, args, "shared")
+	assertHasPathSuffix(t, args, "safe")
+	assertHasPathSuffix(t, args, "fast")
+	assertMissingPathSuffix(t, args, "balanced")
+	assertMissingPathSuffix(t, args, "full")
+}
+
+func TestCustomTemplateArgsSelectsBalancedProfileTemplates(t *testing.T) {
+	root := t.TempDir()
+
+	writeTestTemplate(t, root, "root.yaml")
+	writeTestTemplate(t, root, "fast/fast.yaml")
+	writeTestTemplate(t, root, "balanced/balanced.yaml")
+	writeTestTemplate(t, root, "full/full.yaml")
+
+	args := customTemplateArgs(root, "balanced")
+
+	assertHasPathSuffix(t, args, "root.yaml")
+	assertHasPathSuffix(t, args, "fast")
+	assertHasPathSuffix(t, args, "balanced")
+	assertMissingPathSuffix(t, args, "full")
+}
+
+func TestCustomTemplateArgsSelectsFullProfileTemplates(t *testing.T) {
+	root := t.TempDir()
+
+	writeTestTemplate(t, root, "root.yaml")
+	writeTestTemplate(t, root, "fast/fast.yaml")
+	writeTestTemplate(t, root, "balanced/balanced.yaml")
+	writeTestTemplate(t, root, "cves/cve.yaml")
+	writeTestTemplate(t, root, "full/full.yaml")
+	writeTestTemplate(t, root, "custom/custom.yaml")
+
+	args := customTemplateArgs(root, "full")
+
+	assertHasPathSuffix(t, args, "root.yaml")
+	assertHasPathSuffix(t, args, "fast")
+	assertHasPathSuffix(t, args, "balanced")
+	assertHasPathSuffix(t, args, "cves")
+	assertHasPathSuffix(t, args, "full")
+	assertHasPathSuffix(t, args, "custom")
+}
+
+func TestBuildArgsAddsProfileAwareCustomTemplatePaths(t *testing.T) {
+	templatesDir := t.TempDir()
+	customDir := t.TempDir()
+
+	writeTestTemplate(t, templatesDir, "builtin.yaml")
+	writeTestTemplate(t, customDir, "root.yaml")
+	writeTestTemplate(t, customDir, "fast/fast.yaml")
+	writeTestTemplate(t, customDir, "full/full.yaml")
+
+	args := buildArgs(Config{TemplatesDir: templatesDir, CustomTemplatesDir: customDir}, "fast", "targets.txt", "out.jsonl")
+
+	assertContainsPair(t, args, "-t", templatesDir)
+	assertContainsPair(t, args, "-t", filepath.Join(customDir, "root.yaml"))
+	assertContainsPair(t, args, "-t", filepath.Join(customDir, "fast"))
+	assertNotContainsPair(t, args, "-t", filepath.Join(customDir, "full"))
+}
+
+func writeTestTemplate(t *testing.T, root, relative string) {
+	t.Helper()
+
+	path := filepath.Join(root, relative)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir test template dir: %v", err)
+	}
+
+	content := []byte(`id: test-template
+
+info:
+  name: test-template
+  author: hunt-engine
+  severity: info
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/"
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("write test template: %v", err)
+	}
+}
+
+func assertHasPathSuffix(t *testing.T, values []string, suffix string) {
+	t.Helper()
+
+	suffix = filepath.Clean(suffix)
+	for _, value := range values {
+		if strings.HasSuffix(filepath.Clean(value), suffix) {
+			return
+		}
+	}
+
+	t.Fatalf("expected path suffix %q in %#v", suffix, values)
+}
+
+func assertMissingPathSuffix(t *testing.T, values []string, suffix string) {
+	t.Helper()
+
+	suffix = filepath.Clean(suffix)
+	for _, value := range values {
+		if strings.HasSuffix(filepath.Clean(value), suffix) {
+			t.Fatalf("did not expect path suffix %q in %#v", suffix, values)
+		}
+	}
+}
+
+func assertNotContainsPair(t *testing.T, args []string, key, value string) {
+	t.Helper()
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == key && args[i+1] == value {
+			t.Fatalf("expected args not to contain %s %s, got %#v", key, value, args)
+		}
+	}
 }

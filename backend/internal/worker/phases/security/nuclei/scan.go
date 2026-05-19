@@ -183,11 +183,124 @@ func buildArgs(cfg Config, profile, inputFile, outputFile string) []string {
 	if directoryHasTemplates(cfg.TemplatesDir) {
 		args = append(args, "-t", cfg.TemplatesDir)
 	}
-	if directoryHasTemplates(cfg.CustomTemplatesDir) {
-		args = append(args, "-t", cfg.CustomTemplatesDir)
+
+	for _, templatePath := range customTemplateArgs(cfg.CustomTemplatesDir, profile) {
+		args = append(args, "-t", templatePath)
 	}
 
 	return append(args, profileArgs(profile)...)
+}
+
+func customTemplateArgs(root, profile string) []string {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return nil
+	}
+
+	info, err := os.Stat(root)
+	if err != nil || !info.IsDir() {
+		return nil
+	}
+
+	normalized := NormalizeProfile(profile)
+	candidates := make([]string, 0, 12)
+	candidates = append(candidates, rootTemplateFiles(root)...)
+
+	addDir := func(names ...string) {
+		for _, name := range names {
+			candidates = append(candidates, filepath.Join(root, name))
+		}
+	}
+
+	// Root YAML files plus shared/safe directories are available to every profile.
+	// Profile-specific subdirectories are included only for profiles that should run them.
+	addDir("shared", "safe")
+
+	switch normalized {
+	case "fast", "exposure":
+		addDir("fast", "exposure")
+	case "balanced", "misconfig":
+		addDir("fast", "exposure", "balanced", "misconfig")
+	case "cves-light":
+		addDir("cves", "cves-light")
+	case "full", "custom":
+		addDir("fast", "exposure", "balanced", "misconfig", "cves", "cves-light", "full", "custom")
+	default:
+		// safe/default keeps root YAML files plus shared/safe custom templates only.
+	}
+
+	out := make([]string, 0, len(candidates))
+	seen := map[string]struct{}{}
+	for _, candidate := range candidates {
+		candidate = filepath.Clean(strings.TrimSpace(candidate))
+		if candidate == "" || candidate == "." {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		if !templatePathHasTemplates(candidate) {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		out = append(out, candidate)
+	}
+
+	sort.Strings(out)
+	return out
+}
+
+func rootTemplateFiles(root string) []string {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := strings.ToLower(entry.Name())
+		if strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml") {
+			out = append(out, filepath.Join(root, entry.Name()))
+		}
+	}
+
+	sort.Strings(out)
+	return out
+}
+
+func templatePathHasTemplates(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+
+	if !info.IsDir() {
+		name := strings.ToLower(info.Name())
+		return strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml")
+	}
+
+	return directoryHasTemplatesRecursive(path)
+}
+
+func directoryHasTemplatesRecursive(dir string) bool {
+	found := false
+	_ = filepath.WalkDir(dir, func(_ string, entry os.DirEntry, err error) error {
+		if err != nil || found {
+			return nil
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		name := strings.ToLower(entry.Name())
+		if strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml") {
+			found = true
+		}
+		return nil
+	})
+	return found
 }
 
 func profileArgs(profile string) []string {
