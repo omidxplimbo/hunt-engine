@@ -64,9 +64,20 @@ func normalizeRootDomain(value string) string {
 
 func normalizeNucleiProfile(value string) string {
 	v := strings.ToLower(strings.TrimSpace(value))
+
 	switch v {
-	case "safe", "exposure", "misconfig", "cves-light", "custom", "full":
-		return v
+	case "safe":
+		return "safe"
+	case "fast", "exposure":
+		return "fast"
+	case "balanced", "misconfig":
+		return "balanced"
+	case "cves-light", "cves_light", "cveslight":
+		return "cves-light"
+	case "full":
+		return "full"
+	case "custom":
+		return "custom"
 	default:
 		return "safe"
 	}
@@ -724,6 +735,7 @@ func DeleteTarget(c *fiber.Ctx) error {
 	id := c.Params("id")
 	targetID := uint(0)
 	_, _ = fmt.Sscanf(id, "%d", &targetID)
+
 	uid, err := currentUserID(c)
 	if err != nil {
 		return err
@@ -740,6 +752,21 @@ func DeleteTarget(c *fiber.Ctx) error {
 			return err
 		}
 
+		// Findings reference both targets and assets. Delete them before assets/found_urls
+		// so target deletion does not fail on fk_findings_asset/fk_findings_url.
+		if err := tx.Exec(`
+			DELETE FROM findings
+			WHERE target_id = ?
+			   OR asset_id IN (SELECT id FROM assets WHERE target_id = ?)
+			   OR url_id IN (SELECT id FROM found_urls WHERE target_id = ?)
+		`, targetID, targetID, targetID).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Exec("DELETE FROM target_scan_states WHERE target_id = ?", targetID).Error; err != nil {
+			return err
+		}
+
 		if err := tx.Exec("DELETE FROM asset_histories WHERE asset_id IN (SELECT id FROM assets WHERE target_id = ?)", targetID).Error; err != nil {
 			return err
 		}
@@ -749,20 +776,19 @@ func DeleteTarget(c *fiber.Ctx) error {
 		if err := tx.Exec("DELETE FROM found_urls WHERE target_id = ?", targetID).Error; err != nil {
 			return err
 		}
-
 		if err := tx.Unscoped().Delete(&target).Error; err != nil {
 			return err
 		}
 		return nil
 	})
-
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"status": "error", "message": "Failed to delete target (DB Error)", "details": err.Error()})
+			"status":  "error",
+			"message": "Failed to delete target (DB Error)",
+			"details": err.Error(),
+		})
 	}
-
-	return c.JSON(fiber.Map{
-		"status": "success", "message": "Target and all associated data deleted successfully"})
+	return c.JSON(fiber.Map{"status": "success", "message": "Target and all associated data deleted successfully"})
 }
 
 // StopScan درخواست توقف اسکن
