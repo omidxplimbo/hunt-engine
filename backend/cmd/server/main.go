@@ -149,6 +149,14 @@ func main() {
 	// Wordlists endpoint
 	api.Get("/wordlists", handlers.GetWordlists)
 
+	// Nuclei custom template management (Admin Only)
+	nucleiTemplates := api.Group("/nuclei/templates", middleware.AdminOnly())
+	nucleiTemplates.Get("/", handlers.ListNucleiTemplates)
+	nucleiTemplates.Post("/", handlers.UpsertNucleiTemplate)
+	nucleiTemplates.Post("/validate", handlers.ValidateNucleiTemplate)
+	nucleiTemplates.Get("/:name", handlers.GetNucleiTemplate)
+	nucleiTemplates.Delete("/:name", handlers.DeleteNucleiTemplate)
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
