@@ -45,7 +45,7 @@ func LoadConfig() Config {
 func NormalizeProfile(value string) string {
 	v := strings.ToLower(strings.TrimSpace(value))
 	switch v {
-	case "safe", "exposure", "misconfig", "cves-light", "custom", "full":
+	case "safe", "fast", "balanced", "exposure", "misconfig", "cves-light", "custom", "full":
 		return v
 	default:
 		return DefaultProfile
