@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -10,16 +12,21 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/api/dto"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
+	"gorm.io/gorm"
 )
 
 const (
 	defaultNucleiCustomTemplatesDir = "/data/nuclei/custom"
 	maxNucleiTemplateBytes          = 1024 * 1024
 	nucleiValidationTimeout         = 30 * time.Second
+	nucleiTemplateAPICacheTTL       = 30 * time.Second
 )
 
 var nucleiTemplateNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.ya?ml$`)
@@ -37,6 +44,16 @@ var allowedNucleiTemplatePlacements = map[string]struct{}{
 	"full":       {},
 	"custom":     {},
 }
+
+type nucleiTemplateCacheEntry struct {
+	expiresAt time.Time
+	templates []dto.NucleiTemplateResponse
+}
+
+var nucleiTemplateAPICache = struct {
+	sync.RWMutex
+	byUser map[uint]nucleiTemplateCacheEntry
+}{byUser: map[uint]nucleiTemplateCacheEntry{}}
 
 func nucleiCustomTemplatesDir() string {
 	dir := strings.TrimSpace(os.Getenv("NUCLEI_CUSTOM_TEMPLATES_DIR"))
@@ -71,181 +88,209 @@ func validateNucleiTemplateName(name string) (string, error) {
 	return name, nil
 }
 
-func nucleiTemplatePath(placement, name string) (string, string, error) {
-	cleanPlacement, err := normalizeNucleiTemplatePlacement(placement)
+func nucleiTemplateChecksum(content string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(content)))
+	return hex.EncodeToString(sum[:])
+}
+
+func nucleiTemplateRelativePath(placement, name string) string {
+	if placement == "root" {
+		return name
+	}
+	return filepath.ToSlash(filepath.Join(placement, name))
+}
+
+func nucleiTemplateRuntimePath(userID uint, placement, name string) (string, error) {
+	placement, err := normalizeNucleiTemplatePlacement(placement)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-
-	cleanName, err := validateNucleiTemplateName(name)
+	name, err = validateNucleiTemplateName(name)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 
-	dir := nucleiCustomTemplatesDir()
-	templateDir := dir
-	relativePath := cleanName
-	if cleanPlacement != "root" {
-		templateDir = filepath.Join(dir, cleanPlacement)
-		relativePath = filepath.ToSlash(filepath.Join(cleanPlacement, cleanName))
+	root := filepath.Join(nucleiCustomTemplatesDir(), "users", fmt.Sprintf("%d", userID))
+	path := filepath.Join(root, name)
+	if placement != "root" {
+		path = filepath.Join(root, placement, name)
 	}
 
-	path := filepath.Join(templateDir, cleanName)
-	rel, err := filepath.Rel(dir, path)
+	rel, err := filepath.Rel(root, path)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return "", "", errors.New("resolved template path escapes custom template directory")
+		return "", errors.New("resolved template path escapes custom template directory")
 	}
-
-	return path, relativePath, nil
+	return path, nil
 }
 
-func nucleiTemplateResponse(root, path string, info os.FileInfo, placement string, includeContent bool) (dto.NucleiTemplateResponse, error) {
-	cleanPlacement, err := normalizeNucleiTemplatePlacement(placement)
-	if err != nil {
-		return dto.NucleiTemplateResponse{}, err
-	}
-
-	relativePath := info.Name()
-	if cleanPlacement != "root" {
-		relativePath = filepath.ToSlash(filepath.Join(cleanPlacement, info.Name()))
-	}
-
-	if root != "" {
-		if rel, err := filepath.Rel(root, path); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
-			relativePath = filepath.ToSlash(rel)
-		}
-	}
-
-	resp := dto.NucleiTemplateResponse{
-		Name:         info.Name(),
-		Placement:    cleanPlacement,
-		RelativePath: relativePath,
-		Path:         path,
-		SizeBytes:    info.Size(),
-		UpdatedAt:    info.ModTime(),
-	}
+func templateResponseFromModel(t models.NucleiTemplate, includeContent bool) dto.NucleiTemplateResponse {
+	path, _ := nucleiTemplateRuntimePath(t.UserID, t.Placement, t.Name)
+	content := ""
 	if includeContent {
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return resp, err
-		}
-		resp.Content = string(content)
+		content = t.Content
 	}
-	return resp, nil
+	return dto.NucleiTemplateResponse{
+		ID:               t.ID,
+		UserID:           t.UserID,
+		Name:             t.Name,
+		Placement:        t.Placement,
+		RelativePath:     nucleiTemplateRelativePath(t.Placement, t.Name),
+		Path:             path,
+		SizeBytes:        int64(len([]byte(t.Content))),
+		CreatedAt:        t.CreatedAt,
+		UpdatedAt:        t.UpdatedAt,
+		Content:          content,
+		Enabled:          t.Enabled,
+		Source:           t.Source,
+		Checksum:         t.Checksum,
+		ValidationStatus: t.ValidationStatus,
+		ValidationError:  t.ValidationError,
+		LastValidatedAt:  t.LastValidatedAt,
+		IsAIGenerated:    t.IsAIGenerated,
+		RequiresApproval: t.RequiresApproval,
+	}
 }
 
-func placementFromRelativePath(relativePath string) string {
-	relativePath = filepath.ToSlash(filepath.Clean(relativePath))
-	if relativePath == "." || relativePath == "" || strings.HasPrefix(relativePath, "../") {
-		return "root"
+func cachedNucleiTemplates(userID uint) ([]dto.NucleiTemplateResponse, bool) {
+	now := time.Now()
+	nucleiTemplateAPICache.RLock()
+	entry, ok := nucleiTemplateAPICache.byUser[userID]
+	nucleiTemplateAPICache.RUnlock()
+	if !ok || now.After(entry.expiresAt) {
+		return nil, false
 	}
-	parts := strings.Split(relativePath, "/")
-	if len(parts) < 2 {
-		return "root"
-	}
-	if _, ok := allowedNucleiTemplatePlacements[parts[0]]; ok {
-		return parts[0]
-	}
-	return "root"
+	out := make([]dto.NucleiTemplateResponse, len(entry.templates))
+	copy(out, entry.templates)
+	return out, true
 }
 
-func templateNameFromRelativePath(relativePath string) string {
-	return filepath.Base(filepath.ToSlash(relativePath))
+func setCachedNucleiTemplates(userID uint, templates []dto.NucleiTemplateResponse) {
+	out := make([]dto.NucleiTemplateResponse, len(templates))
+	copy(out, templates)
+	nucleiTemplateAPICache.Lock()
+	nucleiTemplateAPICache.byUser[userID] = nucleiTemplateCacheEntry{expiresAt: time.Now().Add(nucleiTemplateAPICacheTTL), templates: out}
+	nucleiTemplateAPICache.Unlock()
 }
 
-// ListNucleiTemplates returns all custom Nuclei templates stored in NUCLEI_CUSTOM_TEMPLATES_DIR.
-func ListNucleiTemplates(c *fiber.Ctx) error {
-	dir := nucleiCustomTemplatesDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"status":  "error",
-			"message": "Failed to create custom templates directory",
-			"error":   err.Error(),
-		})
+func invalidateNucleiTemplateCache(userID uint) {
+	nucleiTemplateAPICache.Lock()
+	delete(nucleiTemplateAPICache.byUser, userID)
+	nucleiTemplateAPICache.Unlock()
+}
+
+func writeNucleiTemplateRuntimeCache(t models.NucleiTemplate) error {
+	if !t.Enabled {
+		return removeNucleiTemplateRuntimeCache(t.UserID, t.Placement, t.Name)
 	}
-
-	templates := make([]dto.NucleiTemplateResponse, 0)
-	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if entry.IsDir() {
-			return nil
-		}
-
-		name := entry.Name()
-		if _, err := validateNucleiTemplateName(name); err != nil {
-			return nil
-		}
-
-		rel, err := filepath.Rel(dir, path)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-			return nil
-		}
-
-		placement := placementFromRelativePath(rel)
-		info, err := entry.Info()
-		if err != nil {
-			return nil
-		}
-
-		resp, err := nucleiTemplateResponse(dir, path, info, placement, false)
-		if err != nil {
-			return nil
-		}
-		templates = append(templates, resp)
-		return nil
-	})
+	path, err := nucleiTemplateRuntimePath(t.UserID, t.Placement, t.Name)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"status":  "error",
-			"message": "Failed to read custom templates directory",
-			"error":   err.Error(),
-		})
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	desired := strings.TrimSpace(t.Content) + "\n"
+	if existing, err := os.ReadFile(path); err == nil && string(existing) == desired {
+		return nil
+	}
+	return os.WriteFile(path, []byte(desired), 0o600)
+}
+
+func removeNucleiTemplateRuntimeCache(userID uint, placement, name string) error {
+	path, err := nucleiTemplateRuntimePath(userID, placement, name)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func queryNucleiTemplateForUser(userID uint, name, placement string) (models.NucleiTemplate, error) {
+	name, err := validateNucleiTemplateName(name)
+	if err != nil {
+		return models.NucleiTemplate{}, err
 	}
 
+	q := database.DB.Where("user_id = ? AND name = ?", userID, name)
+	if strings.TrimSpace(placement) != "" {
+		cleanPlacement, err := normalizeNucleiTemplatePlacement(placement)
+		if err != nil {
+			return models.NucleiTemplate{}, err
+		}
+		q = q.Where("placement = ?", cleanPlacement)
+	}
+
+	var templates []models.NucleiTemplate
+	if err := q.Order("placement ASC, id ASC").Find(&templates).Error; err != nil {
+		return models.NucleiTemplate{}, err
+	}
+	if len(templates) == 0 {
+		return models.NucleiTemplate{}, gorm.ErrRecordNotFound
+	}
+	if len(templates) > 1 {
+		return models.NucleiTemplate{}, fmt.Errorf("multiple templates named %q exist; provide placement", name)
+	}
+	return templates[0], nil
+}
+
+// ListNucleiTemplates returns the authenticated user's custom Nuclei templates from Postgres.
+func ListNucleiTemplates(c *fiber.Ctx) error {
+	userID, err := currentUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	if templates, ok := cachedNucleiTemplates(userID); ok {
+		return c.JSON(fiber.Map{"status": "success", "data": templates, "count": len(templates), "cached": true})
+	}
+
+	var records []models.NucleiTemplate
+	if err := database.DB.Where("user_id = ?", userID).Order("placement ASC, name ASC").Find(&records).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to read templates", "error": err.Error()})
+	}
+
+	templates := make([]dto.NucleiTemplateResponse, 0, len(records))
+	for _, record := range records {
+		templates = append(templates, templateResponseFromModel(record, false))
+	}
 	sort.Slice(templates, func(i, j int) bool {
 		if templates[i].Placement == templates[j].Placement {
 			return templates[i].Name < templates[j].Name
 		}
 		return templates[i].RelativePath < templates[j].RelativePath
 	})
+	setCachedNucleiTemplates(userID, templates)
 
-	return c.JSON(fiber.Map{
-		"status": "success",
-		"data":   templates,
-		"count":  len(templates),
-	})
+	return c.JSON(fiber.Map{"status": "success", "data": templates, "count": len(templates), "cached": false})
 }
 
 // GetNucleiTemplate returns one custom template including its YAML content.
 func GetNucleiTemplate(c *fiber.Ctx) error {
-	placement := c.Query("placement", "root")
-	path, _, err := nucleiTemplatePath(placement, c.Params("name"))
+	userID, err := currentUserID(c)
 	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	template, err := queryNucleiTemplateForUser(userID, c.Params("name"), c.Query("placement"))
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Template not found"})
+		}
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
 	}
 
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Template not found"})
-		}
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to read template", "error": err.Error()})
-	}
-	if info.IsDir() {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Template not found"})
-	}
-
-	resp, err := nucleiTemplateResponse(nucleiCustomTemplatesDir(), path, info, placement, true)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to read template", "error": err.Error()})
-	}
-	return c.JSON(fiber.Map{"status": "success", "data": resp})
+	return c.JSON(fiber.Map{"status": "success", "data": templateResponseFromModel(template, true)})
 }
 
 // UpsertNucleiTemplate validates and stores a custom Nuclei template.
 func UpsertNucleiTemplate(c *fiber.Ctx) error {
+	userID, err := currentUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
 	req := new(dto.UpsertNucleiTemplateRequest)
 	if err := c.BodyParser(req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "Invalid request body", "error": err.Error()})
@@ -255,8 +300,7 @@ func UpsertNucleiTemplate(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
 	}
-
-	path, _, err := nucleiTemplatePath(placement, req.Name)
+	name, err := validateNucleiTemplateName(req.Name)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
 	}
@@ -269,48 +313,74 @@ func UpsertNucleiTemplate(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusRequestEntityTooLarge).JSON(fiber.Map{"status": "error", "message": "Template content exceeds 1 MiB limit"})
 	}
 
+	validationStatus := "unknown"
+	validationError := ""
+	var lastValidatedAt *time.Time
 	shouldValidate := true
 	if req.Validate != nil {
 		shouldValidate = *req.Validate
 	}
 	if shouldValidate {
-		validation := runNucleiTemplateValidation(req.Name, content)
+		validation := runNucleiTemplateValidation(name, content)
+		now := time.Now().UTC()
+		lastValidatedAt = &now
 		if !validation.Valid {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"status":     "error",
-				"message":    "Template validation failed",
-				"validation": validation,
-			})
+			validationStatus = "invalid"
+			validationError = validation.Error
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "Template validation failed", "validation": validation})
 		}
+		validationStatus = "valid"
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to create custom templates directory", "error": err.Error()})
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
 	}
-	if err := os.WriteFile(path, []byte(content+"\n"), 0o600); err != nil {
+
+	checksum := nucleiTemplateChecksum(content)
+	var record models.NucleiTemplate
+	err = database.DB.Where("user_id = ? AND placement = ? AND name = ?", userID, placement, name).First(&record).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to load template", "error": err.Error()})
+	}
+
+	if record.ID == 0 {
+		record = models.NucleiTemplate{UserID: userID, Name: name, Placement: placement, Source: "manual"}
+	}
+	record.Content = content
+	record.Enabled = enabled
+	record.Checksum = checksum
+	record.ValidationStatus = validationStatus
+	record.ValidationError = validationError
+	record.LastValidatedAt = lastValidatedAt
+	if record.Source == "" {
+		record.Source = "manual"
+	}
+
+	if err := database.DB.Save(&record).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to save template", "error": err.Error()})
 	}
+	if err := writeNucleiTemplateRuntimeCache(record); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Template saved but runtime cache could not be updated", "error": err.Error()})
+	}
+	invalidateNucleiTemplateCache(userID)
 
-	info, err := os.Stat(path)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Template saved but metadata could not be read", "error": err.Error()})
-	}
-	resp, err := nucleiTemplateResponse(nucleiCustomTemplatesDir(), path, info, placement, true)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Template saved but content could not be read", "error": err.Error()})
-	}
-	return c.JSON(fiber.Map{"status": "success", "message": "Template saved", "data": resp})
+	return c.JSON(fiber.Map{"status": "success", "message": "Template saved", "data": templateResponseFromModel(record, true)})
 }
 
 // ValidateNucleiTemplate validates posted template content or an already saved custom template.
 func ValidateNucleiTemplate(c *fiber.Ctx) error {
+	userID, err := currentUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
 	req := new(dto.ValidateNucleiTemplateRequest)
 	if err := c.BodyParser(req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "Invalid request body", "error": err.Error()})
 	}
 
-	placement, err := normalizeNucleiTemplatePlacement(req.Placement)
-	if err != nil {
+	if _, err := normalizeNucleiTemplatePlacement(req.Placement); err != nil && strings.TrimSpace(req.Placement) != "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
 	}
 
@@ -320,18 +390,14 @@ func ValidateNucleiTemplate(c *fiber.Ctx) error {
 		if name == "" {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "Provide either content or an existing template name"})
 		}
-		path, _, err := nucleiTemplatePath(placement, name)
+		template, err := queryNucleiTemplateForUser(userID, name, req.Placement)
 		if err != nil {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
-		}
-		b, err := os.ReadFile(path)
-		if err != nil {
-			if os.IsNotExist(err) {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Template not found"})
 			}
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to read template", "error": err.Error()})
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
 		}
-		content = string(b)
+		content = template.Content
 	}
 	if name != "" {
 		if _, err := validateNucleiTemplateName(name); err != nil {
@@ -352,18 +418,27 @@ func ValidateNucleiTemplate(c *fiber.Ctx) error {
 
 // DeleteNucleiTemplate removes one custom Nuclei template.
 func DeleteNucleiTemplate(c *fiber.Ctx) error {
-	placement := c.Query("placement", "root")
-	path, _, err := nucleiTemplatePath(placement, c.Params("name"))
+	userID, err := currentUserID(c)
 	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	template, err := queryNucleiTemplateForUser(userID, c.Params("name"), c.Query("placement"))
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Template not found"})
+		}
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
 	}
 
-	if err := os.Remove(path); err != nil {
-		if os.IsNotExist(err) {
-			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Template not found"})
-		}
+	if err := database.DB.Delete(&template).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Failed to delete template", "error": err.Error()})
 	}
+	if err := removeNucleiTemplateRuntimeCache(template.UserID, template.Placement, template.Name); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "Template deleted but runtime cache could not be removed", "error": err.Error()})
+	}
+	invalidateNucleiTemplateCache(userID)
+
 	return c.JSON(fiber.Map{"status": "success", "message": "Template deleted"})
 }
 
@@ -415,7 +490,6 @@ func runNucleiTemplateValidation(name, content string) dto.NucleiTemplateValidat
 		}
 		return resp
 	}
-
 	resp.Valid = true
 	return resp
 }

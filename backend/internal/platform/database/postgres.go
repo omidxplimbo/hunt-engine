@@ -55,7 +55,7 @@ func Connect() {
 		&models.SubfinderProviderConfig{},
 		&models.TargetScanState{},
 		&models.SystemConfig{},
-		&models.Finding{},
+		&models.Finding{}, &models.NucleiTemplate{},
 	)
 
 	if err != nil {

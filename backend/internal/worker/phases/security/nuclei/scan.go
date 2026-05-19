@@ -94,6 +94,12 @@ func Run(ctx Context) error {
 	}
 
 	cfg := LoadConfig()
+	if target.CreatedByUserID > 0 {
+		cfg.CustomTemplatesDir = filepath.Join(cfg.CustomTemplatesDir, "users", fmt.Sprintf("%d", target.CreatedByUserID))
+		if err := syncNucleiTemplateFileCache(cfg.CustomTemplatesDir, target.CreatedByUserID); err != nil {
+			log.Printf("⚠️ Failed to sync Nuclei template file cache for user %d: %v\n", target.CreatedByUserID, err)
+		}
+	}
 	profile := target.NucleiProfile
 	if strings.TrimSpace(profile) == "" {
 		profile = cfg.DefaultProfile
@@ -164,6 +170,77 @@ func Run(ctx Context) error {
 		ctx.ScanMarkStepDone(ctx.TargetID, moduleProbing, StepSecurityScan)
 	}
 	log.Printf("✅ Nuclei security scan complete for target %d: %d active findings\n", ctx.TargetID, len(seen))
+	return nil
+}
+
+func syncNucleiTemplateFileCache(root string, userID uint) error {
+	root = filepath.Clean(strings.TrimSpace(root))
+	if root == "" || userID == 0 {
+		return nil
+	}
+
+	var templates []models.NucleiTemplate
+	if err := database.DB.Where("user_id = ? AND enabled = ?", userID, true).Find(&templates).Error; err != nil {
+		return fmt.Errorf("load user nuclei templates: %w", err)
+	}
+
+	expected := map[string]string{}
+	for _, template := range templates {
+		placement := strings.ToLower(strings.TrimSpace(template.Placement))
+		switch placement {
+		case "root", "shared", "safe", "fast", "exposure", "balanced", "misconfig", "cves", "cves-light", "full", "custom":
+		default:
+			placement = "root"
+		}
+
+		name := filepath.Base(template.Name)
+		lowerName := strings.ToLower(name)
+		if name == "." || name == string(os.PathSeparator) || (!strings.HasSuffix(lowerName, ".yaml") && !strings.HasSuffix(lowerName, ".yml")) {
+			continue
+		}
+
+		path := filepath.Join(root, name)
+		if placement != "root" {
+			path = filepath.Join(root, placement, name)
+		}
+
+		expected[filepath.Clean(path)] = strings.TrimSpace(template.Content) + "\n"
+	}
+
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return err
+	}
+
+	for path, content := range expected {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if existing, err := os.ReadFile(path); err == nil && string(existing) == content {
+			continue
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			return err
+		}
+	}
+
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return nil
+		}
+
+		lowerName := strings.ToLower(entry.Name())
+		if !strings.HasSuffix(lowerName, ".yaml") && !strings.HasSuffix(lowerName, ".yml") {
+			return nil
+		}
+
+		clean := filepath.Clean(path)
+		if _, ok := expected[clean]; !ok {
+			_ = os.Remove(clean)
+		}
+
+		return nil
+	})
+
 	return nil
 }
 

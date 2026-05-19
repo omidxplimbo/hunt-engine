@@ -150,7 +150,7 @@ func main() {
 	api.Get("/wordlists", handlers.GetWordlists)
 
 	// Nuclei custom template management (Admin Only)
-	nucleiTemplates := api.Group("/nuclei/templates", middleware.AdminOnly())
+	nucleiTemplates := api.Group("/nuclei/templates")
 	nucleiTemplates.Get("/", handlers.ListNucleiTemplates)
 	nucleiTemplates.Post("/", handlers.UpsertNucleiTemplate)
 	nucleiTemplates.Post("/validate", handlers.ValidateNucleiTemplate)
