@@ -419,8 +419,8 @@ export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
               className="w-full border border-hack-border bg-black px-3 py-2 font-mono text-xs text-white outline-none focus:border-hack-primary"
             >
               <option value="safe">Safe</option>
-              <option value="exposure">Exposure</option>
-              <option value="misconfig">Misconfig</option>
+              <option value="fast">Fast</option>
+              <option value="balanced">Balanced</option>
               <option value="cves-light">CVEs Light</option>
               <option value="custom">Custom</option>
               <option value="full">Full</option>
