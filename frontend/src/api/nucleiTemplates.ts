@@ -1,8 +1,22 @@
 import { apiClient } from './client';
 
+export type NucleiTemplatePlacement =
+  | 'root'
+  | 'shared'
+  | 'safe'
+  | 'fast'
+  | 'exposure'
+  | 'balanced'
+  | 'misconfig'
+  | 'cves'
+  | 'cves-light'
+  | 'full'
+  | 'custom';
+
 export interface NucleiTemplate {
   name: string;
   path: string;
+  placement?: NucleiTemplatePlacement;
   size_bytes: number;
   updated_at: string;
   content?: string;
@@ -42,12 +56,14 @@ interface ValidationFailureResponse {
 export interface UpsertNucleiTemplatePayload {
   name: string;
   content: string;
+  placement?: NucleiTemplatePlacement;
   validate?: boolean;
 }
 
 export interface ValidateNucleiTemplatePayload {
   name?: string;
   content?: string;
+  placement?: NucleiTemplatePlacement;
 }
 
 const extractValidationFailure = (error: unknown): NucleiTemplateValidation => {
@@ -62,7 +78,11 @@ const extractValidationFailure = (error: unknown): NucleiTemplateValidation => {
 
   return {
     valid: false,
-    error: payload?.message || payload?.error || maybeError.message || 'Template validation failed',
+    error:
+      payload?.message ||
+      payload?.error ||
+      maybeError.message ||
+      'Template validation failed',
   };
 };
 
@@ -71,15 +91,22 @@ export const listNucleiTemplates = async (): Promise<NucleiTemplate[]> => {
   return response.data.data || [];
 };
 
-export const getNucleiTemplate = async (name: string): Promise<NucleiTemplate> => {
-  const response = await apiClient.get<TemplateResponse>(`/nuclei/templates/${encodeURIComponent(name)}`);
+export const getNucleiTemplate = async (
+  name: string
+): Promise<NucleiTemplate> => {
+  const response = await apiClient.get<TemplateResponse>(
+    `/nuclei/templates/${encodeURIComponent(name)}`
+  );
   return response.data.data;
 };
 
 export const saveNucleiTemplate = async (
   payload: UpsertNucleiTemplatePayload
 ): Promise<NucleiTemplate> => {
-  const response = await apiClient.post<TemplateResponse>('/nuclei/templates', payload);
+  const response = await apiClient.post<TemplateResponse>(
+    '/nuclei/templates',
+    payload
+  );
   return response.data.data;
 };
 
@@ -87,7 +114,10 @@ export const validateNucleiTemplate = async (
   payload: ValidateNucleiTemplatePayload
 ): Promise<NucleiTemplateValidation> => {
   try {
-    const response = await apiClient.post<ValidationResponse>('/nuclei/templates/validate', payload);
+    const response = await apiClient.post<ValidationResponse>(
+      '/nuclei/templates/validate',
+      payload
+    );
     return response.data.data;
   } catch (error) {
     return extractValidationFailure(error);
