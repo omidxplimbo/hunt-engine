@@ -149,6 +149,21 @@ func main() {
 	// Wordlists endpoint
 	api.Get("/wordlists", handlers.GetWordlists)
 
+	// Nuclei custom template management (Admin Only)
+	nucleiTemplates := api.Group("/nuclei/templates")
+	nucleiTemplates.Get("/", handlers.ListNucleiTemplates)
+	nucleiTemplates.Post("/", handlers.UpsertNucleiTemplate)
+	nucleiTemplates.Post("/validate", handlers.ValidateNucleiTemplate)
+	nucleiTemplates.Get("/:name", handlers.GetNucleiTemplate)
+	nucleiTemplates.Delete("/:name", handlers.DeleteNucleiTemplate)
+
+	// Nuclei AI template draft foundation (Admin Only, disabled by default)
+	nucleiTemplateDrafts := api.Group("/nuclei/template-drafts", middleware.AdminOnly())
+	nucleiTemplateDrafts.Get("/status", handlers.GetNucleiTemplateDraftStatus)
+	nucleiTemplateDrafts.Post("/", handlers.GenerateNucleiTemplateDraft)
+	nucleiTemplateDrafts.Get("/targets/:id/strategy", handlers.GetNucleiTargetTemplateStrategy)
+	nucleiTemplateDrafts.Get("/targets/:id/strategy", handlers.GetNucleiTargetTemplateStrategy)
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"

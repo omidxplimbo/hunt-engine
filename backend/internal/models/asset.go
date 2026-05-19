@@ -45,6 +45,8 @@ type Target struct {
 	UsePuredns       bool   `gorm:"default:false" json:"use_puredns"` // Use puredns for bruteforce subdomain discovery
 	UseAbusedb       bool   `gorm:"default:false" json:"use_abusedb"`
 	UseAmass         bool   `gorm:"default:false" json:"use_amass"`
+	UseNuclei        bool   `gorm:"default:false" json:"use_nuclei"`
+	NucleiProfile    string `gorm:"size:50;default:'safe'" json:"nuclei_profile"`
 	PurednsWordlists string `gorm:"type:jsonb;default:'[]'" json:"puredns_wordlists"` // Selected wordlists for puredns (e.g. ["wordlist1.txt", "wordlist2.txt"])
 
 	ScanModules string `gorm:"type:jsonb;default:'[\"DISCOVERY\", \"PROBING\"]'" json:"scan_modules"`

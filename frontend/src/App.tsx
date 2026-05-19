@@ -9,6 +9,7 @@ import Login from './pages/Login'; // 👈
 import TargetsPage from './pages/TargetsPages';
 import TargetAssets from './pages/TargetAssets';
 import Settings from './pages/Settings';
+import NucleiTemplates from './pages/NucleiTemplates';
 import Dashboard from './pages/Dashboard'; // 👈 ایمپورت از فایل جدید
 import Account from './pages/Account';
 
@@ -69,7 +70,8 @@ function App() {
                 <Route path="targets" element={<TargetsPage />} />
                 <Route path="targets/:id" element={<TargetAssets />} />
                 <Route element={<AdminRoute />}>
-                <Route path="settings" element={<Settings />} />
+                <Route path="nuclei-templates" element={<NucleiTemplates />} />
+<Route path="settings" element={<Settings />} />
                 </Route>
               </Route>
             </Route>

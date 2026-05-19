@@ -24,6 +24,7 @@ import (
 	discoverytools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/tools"
 	probing "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/probing"
 	probingpersist "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/probing/persistence"
+	nucleiphase "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/security/nuclei"
 	workerruntime "github.com/omidxplimbo/hunt-engine/backend/internal/worker/runtime"
 	workerstate "github.com/omidxplimbo/hunt-engine/backend/internal/worker/state"
 	workertypes "github.com/omidxplimbo/hunt-engine/backend/internal/worker/types"
@@ -470,6 +471,20 @@ func runProbingPhase(targetID uint, rootDomain string) {
 
 			if err := workerfindings.GenerateBuiltinFindings(targetID); err != nil {
 				log.Printf("⚠️ Failed to generate builtin findings for target %d: %v\n", targetID, err)
+			}
+
+			if err := nucleiphase.Run(nucleiphase.Context{
+				TargetID:              targetID,
+				RootDomain:            rootDomain,
+				CheckStop:             checkStopRequest,
+				UpdateTargetPhase:     updateTargetPhase,
+				ScanIsStepDone:        scanIsStepDone,
+				ScanMarkRunning:       scanMarkRunning,
+				ScanMarkStepDone:      scanMarkStepDone,
+				RunCommand:            runCommandWithKillSwitch,
+				RunCommandWithTimeout: runCommandWithTimeoutAndKillSwitch,
+			}); err != nil {
+				log.Printf("⚠️ Nuclei security scan failed for target %d: %v\n", targetID, err)
 			}
 		},
 	})

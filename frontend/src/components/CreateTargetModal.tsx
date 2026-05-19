@@ -39,7 +39,8 @@ type ToolKey =
   | 'use_abusedb'
   | 'use_puredns'
   | 'use_waymore'
-  | 'use_portscan';
+  | 'use_portscan'
+  | 'use_nuclei';
 
 type ToolConfig = {
   key: ToolKey;
@@ -96,6 +97,13 @@ const DISCOVERY_TOOLS: ToolConfig[] = [
 
 const EXTENDED_TOOLS: ToolConfig[] = [
   {
+    key: 'use_nuclei',
+    title: 'NUCLEI',
+    badge: 'SECURITY',
+    description: 'Run profile-based Nuclei templates and create structured Findings.',
+    Icon: Shield,
+  },
+  {
     key: 'use_waymore',
     title: 'WAYMORE',
     badge: 'CRAWL',
@@ -125,6 +133,8 @@ const defaultFormData: CreateTargetPayload = {
   use_puredns: false,
   use_abusedb: false,
   use_amass: false,
+  use_nuclei: false,
+  nuclei_profile: 'safe',
   puredns_wordlists: [],
 };
 
@@ -367,6 +377,28 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               {EXTENDED_TOOLS.map(renderToolCard)}
+
+        {formData.use_nuclei && (
+          <div className="border border-hack-border bg-black/20 p-3">
+            <div className="mb-2 text-xs font-bold uppercase tracking-wider text-hack-dim">Nuclei Profile</div>
+            <select
+              value={formData.nuclei_profile || 'safe'}
+              onChange={(event) => setFormData({ ...formData, nuclei_profile: event.target.value })}
+              className="w-full border border-hack-border bg-black px-3 py-2 font-mono text-xs text-white outline-none focus:border-hack-primary"
+            >
+              <option value="safe">Safe</option>
+              <option value="fast">Fast</option>
+              <option value="balanced">Balanced</option>
+              <option value="cves-light">CVEs Light</option>
+              <option value="custom">Custom</option>
+              <option value="full">Full</option>
+            </select>
+            <p className="mt-2 text-xs leading-5 text-hack-dim">
+              Nuclei is optional and will run as a controlled Security Engine in a later stage.
+            </p>
+          </div>
+        )}
+
             </div>
           </section>
 

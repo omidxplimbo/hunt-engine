@@ -67,3 +67,8 @@ coverage/
 
 # Custom wordlists (may be very large)
 custom_wordlists/
+
+# Runtime-created Nuclei custom templates are persisted on the host but not committed.
+/custom_nuclei_templates/**
+!/custom_nuclei_templates/
+!/custom_nuclei_templates/.gitkeep

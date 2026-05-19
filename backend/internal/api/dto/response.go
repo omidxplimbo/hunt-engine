@@ -27,6 +27,8 @@ type TargetResponse struct {
 	UsePuredns       bool        `json:"use_puredns"`
 	UseAbusedb       bool        `json:"use_abusedb"`
 	UseAmass         bool        `json:"use_amass"`
+	UseNuclei        bool        `json:"use_nuclei"`
+	NucleiProfile    string      `json:"nuclei_profile"`
 	PurednsWordlists interface{} `json:"puredns_wordlists"`
 
 	ScanModules       string `json:"scan_modules"`

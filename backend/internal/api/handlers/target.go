@@ -62,6 +62,27 @@ func normalizeRootDomain(value string) string {
 	return strings.Trim(v, ". ")
 }
 
+func normalizeNucleiProfile(value string) string {
+	v := strings.ToLower(strings.TrimSpace(value))
+
+	switch v {
+	case "safe":
+		return "safe"
+	case "fast", "exposure":
+		return "fast"
+	case "balanced", "misconfig":
+		return "balanced"
+	case "cves-light", "cves_light", "cveslight":
+		return "cves-light"
+	case "full":
+		return "full"
+	case "custom":
+		return "custom"
+	default:
+		return "safe"
+	}
+}
+
 func isDuplicateTargetError(err error) bool {
 	if err == nil {
 		return false
@@ -115,7 +136,7 @@ func CreateTarget(c *fiber.Ctx) error {
 	modulesJSON, _ := json.Marshal(req.Modules)
 
 	target := models.Target{
-		CreatedByUserID: uid, Name: req.Name, RootDomain: req.RootDomain, Description: req.Description, InScope: true, Frequency: req.Frequency, ScanModules: string(modulesJSON), Status: "QUEUED", CurrentPhase: "QUEUED", UseAlterx: true, UseWaymore: false, UsePortscan: false, UseCero: false, UseCrtsh: false, UsePuredns: false, UseAbusedb: false, UseAmass: false, PurednsWordlists: "[]"}
+		CreatedByUserID: uid, Name: req.Name, RootDomain: req.RootDomain, Description: req.Description, InScope: true, Frequency: req.Frequency, ScanModules: string(modulesJSON), Status: "QUEUED", CurrentPhase: "QUEUED", UseAlterx: true, UseWaymore: false, UsePortscan: false, UseCero: false, UseCrtsh: false, UsePuredns: false, UseAbusedb: false, UseAmass: false, UseNuclei: false, NucleiProfile: "safe", PurednsWordlists: "[]"}
 
 	if req.UseAlterx != nil {
 		target.UseAlterx = *req.UseAlterx
@@ -140,6 +161,12 @@ func CreateTarget(c *fiber.Ctx) error {
 	}
 	if req.UsePuredns != nil {
 		target.UsePuredns = *req.UsePuredns
+	}
+	if req.UseNuclei != nil {
+		target.UseNuclei = *req.UseNuclei
+	}
+	if strings.TrimSpace(req.NucleiProfile) != "" {
+		target.NucleiProfile = normalizeNucleiProfile(req.NucleiProfile)
 	}
 	if len(req.PurednsWordlists) > 0 {
 		wordlistsJSON, _ := json.Marshal(req.PurednsWordlists)
@@ -219,6 +246,12 @@ func UpdateTarget(c *fiber.Ctx) error {
 	}
 	if req.UseAmass != nil {
 		target.UseAmass = *req.UseAmass
+	}
+	if req.UseNuclei != nil {
+		target.UseNuclei = *req.UseNuclei
+	}
+	if strings.TrimSpace(req.NucleiProfile) != "" {
+		target.NucleiProfile = normalizeNucleiProfile(req.NucleiProfile)
 	}
 	if len(req.PurednsWordlists) > 0 {
 		wordlistsJSON, _ := json.Marshal(req.PurednsWordlists)
@@ -702,6 +735,7 @@ func DeleteTarget(c *fiber.Ctx) error {
 	id := c.Params("id")
 	targetID := uint(0)
 	_, _ = fmt.Sscanf(id, "%d", &targetID)
+
 	uid, err := currentUserID(c)
 	if err != nil {
 		return err
@@ -718,6 +752,21 @@ func DeleteTarget(c *fiber.Ctx) error {
 			return err
 		}
 
+		// Findings reference both targets and assets. Delete them before assets/found_urls
+		// so target deletion does not fail on fk_findings_asset/fk_findings_url.
+		if err := tx.Exec(`
+			DELETE FROM findings
+			WHERE target_id = ?
+			   OR asset_id IN (SELECT id FROM assets WHERE target_id = ?)
+			   OR url_id IN (SELECT id FROM found_urls WHERE target_id = ?)
+		`, targetID, targetID, targetID).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Exec("DELETE FROM target_scan_states WHERE target_id = ?", targetID).Error; err != nil {
+			return err
+		}
+
 		if err := tx.Exec("DELETE FROM asset_histories WHERE asset_id IN (SELECT id FROM assets WHERE target_id = ?)", targetID).Error; err != nil {
 			return err
 		}
@@ -727,20 +776,19 @@ func DeleteTarget(c *fiber.Ctx) error {
 		if err := tx.Exec("DELETE FROM found_urls WHERE target_id = ?", targetID).Error; err != nil {
 			return err
 		}
-
 		if err := tx.Unscoped().Delete(&target).Error; err != nil {
 			return err
 		}
 		return nil
 	})
-
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"status": "error", "message": "Failed to delete target (DB Error)", "details": err.Error()})
+			"status":  "error",
+			"message": "Failed to delete target (DB Error)",
+			"details": err.Error(),
+		})
 	}
-
-	return c.JSON(fiber.Map{
-		"status": "success", "message": "Target and all associated data deleted successfully"})
+	return c.JSON(fiber.Map{"status": "success", "message": "Target and all associated data deleted successfully"})
 }
 
 // StopScan درخواست توقف اسکن
@@ -859,7 +907,7 @@ func targetOwnerUsername(t models.Target) string {
 func toTargetResponse(t models.Target, assetCount int64) dto.TargetResponse {
 	return dto.TargetResponse{
 		OwnerUsername: targetOwnerUsername(t), CreatedByUserID: t.CreatedByUserID, ID: t.ID, Name: t.Name, RootDomain: t.RootDomain, Description: t.Description, InScope: t.InScope, CreatedAt: t.CreatedAt, AssetCount: assetCount, Frequency: t.Frequency, LastScanAt: t.LastScanAt, Status: t.Status, CurrentPhase: t.CurrentPhase, UseAlterx: t.UseAlterx, UseWaymore: t.UseWaymore, UsePortscan: t.UsePortscan, UseCero: t.UseCero, UseCrtsh: t.UseCrtsh, UsePuredns: t.UsePuredns, UseAbusedb: t.UseAbusedb,
-		UseAmass: t.UseAmass, PurednsWordlists: parseJSONToInterface(t.PurednsWordlists), ScanModules: t.ScanModules}
+		UseAmass: t.UseAmass, UseNuclei: t.UseNuclei, NucleiProfile: t.NucleiProfile, PurednsWordlists: parseJSONToInterface(t.PurednsWordlists), ScanModules: t.ScanModules}
 }
 
 // parseJSONToInterface پارس کردن JSON string به interface{}
@@ -989,7 +1037,7 @@ func ExportTarget(c *fiber.Ctx) error {
 
 		exportItems[i] = dto.TargetExportItem{
 			Name: t.Name, RootDomain: t.RootDomain, Description: t.Description, InScope: t.InScope, Frequency: t.Frequency, Modules: modules, UseAlterx: t.UseAlterx, UseWaymore: t.UseWaymore, UsePortscan: t.UsePortscan, UseCero: t.UseCero, UseCrtsh: t.UseCrtsh, UsePuredns: t.UsePuredns, UseAbusedb: t.UseAbusedb,
-			UseAmass: t.UseAmass, PurednsWordlists: wordlists, Assets: assetItems, URLs: urlItems}
+			UseAmass: t.UseAmass, UseNuclei: t.UseNuclei, NucleiProfile: t.NucleiProfile, PurednsWordlists: wordlists, Assets: assetItems, URLs: urlItems}
 	}
 
 	exportData := dto.TargetExportData{
