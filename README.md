@@ -101,7 +101,8 @@ The platform integrates industry-standard security tools within its isolated env
 * **Port Scanning:** `nmap` (**Optional per target**, runs in Phase 1 on **non-CDN** DNS-resolved IPs)
 * **Crawling & Content Discovery:** `gau`, `waybackurls`, `katana` (Active & Passive), `waymore` (Deep Archival Crawl)
 * **Passive Discovery:** `amass` (**Optional per target**) - OWASP Amass passive enumeration with timeout support
-* **Future Integration:** `ffuf`, `nuclei` (Ready in Dockerfile)
+* **Security Scanning:** `nuclei` (Optional per target, profile-aware, custom template support)
+* **Future Integration:** `ffuf`
 
 ---
 
@@ -1109,4 +1110,88 @@ All Findings endpoints enforce the same target ownership rules as the rest of th
 
 The Findings layer is intentionally structured so future AI features can operate as a safe, optional analysis layer. AI should analyze findings, evidence, stats, and scan history asynchronously without blocking the core scan pipeline. If AI is disabled or fails, scans, findings, exports, and triage continue to work normally.
 <!-- V3_2_FINDINGS_DOCS_END -->
+
+---
+## v3.3.0 Release Summary: Nuclei Security Engine
+
+This release adds the Nuclei Security Engine and the first AI-ready template workflow foundation.
+
+### Added
+
+- Nuclei execution after probing for live HTTP assets.
+- Nuclei findings ingestion into Hunt findings.
+- Canonical scan profiles: `safe`, `fast`, `balanced`, `cves-light`, `full`, and `custom`.
+- Profile-aware custom template placement.
+- Custom Nuclei template management API and UI.
+- Template validation through the backend before saving.
+- Database-backed, per-user custom Nuclei templates.
+- Runtime filesystem cache for Nuclei execution.
+- AI template draft foundation, disabled by default.
+- AI-ready template strategy endpoint for future agent workflows.
+
+### Fixed
+
+- `use_nuclei` and `nuclei_profile` are persisted correctly on target create/update.
+- `fast` and `balanced` are no longer normalized back to `safe`.
+- Target delete safely removes related findings before assets.
+- Custom template delete uses database records instead of fragile filesystem paths.
+- Custom templates are isolated per user.
+
+### Safety Defaults
+
+- AI-generated templates are draft-only.
+- AI template drafting is disabled by default with `NUCLEI_ALLOW_AI_TEMPLATES=false`.
+- No automatic template saving.
+- No automatic template execution.
+- Human review and validation are required before use.
+
+---
+## Nuclei Security Engine
+
+Hunt Engine can run Nuclei after probing when a target has `use_nuclei=true`.
+
+### Target Scan Profiles
+
+Targets can use one of these Nuclei profiles:
+
+- `safe` - conservative checks for medium/high/critical issues.
+- `fast` - lightweight exposure and panel checks.
+- `balanced` - broader misconfiguration and exposure checks.
+- `cves-light` - focused CVE-oriented checks.
+- `full` - broad template coverage.
+- `custom` - custom-focused execution for advanced workflows.
+
+### Custom Nuclei Templates
+
+Custom templates are stored in PostgreSQL as the source of truth and scoped per user. During scan execution, enabled templates for the target owner are materialized into a runtime filesystem cache and passed to Nuclei with `-t`.
+
+Template placements control which profiles execute a template:
+
+- `root`, `shared`, `safe` - available to every profile.
+- `fast`, `exposure` - available to `fast`, `balanced`, `full`, and `custom`.
+- `balanced`, `misconfig` - available to `balanced`, `full`, and `custom`.
+- `cves`, `cves-light` - available to `cves-light`, `full`, and `custom`.
+- `full`, `custom` - available to `full` and `custom`.
+
+### AI-Ready Template Foundation
+
+The AI template draft foundation is disabled by default. When enabled, it returns draft-only templates and strategy recommendations; it never saves or executes templates automatically.
+
+Relevant environment variable:
+
+```env
+NUCLEI_ALLOW_AI_TEMPLATES=false
+```
+
+Relevant API areas:
+
+```text
+GET    /api/nuclei/templates
+POST   /api/nuclei/templates
+POST   /api/nuclei/templates/validate
+DELETE /api/nuclei/templates/:id
+GET    /api/nuclei/template-drafts/status
+POST   /api/nuclei/template-drafts
+GET    /api/nuclei/template-drafts/targets/:id/strategy
+```
 
