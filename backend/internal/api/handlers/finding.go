@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"encoding/json"
 	"github.com/gofiber/fiber/v2"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/api/dto"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
@@ -16,18 +17,29 @@ import (
 	"gorm.io/gorm"
 )
 
+func findingEvidenceJSON(raw []byte) json.RawMessage {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || !json.Valid(trimmed) {
+		return json.RawMessage([]byte("{}"))
+	}
+
+	out := make([]byte, len(trimmed))
+	copy(out, trimmed)
+	return json.RawMessage(out)
+}
+
 func toFindingResponse(f models.Finding) dto.FindingResponse {
 	return dto.FindingResponse{
-		ID:             f.ID,
-		TargetID:       f.TargetID,
-		AssetID:        f.AssetID,
-		URLID:          f.URLID,
-		Title:          f.Title,
-		Description:    f.Description,
-		Severity:       f.Severity,
-		Category:       f.Category,
-		SourceTool:     f.SourceTool,
-		Evidence:       f.Evidence,
+		ID:          f.ID,
+		TargetID:    f.TargetID,
+		AssetID:     f.AssetID,
+		URLID:       f.URLID,
+		Title:       f.Title,
+		Description: f.Description,
+		Severity:    f.Severity,
+		Category:    f.Category,
+		SourceTool:  f.SourceTool,
+		Evidence:    f.Evidence, EvidenceJSON: findingEvidenceJSON(f.EvidenceJSON),
 		Recommendation: f.Recommendation,
 		Status:         f.Status,
 		Fingerprint:    f.Fingerprint,

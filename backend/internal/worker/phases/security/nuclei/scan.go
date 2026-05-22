@@ -17,6 +17,7 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	workerutils "github.com/omidxplimbo/hunt-engine/backend/internal/worker/utils"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -620,6 +621,7 @@ func upsertNucleiFinding(targetID uint, fingerprint string, row resultRow, asset
 		"category":       "nuclei",
 		"source_tool":    SourceToolNuclei,
 		"evidence":       evidence,
+		"evidence_json":  datatypes.JSON([]byte(evidence)),
 		"recommendation": recommendation,
 		"last_seen":      now,
 		"asset_id":       assetID,
@@ -635,14 +637,14 @@ func upsertNucleiFinding(targetID uint, fingerprint string, row resultRow, asset
 	}
 
 	finding := models.Finding{
-		TargetID:       targetID,
-		AssetID:        assetID,
-		Title:          title,
-		Description:    description,
-		Severity:       severity,
-		Category:       "nuclei",
-		SourceTool:     SourceToolNuclei,
-		Evidence:       evidence,
+		TargetID:    targetID,
+		AssetID:     assetID,
+		Title:       title,
+		Description: description,
+		Severity:    severity,
+		Category:    "nuclei",
+		SourceTool:  SourceToolNuclei,
+		Evidence:    evidence, EvidenceJSON: datatypes.JSON([]byte(evidence)),
 		Recommendation: recommendation,
 		Status:         models.FindingStatusOpen,
 		Fingerprint:    fingerprint,
