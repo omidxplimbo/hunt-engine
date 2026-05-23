@@ -88,6 +88,14 @@ RUN AMASS_URL=$(wget -qO- https://api.github.com/repos/owasp-amass/amass/release
 
 # دانلود وردلیست‌ها
 RUN mkdir -p /root/nuclei-templates /data/nuclei/custom
+# Bootstrap ProjectDiscovery public templates so profile scans have a built-in template set.
+# Custom templates remain DB-backed and are materialized at runtime under /data/nuclei/custom.
+RUN HOME=/root nuclei -update-templates -silent || \
+    (echo "failed to download nuclei templates" && exit 1)
+
+RUN echo "Nuclei template count:" && \
+    find /root/nuclei-templates -type f \( -name "*.yaml" -o -name "*.yml" \) | wc -l && \
+    test "$(find /root/nuclei-templates -type f \( -name "*.yaml" -o -name "*.yml" \) | wc -l)" -gt 0
 RUN mkdir -p /wordlists
 RUN curl -sL https://raw.githubusercontent.com/v0re/dirb/master/wordlists/common.txt -o /wordlists/common.txt
 RUN curl -sL https://raw.githubusercontent.com/PortSwigger/param-miner/master/resources/params -o /wordlists/params.txt

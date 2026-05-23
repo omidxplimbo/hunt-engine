@@ -139,6 +139,10 @@ func Run(ctx Context) error {
 	}
 
 	args := buildArgs(cfg, profile, inputFile, outputFile)
+	if !hasTemplateArgument(args) {
+		return fmt.Errorf("nuclei has no templates available: built-in dir %q and custom dir %q contain no YAML templates", cfg.TemplatesDir, cfg.CustomTemplatesDir)
+	}
+
 	var output []byte
 	if ctx.RunCommandWithTimeout != nil && cfg.Timeout > 0 {
 		output, err = ctx.RunCommandWithTimeout(ctx.TargetID, cfg.Timeout, "nuclei", args...)
@@ -247,6 +251,7 @@ func syncNucleiTemplateFileCache(root string, userID uint) error {
 
 func buildArgs(cfg Config, profile, inputFile, outputFile string) []string {
 	args := []string{
+		"-no-stdin",
 		"-l", inputFile,
 		"-jsonl",
 		"-o", outputFile,
@@ -258,8 +263,10 @@ func buildArgs(cfg Config, profile, inputFile, outputFile string) []string {
 		"-bs", fmt.Sprintf("%d", positiveOrDefault(cfg.BulkSize, DefaultBulkSize)),
 	}
 
-	if directoryHasTemplates(cfg.TemplatesDir) {
-		args = append(args, "-t", cfg.TemplatesDir)
+	for _, templatePath := range builtinTemplateArgs(cfg.TemplatesDir, profile) {
+
+		args = append(args, "-t", templatePath)
+
 	}
 
 	for _, templatePath := range customTemplateArgs(cfg.CustomTemplatesDir, profile) {
@@ -267,6 +274,99 @@ func buildArgs(cfg Config, profile, inputFile, outputFile string) []string {
 	}
 
 	return append(args, profileArgs(profile)...)
+}
+
+func hasTemplateArgument(args []string) bool {
+	for i, arg := range args {
+		if arg != "-t" {
+			continue
+		}
+		if i+1 < len(args) && strings.TrimSpace(args[i+1]) != "" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func builtinTemplateArgs(root string, profile string) []string {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return nil
+	}
+
+	normalized := NormalizeProfile(profile)
+
+	if normalized == "full" || normalized == "custom" {
+		if directoryHasTemplates(root) {
+			return []string{root}
+		}
+		return nil
+	}
+
+	candidates := make([]string, 0, 16)
+	addDir := func(names ...string) {
+		for _, name := range names {
+			candidates = append(candidates, filepath.Join(root, name))
+		}
+	}
+
+	switch normalized {
+	case "fast", "exposure":
+		addDir(
+			"http/exposures",
+			"http/exposed-panels",
+			"http/default-logins",
+			"exposures",
+			"exposed-panels",
+			"default-logins",
+		)
+	case "balanced", "misconfig":
+		addDir(
+			"http/exposures",
+			"http/exposed-panels",
+			"http/default-logins",
+			"http/misconfiguration",
+			"http/vulnerabilities/generic",
+			"exposures",
+			"exposed-panels",
+			"default-logins",
+			"misconfiguration",
+			"vulnerabilities/generic",
+		)
+	case "cves-light":
+		addDir(
+			"http/cves",
+			"cves",
+		)
+	default:
+		addDir(
+			"http/exposures",
+			"http/misconfiguration",
+			"exposures",
+			"misconfiguration",
+		)
+	}
+
+	out := make([]string, 0, len(candidates))
+	seen := map[string]struct{}{}
+	for _, candidate := range candidates {
+		candidate = filepath.Clean(strings.TrimSpace(candidate))
+		if candidate == "" || candidate == "." {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		if !templatePathHasTemplates(candidate) {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		out = append(out, candidate)
+	}
+
+	sort.Strings(out)
+	return out
 }
 
 func customTemplateArgs(root, profile string) []string {
@@ -388,11 +488,11 @@ func profileArgs(profile string) []string {
 	case "custom":
 		return []string{"-severity", "info,low,medium,high,critical"}
 	case "cves-light":
-		return []string{"-tags", "cve", "-severity", "medium,high,critical", "-exclude-tags", "dos,bruteforce,brute-force,intrusive,destructive"}
+		return []string{"-tags", "cve", "-severity", "medium,high,critical", "-exclude-tags", "dos,bruteforce,brute-force,intrusive,destructive,fuzz"}
 	case "misconfig", "balanced":
-		return []string{"-tags", "misconfig,exposure,panel,default-login", "-severity", "low,medium,high,critical", "-exclude-tags", "dos,bruteforce,brute-force,intrusive,destructive"}
+		return []string{"-tags", "misconfig,exposure,panel,default-login", "-severity", "medium,high,critical", "-exclude-tags", "dos,bruteforce,brute-force,intrusive,destructive,fuzz"}
 	case "exposure", "fast":
-		return []string{"-tags", "exposure,panel,default-login", "-severity", "low,medium,high,critical", "-exclude-tags", "dos,bruteforce,brute-force,intrusive,destructive"}
+		return []string{"-tags", "exposure,panel,default-login", "-severity", "medium,high,critical", "-exclude-tags", "dos,bruteforce,brute-force,intrusive,destructive,fuzz"}
 	default:
 		return []string{"-severity", "medium,high,critical", "-exclude-tags", "dos,bruteforce,brute-force,intrusive,destructive,fuzz"}
 	}

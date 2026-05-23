@@ -1,6 +1,13 @@
 export type FindingSeverity = 'info' | 'low' | 'medium' | 'high' | 'critical';
-
 export type FindingStatus = 'open' | 'accepted' | 'false_positive' | 'fixed';
+
+export type EvidenceJSON =
+  | Record<string, unknown>
+  | unknown[]
+  | string
+  | number
+  | boolean
+  | null;
 
 export interface Finding {
   id: number;
@@ -13,6 +20,7 @@ export interface Finding {
   category?: string;
   source_tool?: string;
   evidence?: string;
+  evidence_json?: EvidenceJSON;
   recommendation?: string;
   status: FindingStatus;
   triage_note?: string;
@@ -40,8 +48,8 @@ export interface FindingStats {
   accepted: number;
   false_positive: number;
   fixed: number;
-  by_severity: Record<FindingSeverity, number>;
-  by_status: Record<FindingStatus, number>;
+  by_severity: Record<string, number>;
+  by_status: Record<string, number>;
   by_source: Record<string, number>;
   by_category: Record<string, number>;
 }

@@ -25,6 +25,7 @@ services:
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required and must be at least 32 characters}
       - VIRUSTOTAL_API_KEY=${VIRUSTOTAL_API_KEY:-} - NUCLEI_ALLOW_AI_TEMPLATES=${NUCLEI_ALLOW_AI_TEMPLATES:-false}
       - NUCLEI_CUSTOM_TEMPLATES_DIR=/data/nuclei/custom
+      - HUNT_NUCLEI_TIMEOUT=${HUNT_NUCLEI_TIMEOUT:-10m}
     volumes:
       # 👇 این خط برای وردلیست‌های سفارشی اضافه شد (برای آینده)
       - ./custom_wordlists:/wordlists/custom

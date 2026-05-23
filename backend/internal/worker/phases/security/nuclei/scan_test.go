@@ -168,6 +168,13 @@ func TestCustomTemplateArgsSelectsFullProfileTemplates(t *testing.T) {
 
 func TestBuildArgsAddsProfileAwareCustomTemplatePaths(t *testing.T) {
 	templatesDir := t.TempDir()
+	builtinFastDir := filepath.Join(templatesDir, "http", "exposures")
+	if err := os.MkdirAll(builtinFastDir, 0o755); err != nil {
+		t.Fatalf("failed to create builtin fast template dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(builtinFastDir, "exposure.yaml"), []byte("id: builtin-fast-test\ninfo:\n  name: Builtin Fast Test\n  author: hunt\n  severity: info\nhttp:\n  - method: GET\n    path:\n      - \"{{BaseURL}}/\"\n"), 0o600); err != nil {
+		t.Fatalf("failed to write builtin fast template: %v", err)
+	}
 	customDir := t.TempDir()
 
 	writeTestTemplate(t, templatesDir, "builtin.yaml")
@@ -177,7 +184,18 @@ func TestBuildArgsAddsProfileAwareCustomTemplatePaths(t *testing.T) {
 
 	args := buildArgs(Config{TemplatesDir: templatesDir, CustomTemplatesDir: customDir}, "fast", "targets.txt", "out.jsonl")
 
-	assertContainsPair(t, args, "-t", templatesDir)
+	foundNoStdin := false
+	for _, arg := range args {
+		if arg == "-no-stdin" {
+			foundNoStdin = true
+			break
+		}
+	}
+	if !foundNoStdin {
+		t.Fatalf("expected args to contain -no-stdin, got %#v", args)
+	}
+
+	assertContainsPair(t, args, "-t", builtinFastDir)
 	assertContainsPair(t, args, "-t", filepath.Join(customDir, "root.yaml"))
 	assertContainsPair(t, args, "-t", filepath.Join(customDir, "fast"))
 	assertNotContainsPair(t, args, "-t", filepath.Join(customDir, "full"))
