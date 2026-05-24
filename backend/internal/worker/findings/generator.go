@@ -16,6 +16,7 @@ import (
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -45,6 +46,7 @@ type findingCandidate struct {
 	Severity       string
 	Category       string
 	Evidence       string
+	EvidenceJSON   datatypes.JSON
 	Recommendation string
 	FingerprintKey string
 	StableSubject  string
@@ -196,6 +198,10 @@ func candidatesFromAsset(asset models.Asset) []findingCandidate {
 				FingerprintKey: fmt.Sprintf("open-port-%s-%d", host, port),
 			})
 		}
+	}
+
+	for i := range candidates {
+		candidates[i].EvidenceJSON = assetEvidenceJSON(asset, candidates[i])
 	}
 
 	return candidates
@@ -364,6 +370,10 @@ func candidatesFromURL(foundURL models.FoundURL) []findingCandidate {
 		)
 	}
 
+	for i := range candidates {
+		candidates[i].EvidenceJSON = urlEvidenceJSON(foundURL, analysisURL, candidates[i])
+	}
+
 	return candidates
 }
 
@@ -379,6 +389,7 @@ func upsertFinding(targetID uint, fingerprint string, candidate findingCandidate
 			"category":       candidate.Category,
 			"source_tool":    sourceToolBuiltin,
 			"evidence":       candidate.Evidence,
+			"evidence_json":  normalizedEvidenceJSON(candidate.EvidenceJSON),
 			"recommendation": candidate.Recommendation,
 			"last_seen":      now,
 			"asset_id":       candidate.AssetID,
@@ -406,6 +417,7 @@ func upsertFinding(targetID uint, fingerprint string, candidate findingCandidate
 		Category:       candidate.Category,
 		SourceTool:     sourceToolBuiltin,
 		Evidence:       candidate.Evidence,
+		EvidenceJSON:   normalizedEvidenceJSON(candidate.EvidenceJSON),
 		Recommendation: candidate.Recommendation,
 		Status:         models.FindingStatusOpen,
 		Fingerprint:    fingerprint,
@@ -526,6 +538,147 @@ func urlEvidence(foundURL models.FoundURL, canonicalURL string) string {
 	}
 
 	return strings.Join(parts, " ")
+}
+
+func assetEvidenceJSON(asset models.Asset, candidate findingCandidate) datatypes.JSON {
+	payload := map[string]interface{}{
+		"scope":            "asset",
+		"detector":         candidate.FingerprintKey,
+		"category":         candidate.Category,
+		"title":            candidate.Title,
+		"severity":         candidate.Severity,
+		"confidence":       confidenceForCandidate(candidate),
+		"evidence_text":    candidate.Evidence,
+		"asset_id":         optionalUint(candidate.AssetID),
+		"asset":            asset.Value,
+		"asset_type":       asset.Type,
+		"is_live":          asset.IsLive,
+		"status_code":      asset.StatusCode,
+		"final_url":        asset.FinalURL,
+		"title_observed":   asset.Title,
+		"content_length":   asset.ContentLength,
+		"host_ip":          jsonValue(asset.HostIP),
+		"dnsx_ip":          jsonValue(asset.DnsxIP),
+		"web_server":       asset.WebServer,
+		"cdn_name":         asset.CDNName,
+		"cdncheck":         asset.Cdncheck,
+		"cdncheck_name":    asset.CdncheckName,
+		"wafcheck":         asset.Wafcheck,
+		"wafcheck_name":    asset.WafcheckName,
+		"cloudcheck":       asset.Cloudcheck,
+		"cloudcheck_name":  asset.CloudcheckName,
+		"technologies":     jsonValue(asset.Technologies),
+		"body_hash":        asset.BodyHash,
+		"header_hash":      asset.HeaderHash,
+		"response_time_ms": asset.ResponseTimeMs,
+		"open_ports":       jsonValue(asset.OpenPorts),
+		"sources":          jsonValue(asset.Sources),
+	}
+
+	return jsonEvidence(payload)
+}
+
+func urlEvidenceJSON(foundURL models.FoundURL, analysisURL string, candidate findingCandidate) datatypes.JSON {
+	pathValue := ""
+	host := ""
+	scheme := ""
+	queryKeys := make([]string, 0)
+	fileName := ""
+	extension := ""
+
+	if parsed, err := url.Parse(analysisURL); err == nil {
+		scheme = parsed.Scheme
+		host = parsed.Hostname()
+		pathValue = parsed.Path
+		fileName = filepath.Base(parsed.Path)
+		extension = strings.ToLower(filepath.Ext(fileName))
+
+		for key := range parsed.Query() {
+			key = strings.TrimSpace(strings.ToLower(key))
+			if key != "" {
+				queryKeys = append(queryKeys, key)
+			}
+		}
+		sort.Strings(queryKeys)
+	}
+
+	payload := map[string]interface{}{
+		"scope":            "url",
+		"detector":         candidate.FingerprintKey,
+		"category":         candidate.Category,
+		"title":            candidate.Title,
+		"severity":         candidate.Severity,
+		"confidence":       confidenceForCandidate(candidate),
+		"evidence_text":    candidate.Evidence,
+		"url_id":           optionalUint(candidate.URLID),
+		"asset_id":         optionalUint(candidate.AssetID),
+		"raw_url":          foundURL.Value,
+		"canonical_url":    analysisURL,
+		"stored_canonical": foundURL.CanonicalValue,
+		"canonical_hash":   foundURL.CanonicalHash,
+		"source":           foundURL.Source,
+		"occurrence_count": foundURL.OccurrenceCount,
+		"last_seen":        foundURL.LastSeen,
+		"scheme":           scheme,
+		"host":             host,
+		"path":             pathValue,
+		"file_name":        fileName,
+		"extension":        extension,
+		"query_keys":       queryKeys,
+	}
+
+	return jsonEvidence(payload)
+}
+
+func normalizedEvidenceJSON(data datatypes.JSON) datatypes.JSON {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || trimmed == "null" {
+		return datatypes.JSON([]byte("{}"))
+	}
+
+	return data
+}
+
+func jsonEvidence(payload map[string]interface{}) datatypes.JSON {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return datatypes.JSON([]byte("{}"))
+	}
+
+	return datatypes.JSON(data)
+}
+
+func jsonValue(raw string) interface{} {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	var decoded interface{}
+	if err := json.Unmarshal([]byte(raw), &decoded); err == nil {
+		return decoded
+	}
+
+	return raw
+}
+
+func optionalUint(value *uint) interface{} {
+	if value == nil {
+		return nil
+	}
+
+	return *value
+}
+
+func confidenceForCandidate(candidate findingCandidate) string {
+	switch candidate.Severity {
+	case models.FindingSeverityCritical, models.FindingSeverityHigh:
+		return "high"
+	case models.FindingSeverityMedium:
+		return "medium"
+	default:
+		return "low"
+	}
 }
 
 func canonicalURLForFinding(rawValue string) string {
