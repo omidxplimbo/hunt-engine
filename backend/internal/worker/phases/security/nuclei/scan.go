@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -139,6 +140,10 @@ func Run(ctx Context) error {
 	}
 
 	args := buildArgs(cfg, profile, inputFile, outputFile)
+
+	log.Printf("🔎 Nuclei debug target %d: targets_file=%s targets_count=%d output_file=%s", target.ID, inputFile, countNonEmptyFileLines(inputFile), outputFile)
+	log.Printf("🔎 Nuclei debug target %d: args=%s", target.ID, strings.Join(args, " "))
+
 	if !hasTemplateArgument(args) {
 		return fmt.Errorf("nuclei has no templates available: built-in dir %q and custom dir %q contain no YAML templates", cfg.TemplatesDir, cfg.CustomTemplatesDir)
 	}
@@ -174,6 +179,8 @@ func Run(ctx Context) error {
 	if ctx.ScanMarkStepDone != nil {
 		ctx.ScanMarkStepDone(ctx.TargetID, moduleProbing, StepSecurityScan)
 	}
+
+	log.Printf("🔎 Nuclei debug target %d: output_size=%d output_lines=%d after command", target.ID, fileSizeBytes(outputFile), countNonEmptyFileLines(outputFile))
 	log.Printf("✅ Nuclei security scan complete for target %d: %d active findings\n", ctx.TargetID, len(seen))
 	return nil
 }
@@ -249,6 +256,62 @@ func syncNucleiTemplateFileCache(root string, userID uint) error {
 	return nil
 }
 
+func nucleiRequestTimeoutSeconds() int {
+	value := nucleiIntFromEnv("NUCLEI_REQUEST_TIMEOUT_SECONDS", 10)
+	if value <= 0 {
+		return 10
+	}
+	return value
+}
+
+func nucleiRetries() int {
+	value := nucleiIntFromEnv("NUCLEI_RETRIES", 0)
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
+func nucleiIntFromEnv(name string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		log.Printf("⚠️ Invalid %s value %q; falling back to %d", name, raw, fallback)
+		return fallback
+	}
+
+	return value
+}
+
+func countNonEmptyFileLines(path string) int {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer file.Close()
+
+	count := 0
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		if strings.TrimSpace(scanner.Text()) != "" {
+			count++
+		}
+	}
+	return count
+}
+
+func fileSizeBytes(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
 func buildArgs(cfg Config, profile, inputFile, outputFile string) []string {
 	args := []string{
 		"-no-stdin",
@@ -263,6 +326,14 @@ func buildArgs(cfg Config, profile, inputFile, outputFile string) []string {
 		"-bs", fmt.Sprintf("%d", positiveOrDefault(cfg.BulkSize, DefaultBulkSize)),
 	}
 
+	requestTimeoutSeconds := nucleiRequestTimeoutSeconds()
+	if requestTimeoutSeconds > 0 {
+		args = append(args, "-timeout", fmt.Sprintf("%d", requestTimeoutSeconds))
+	}
+	retries := nucleiRetries()
+	if retries >= 0 {
+		args = append(args, "-retries", fmt.Sprintf("%d", retries))
+	}
 	for _, templatePath := range builtinTemplateArgs(cfg.TemplatesDir, profile) {
 
 		args = append(args, "-t", templatePath)

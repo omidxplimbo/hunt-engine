@@ -176,6 +176,8 @@ func TestBuildArgsAddsProfileAwareCustomTemplatePaths(t *testing.T) {
 		t.Fatalf("failed to write builtin fast template: %v", err)
 	}
 	customDir := t.TempDir()
+	t.Setenv("NUCLEI_REQUEST_TIMEOUT_SECONDS", "10")
+	t.Setenv("NUCLEI_RETRIES", "0")
 
 	writeTestTemplate(t, templatesDir, "builtin.yaml")
 	writeTestTemplate(t, customDir, "root.yaml")
@@ -198,6 +200,8 @@ func TestBuildArgsAddsProfileAwareCustomTemplatePaths(t *testing.T) {
 	assertContainsPair(t, args, "-t", builtinFastDir)
 	assertContainsPair(t, args, "-t", filepath.Join(customDir, "root.yaml"))
 	assertContainsPair(t, args, "-t", filepath.Join(customDir, "fast"))
+	assertContainsPair(t, args, "-timeout", "10")
+	assertContainsPair(t, args, "-retries", "0")
 	assertNotContainsPair(t, args, "-t", filepath.Join(customDir, "full"))
 }
 

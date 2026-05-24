@@ -87,15 +87,19 @@ RUN AMASS_URL=$(wget -qO- https://api.github.com/repos/owasp-amass/amass/release
     rm -rf /tmp/amass.tar.gz /tmp/amass_extracted
 
 # دانلود وردلیست‌ها
-RUN mkdir -p /root/nuclei-templates /data/nuclei/custom
-# Bootstrap ProjectDiscovery public templates so profile scans have a built-in template set.
-# Custom templates remain DB-backed and are materialized at runtime under /data/nuclei/custom.
-RUN HOME=/root nuclei -update-templates -silent || \
-    (echo "failed to download nuclei templates" && exit 1)
+RUN set -eu; \
+    rm -rf /root/nuclei-templates; \
+    mkdir -p /root/nuclei-templates /data/nuclei/custom; \
+    wget -qO /tmp/nuclei-templates.tar.gz https://github.com/projectdiscovery/nuclei-templates/archive/refs/heads/main.tar.gz; \
+    tar -xzf /tmp/nuclei-templates.tar.gz -C /tmp; \
+    src="$(find /tmp -maxdepth 1 -type d -name 'nuclei-templates-*' | head -n 1)"; \
+    test -n "$src"; \
+    cp -a "$src"/. /root/nuclei-templates/; \
+    rm -rf /tmp/nuclei-templates.tar.gz "$src"; \
+    count="$(find /root/nuclei-templates -type f \( -name '*.yaml' -o -name '*.yml' \) | wc -l)"; \
+    echo "Nuclei template count: $count"; \
+    test "$count" -gt 0
 
-RUN echo "Nuclei template count:" && \
-    find /root/nuclei-templates -type f \( -name "*.yaml" -o -name "*.yml" \) | wc -l && \
-    test "$(find /root/nuclei-templates -type f \( -name "*.yaml" -o -name "*.yml" \) | wc -l)" -gt 0
 RUN mkdir -p /wordlists
 RUN curl -sL https://raw.githubusercontent.com/v0re/dirb/master/wordlists/common.txt -o /wordlists/common.txt
 RUN curl -sL https://raw.githubusercontent.com/PortSwigger/param-miner/master/resources/params -o /wordlists/params.txt
@@ -104,3 +108,16 @@ RUN chmod +x /usr/local/bin/*
 
 EXPOSE 8080
 CMD ["./hunt-engine-api"]
+
+# HUNT_NUCLEI_SPLIT_WRAPPER_START
+COPY hunt-nuclei-wrapper.sh /usr/local/bin/hunt-nuclei-wrapper.sh
+RUN set -eux; \
+    real="$(command -v nuclei)"; \
+    test -n "$real"; \
+    if grep -q "HUNT_NUCLEI_SPLIT_WRAPPER" "$real" 2>/dev/null; then echo "Refusing to wrap an already wrapped nuclei binary"; exit 1; fi; \
+    rm -f /usr/local/bin/nuclei.real; \
+    cp -L "$real" /usr/local/bin/nuclei.real; \
+    chmod 0755 /usr/local/bin/nuclei.real /usr/local/bin/hunt-nuclei-wrapper.sh; \
+    ln -sf /usr/local/bin/hunt-nuclei-wrapper.sh /usr/local/bin/nuclei
+# HUNT_NUCLEI_SPLIT_WRAPPER_END
+
