@@ -24,6 +24,7 @@ import (
 	discoverytools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/tools"
 	probing "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/probing"
 	probingpersist "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/probing/persistence"
+	jsintelphase "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/security/jsintel"
 	nucleiphase "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/security/nuclei"
 	takeoverphase "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/security/takeover"
 	workerruntime "github.com/omidxplimbo/hunt-engine/backend/internal/worker/runtime"
@@ -524,7 +525,24 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 		TriggerNextModule:   triggerNextModule,
 		RunCommand:          runCommandWithKillSwitch,
 		RunCommandWithStdin: runCommandWithStdinAndKillSwitch,
+		AfterCrawling: func(targetID uint) {
+			runPostCrawlingSecurity(targetID, rootDomain)
+		},
 	})
+}
+
+func runPostCrawlingSecurity(targetID uint, rootDomain string) {
+	if err := jsintelphase.Run(jsintelphase.Context{
+		TargetID:          targetID,
+		RootDomain:        rootDomain,
+		CheckStop:         checkStopRequest,
+		UpdateTargetPhase: updateTargetPhase,
+		ScanIsStepDone:    scanIsStepDone,
+		ScanMarkRunning:   scanMarkRunning,
+		ScanMarkStepDone:  scanMarkStepDone,
+	}); err != nil {
+		log.Printf("⚠️ JS intelligence failed for target %d: %v\n", targetID, err)
+	}
 }
 
 // saveCrawledURLs (UPDATED) اضافه شدن پارامتر silent

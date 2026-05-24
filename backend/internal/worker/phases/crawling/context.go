@@ -21,6 +21,8 @@ type Context struct {
 
 	RunCommand          func(targetID uint, name string, args ...string) ([]byte, error)
 	RunCommandWithStdin func(targetID uint, stdin io.Reader, name string, args ...string) ([]byte, error)
+
+	AfterCrawling func(targetID uint)
 }
 
 func (c Context) toolContext(tempDir string) tools.Context {
