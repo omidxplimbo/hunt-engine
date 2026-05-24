@@ -55,6 +55,7 @@ func Connect() {
 		&models.SubfinderProviderConfig{},
 		&models.TargetScanState{},
 		&models.SystemConfig{},
+		&models.UserTelegramConfig{},
 		&models.Finding{}, &models.NucleiTemplate{},
 	)
 

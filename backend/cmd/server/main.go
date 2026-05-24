@@ -115,6 +115,8 @@ func main() {
 	api.Patch("/me", handlers.UpdateMe)
 	api.Post("/me/change-password", handlers.ChangeMyPassword)
 	api.Delete("/me", handlers.DeleteMe)
+	api.Get("/me/telegram-config", handlers.GetMyTelegramConfig)
+	api.Put("/me/telegram-config", handlers.PutMyTelegramConfig)
 	// 👇 Subfinder API keys/config (per-user)
 	api.Get("/me/subfinder/providers", handlers.GetMySubfinderProviders)
 	api.Put("/me/subfinder/providers", handlers.PutMySubfinderProviders)

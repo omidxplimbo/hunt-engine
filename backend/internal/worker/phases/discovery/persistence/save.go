@@ -104,7 +104,7 @@ func SaveDiscoveryResultsToDB(ctx SaveContext, target models.Target, masterList 
 							telegram.SendNewAssetAlertWithScreenshot(target.CreatedByUserID, target.ID, target.RootDomain, value, "https://"+value)
 						}
 					} else if !isLive {
-						telegram.SendChangeAlert(target.RootDomain, value, "is_live", "true", "false")
+						telegram.SendChangeAlert(target.CreatedByUserID, target.RootDomain, value, "is_live", "true", "false")
 					}
 
 					updateData["is_live"] = isLive
