@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/screenshot"
 )
 
@@ -48,6 +50,17 @@ type resolvedConfig struct {
 	EnabledEvents               map[string]struct{}
 	FreshAssetScreenshotEnabled bool
 }
+
+type cachedResolvedConfig struct {
+	OwnerKey                    string   `json:"owner_key"`
+	BotToken                    string   `json:"bot_token"`
+	ChatID                      string   `json:"chat_id"`
+	Enabled                     bool     `json:"enabled"`
+	EnabledEvents               []string `json:"enabled_events"`
+	FreshAssetScreenshotEnabled bool     `json:"fresh_asset_screenshot_enabled"`
+}
+
+const telegramConfigCacheTTL = 5 * time.Minute
 
 var messageQueue = make(chan queuedMessage, QueueSize)
 
@@ -207,19 +220,13 @@ func resolveConfigForEvent(ownerUserID uint, event string) (resolvedConfig, bool
 }
 
 func resolveConfig(ownerUserID uint) (resolvedConfig, bool) {
-	ownerKey := "admin"
+	ownerKey := resolveOwnerKey(ownerUserID)
+	if ownerKey == "" {
+		return resolvedConfig{}, false
+	}
 
-	if ownerUserID > 0 {
-		var user models.User
-		if err := database.DB.First(&user, ownerUserID).Error; err == nil {
-			if strings.ToLower(strings.TrimSpace(user.Role)) == "admin" {
-				ownerKey = "admin"
-			} else {
-				ownerKey = fmt.Sprintf("user:%d", user.ID)
-			}
-		} else {
-			ownerKey = fmt.Sprintf("user:%d", ownerUserID)
-		}
+	if cfg, ok := getCachedConfig(ownerKey); ok {
+		return cfg, true
 	}
 
 	var row models.UserTelegramConfig
@@ -227,16 +234,139 @@ func resolveConfig(ownerUserID uint) (resolvedConfig, bool) {
 		return resolvedConfig{}, false
 	}
 
-	events := parseEvents(row.EnabledEvents)
-
-	return resolvedConfig{
+	cfg := resolvedConfig{
 		OwnerKey:                    ownerKey,
 		BotToken:                    row.BotToken,
 		ChatID:                      row.ChatID,
 		Enabled:                     row.Enabled,
-		EnabledEvents:               events,
+		EnabledEvents:               parseEvents(row.EnabledEvents),
 		FreshAssetScreenshotEnabled: row.FreshAssetScreenshotEnabled,
+	}
+
+	setCachedConfig(cfg)
+
+	return cfg, true
+}
+
+func resolveOwnerKey(ownerUserID uint) string {
+	if ownerUserID == 0 {
+		return "admin"
+	}
+
+	cacheKey := telegramOwnerCacheKey(ownerUserID)
+	if redisq.Client != nil {
+		if value, err := redisq.Client.Get(context.Background(), cacheKey).Result(); err == nil && strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+
+	ownerKey := fmt.Sprintf("user:%d", ownerUserID)
+
+	var user models.User
+	if err := database.DB.Select("id", "role").First(&user, ownerUserID).Error; err == nil {
+		if strings.ToLower(strings.TrimSpace(user.Role)) == "admin" {
+			ownerKey = "admin"
+		}
+	}
+
+	if redisq.Client != nil {
+		_ = redisq.Client.Set(context.Background(), cacheKey, ownerKey, telegramConfigCacheTTL).Err()
+	}
+
+	return ownerKey
+}
+
+func getCachedConfig(ownerKey string) (resolvedConfig, bool) {
+	if redisq.Client == nil {
+		return resolvedConfig{}, false
+	}
+
+	raw, err := redisq.Client.Get(context.Background(), telegramConfigCacheKey(ownerKey)).Result()
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return resolvedConfig{}, false
+	}
+
+	var cached cachedResolvedConfig
+	if err := json.Unmarshal([]byte(raw), &cached); err != nil {
+		return resolvedConfig{}, false
+	}
+
+	return resolvedConfig{
+		OwnerKey:                    cached.OwnerKey,
+		BotToken:                    cached.BotToken,
+		ChatID:                      cached.ChatID,
+		Enabled:                     cached.Enabled,
+		EnabledEvents:               eventsToSet(cached.EnabledEvents),
+		FreshAssetScreenshotEnabled: cached.FreshAssetScreenshotEnabled,
 	}, true
+}
+
+func setCachedConfig(cfg resolvedConfig) {
+	if redisq.Client == nil || strings.TrimSpace(cfg.OwnerKey) == "" {
+		return
+	}
+
+	cached := cachedResolvedConfig{
+		OwnerKey:                    cfg.OwnerKey,
+		BotToken:                    cfg.BotToken,
+		ChatID:                      cfg.ChatID,
+		Enabled:                     cfg.Enabled,
+		EnabledEvents:               setToEvents(cfg.EnabledEvents),
+		FreshAssetScreenshotEnabled: cfg.FreshAssetScreenshotEnabled,
+	}
+
+	data, err := json.Marshal(cached)
+	if err != nil {
+		return
+	}
+
+	_ = redisq.Client.Set(context.Background(), telegramConfigCacheKey(cfg.OwnerKey), string(data), telegramConfigCacheTTL).Err()
+}
+
+// InvalidateConfigCache clears cached Telegram notification settings after account-level updates.
+func InvalidateConfigCache(ownerKey string, userID *uint) {
+	if redisq.Client == nil {
+		return
+	}
+
+	ctx := context.Background()
+
+	if strings.TrimSpace(ownerKey) != "" {
+		_ = redisq.Client.Del(ctx, telegramConfigCacheKey(ownerKey)).Err()
+	}
+
+	if userID != nil && *userID > 0 {
+		_ = redisq.Client.Del(ctx, telegramOwnerCacheKey(*userID)).Err()
+	}
+}
+
+func telegramConfigCacheKey(ownerKey string) string {
+	return "telegram:config:" + ownerKey
+}
+
+func telegramOwnerCacheKey(userID uint) string {
+	return fmt.Sprintf("telegram:owner:%d", userID)
+}
+
+func eventsToSet(events []string) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, event := range events {
+		event = strings.TrimSpace(event)
+		if event != "" {
+			out[event] = struct{}{}
+		}
+	}
+	return out
+}
+
+func setToEvents(values map[string]struct{}) []string {
+	out := make([]string, 0, len(values))
+	for event := range values {
+		if strings.TrimSpace(event) != "" {
+			out = append(out, event)
+		}
+	}
+	return out
 }
 
 func parseEvents(raw string) map[string]struct{} {

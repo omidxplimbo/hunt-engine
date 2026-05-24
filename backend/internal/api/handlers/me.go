@@ -10,6 +10,7 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/api/dto"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/telegram"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/utils"
 )
 
@@ -383,6 +384,8 @@ func PutMyTelegramConfig(c *fiber.Ctx) error {
 	if err := database.DB.Save(&cfg).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save Telegram config"})
 	}
+
+	telegram.InvalidateConfigCache(cfg.OwnerKey, cfg.UserID)
 
 	return c.JSON(fiber.Map{"status": "success", "message": "Telegram config saved"})
 }
