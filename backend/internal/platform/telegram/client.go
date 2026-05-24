@@ -4,20 +4,28 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
+
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/config"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/screenshot"
 )
 
-// 👇 افزایش ظرفیت صف به ۵۰ هزار پیام
 const QueueSize = 50000
-
-// 👇 سرعت ارسال (۱ پیام در ثانیه)
 const RateLimit = 1 * time.Second
 
-// کانال بافر دار
-var messageQueue = make(chan string, QueueSize)
+type queuedMessage struct {
+	Text             string
+	PhotoPath        string
+	DeletePhotoAfter bool
+}
+
+var messageQueue = make(chan queuedMessage, QueueSize)
 
 func Init() {
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
@@ -28,7 +36,6 @@ func Init() {
 		return
 	}
 
-	// روشن کردن پردازشگر پس‌زمینه
 	go processQueue()
 	log.Println("🚀 Telegram Notification Worker started (No-Drop Mode).")
 }
@@ -37,30 +44,74 @@ func processQueue() {
 	ticker := time.NewTicker(RateLimit)
 	defer ticker.Stop()
 
-	for msg := range messageQueue {
-		// صبر برای تیکر (Rate Limit)
+	for item := range messageQueue {
 		<-ticker.C
 
-		// ارسال واقعی
-		performHTTPRequest(msg)
+		if item.PhotoPath != "" {
+			performPhotoRequest(item.Text, item.PhotoPath, item.DeletePhotoAfter)
+			continue
+		}
+
+		performMessageRequest(item.Text)
 	}
 }
 
 func SendMessage(text string) {
-	messageQueue <- text
+	if !config.TelegramNotificationsEnabled() {
+		return
+	}
+
+	enqueue(queuedMessage{Text: text})
 }
 
-func performHTTPRequest(text string) {
+func SendMessageForEvent(event string, text string) {
+	if !config.TelegramEventEnabled(event) {
+		return
+	}
+
+	enqueue(queuedMessage{Text: text})
+}
+
+func SendPhotoForEvent(event string, caption string, photoPath string, deleteAfter bool) {
+	if !config.TelegramEventEnabled(event) {
+		if deleteAfter {
+			_ = os.Remove(photoPath)
+		}
+		return
+	}
+
+	enqueue(queuedMessage{
+		Text:             caption,
+		PhotoPath:        photoPath,
+		DeletePhotoAfter: deleteAfter,
+	})
+}
+
+func enqueue(item queuedMessage) {
+	select {
+	case messageQueue <- item:
+	default:
+		log.Println("⚠️ Telegram queue full. Dropping notification.")
+		if item.DeletePhotoAfter && item.PhotoPath != "" {
+			_ = os.Remove(item.PhotoPath)
+		}
+	}
+}
+
+func performMessageRequest(text string) {
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
 	chatID := os.Getenv("TELEGRAM_CHAT_ID")
+
+	if token == "" || chatID == "" {
+		return
+	}
 
 	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
-		"chat_id":    chatID,
-		"text":       text,
-		"parse_mode": "Markdown",
-		// جلوگیری از پیش‌نمایش لینک‌ها برای تمیزتر شدن چت
+		"chat_id":                  chatID,
+		"text":                     text,
+		"parse_mode":               "Markdown",
 		"disable_web_page_preview": true,
 	})
 
@@ -73,17 +124,92 @@ func performHTTPRequest(text string) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		log.Printf("❌ Telegram API error: Status %d\n", resp.StatusCode)
-		if resp.StatusCode == 429 {
+		if resp.StatusCode == http.StatusTooManyRequests {
 			log.Println("⚠️ Rate limit hit! Slowing down...")
 			time.Sleep(5 * time.Second)
 		}
 	}
 }
 
-// SendChangeAlert فرمت پیام تغییر
+func performPhotoRequest(caption string, photoPath string, deleteAfter bool) {
+	if deleteAfter {
+		defer func() {
+			if err := os.Remove(photoPath); err != nil && !os.IsNotExist(err) {
+				log.Printf("⚠️ Failed to delete Telegram screenshot %s: %v\n", photoPath, err)
+			}
+		}()
+	}
+
+	token := os.Getenv("TELEGRAM_BOT_TOKEN")
+	chatID := os.Getenv("TELEGRAM_CHAT_ID")
+
+	if token == "" || chatID == "" {
+		return
+	}
+
+	file, err := os.Open(photoPath)
+	if err != nil {
+		log.Printf("❌ Failed to open Telegram photo %s: %v\n", photoPath, err)
+		return
+	}
+	defer file.Close()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	_ = writer.WriteField("chat_id", chatID)
+	_ = writer.WriteField("caption", caption)
+	_ = writer.WriteField("parse_mode", "Markdown")
+
+	part, err := writer.CreateFormFile("photo", filepath.Base(photoPath))
+	if err != nil {
+		log.Printf("❌ Failed to create Telegram photo form: %v\n", err)
+		return
+	}
+
+	if _, err := io.Copy(part, file); err != nil {
+		log.Printf("❌ Failed to read Telegram photo %s: %v\n", photoPath, err)
+		return
+	}
+
+	if err := writer.Close(); err != nil {
+		log.Printf("❌ Failed to close Telegram photo form: %v\n", err)
+		return
+	}
+
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendPhoto", token)
+
+	req, err := http.NewRequest(http.MethodPost, apiURL, &body)
+	if err != nil {
+		log.Printf("❌ Failed to create Telegram photo request: %v\n", err)
+		return
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	client := http.Client{Timeout: 45 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("❌ Failed to send Telegram photo: %v\n", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("❌ Telegram photo API error: Status %d\n", resp.StatusCode)
+		if resp.StatusCode == http.StatusTooManyRequests {
+			time.Sleep(5 * time.Second)
+		}
+	}
+}
+
 func SendChangeAlert(targetDomain, assetValue, field, oldVal, newVal string) {
+	event := config.FieldToTelegramEvent(field)
+	if !config.TelegramEventEnabled(event) {
+		return
+	}
+
 	emoji := "🔄"
 	if field == "status_code" {
 		emoji = "🚦"
@@ -104,11 +230,19 @@ func SendChangeAlert(targetDomain, assetValue, field, oldVal, newVal string) {
 		emoji, emoji, targetDomain, assetValue, field, oldVal, newVal,
 		time.Now().Format("15:04:05"),
 	)
-	SendMessage(msg)
+
+	SendMessageForEvent(event, msg)
 }
 
-// SendNewAssetAlert فرمت پیام دارایی جدید
 func SendNewAssetAlert(targetDomain, assetValue string) {
+	SendNewAssetAlertWithScreenshot(0, 0, targetDomain, assetValue, "")
+}
+
+func SendNewAssetAlertWithScreenshot(userID uint, targetID uint, targetDomain, assetValue, pageURL string) {
+	if !config.TelegramEventEnabled(config.TelegramEventFreshAsset) {
+		return
+	}
+
 	msg := fmt.Sprintf(
 		"🚨 *FRESH ASSET* 🚨\n\n"+
 			"🎯 *Target:* `%s`\n"+
@@ -116,18 +250,37 @@ func SendNewAssetAlert(targetDomain, assetValue string) {
 			"⏰ _%s_",
 		targetDomain, assetValue, time.Now().Format("15:04:05"),
 	)
-	SendMessage(msg)
+
+	if !config.TelegramFreshAssetScreenshotEnabled() || userID == 0 || targetID == 0 {
+		SendMessageForEvent(config.TelegramEventFreshAsset, msg)
+		return
+	}
+
+	go func() {
+		photoPath, err := screenshot.CaptureFreshAsset(userID, targetID, assetValue, pageURL)
+		if err != nil {
+			log.Printf("⚠️ Fresh asset screenshot failed for %s: %v\n", assetValue, err)
+			SendMessageForEvent(config.TelegramEventFreshAsset, msg)
+			return
+		}
+
+		SendPhotoForEvent(config.TelegramEventFreshAsset, msg, photoPath, true)
+	}()
 }
 
-// 👇👇👇 تابع جدید برای URLهای پیدا شده
 func SendNewURLAlert(targetDomain, url, source string) {
+	if !config.TelegramEventEnabled(config.TelegramEventFreshURL) {
+		return
+	}
+
 	msg := fmt.Sprintf(
 		"🕷 *FRESH CRAWL URL* 🕷\n\n"+
 			"🎯 *Target:* `%s`\n"+
 			"🔗 *URL:* `%s`\n"+
-			"lz *Source:* `%s`\n\n"+
+			"🧭 *Source:* `%s`\n\n"+
 			"⏰ _%s_",
 		targetDomain, url, source, time.Now().Format("15:04:05"),
 	)
-	SendMessage(msg)
+
+	SendMessageForEvent(config.TelegramEventFreshURL, msg)
 }

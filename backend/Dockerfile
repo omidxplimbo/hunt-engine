@@ -47,7 +47,7 @@ LABEL maintainer="Omid Security Researcher"
 
 # 👇 نصب پایتون و ابزارهای بیلد مورد نیاز برای Waymore (gcc, headers, etc)
 # اضافه شدن: gcc python3-dev musl-dev linux-headers libffi-dev + nmap + bash
-RUN apk --no-cache add ca-certificates bind-tools jq curl python3 py3-pip git gcc python3-dev musl-dev linux-headers libffi-dev nmap bash unzip
+RUN apk --no-cache add ca-certificates bind-tools jq curl python3 py3-pip git gcc python3-dev musl-dev linux-headers libffi-dev nmap bash unzip chromium
 
 # نصب Waymore
 # نکته: Waymore نیاز به پایتون دارد. ما آن را از طریق pip نصب می‌کنیم.
