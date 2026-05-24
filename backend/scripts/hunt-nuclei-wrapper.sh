@@ -4,6 +4,7 @@
 REAL="${HUNT_NUCLEI_REAL:-/usr/local/bin/nuclei.real}"
 LOG="${HUNT_NUCLEI_WRAPPER_LOG:-/tmp/hunt-nuclei-wrapper.log}"
 BUILTIN_TIMEOUT="${HUNT_NUCLEI_BUILTIN_TIMEOUT:-300}"
+SNAPSHOT_KEEP="${HUNT_NUCLEI_KEEP_SNAPSHOTS:-5}"
 
 log() {
   msg="hunt nuclei wrapper v3: $*"
@@ -31,11 +32,33 @@ count_lines() {
 }
 
 snapshot_output() {
-  if [ -n "${out:-}" ] && [ -f "$out" ]; then
+  if [ -z "${out:-}" ] || [ ! -f "$out" ]; then
+    return 0
+  fi
+
+  cp "$out" "$out.last" 2>/dev/null || true
+
+  keep="${SNAPSHOT_KEEP:-5}"
+  case "$keep" in
+    ''|*[!0-9]*)
+      keep=5
+      ;;
+  esac
+
+  if [ "$keep" -gt 0 ]; then
     snap="$out.snapshot.$(date -u +%Y%m%dT%H%M%SZ)"
     cp "$out" "$snap" 2>/dev/null || true
-    cp "$out" "$out.last" 2>/dev/null || true
-    log "snapshot file=$snap last=$out.last lines=$(count_lines "$out")"
+    log "snapshot file=$snap last=$out.last lines=$(count_lines "$out") keep=$keep"
+
+    dir="$(dirname "$out")"
+    base="$(basename "$out")"
+    ls -1t "$dir/$base".snapshot.* 2>/dev/null \
+      | awk -v keep="$keep" 'NR > keep { print }' \
+      | while IFS= read -r old_snapshot; do
+          rm -f "$old_snapshot" 2>/dev/null || true
+        done
+  else
+    log "snapshot disabled last=$out.last lines=$(count_lines "$out")"
   fi
 }
 

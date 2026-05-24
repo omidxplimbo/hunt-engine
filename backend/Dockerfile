@@ -109,17 +109,6 @@ RUN chmod +x /usr/local/bin/*
 EXPOSE 8080
 CMD ["./hunt-engine-api"]
 
-# HUNT_NUCLEI_SPLIT_WRAPPER_START
-RUN cp /root/hunt-engine/backend/scripts/hunt-nuclei-wrapper.sh /usr/local/bin/hunt-nuclei-wrapper.sh
-RUN set -eux; \
-    real="$(command -v nuclei)"; \
-    test -n "$real"; \
-    if grep -q "HUNT_NUCLEI_SPLIT_WRAPPER" "$real" 2>/dev/null; then echo "Refusing to wrap an already wrapped nuclei binary"; exit 1; fi; \
-    rm -f /usr/local/bin/nuclei.real; \
-    cp -L "$real" /usr/local/bin/nuclei.real; \
-    chmod 0755 /usr/local/bin/nuclei.real /usr/local/bin/hunt-nuclei-wrapper.sh; \
-    ln -sf /usr/local/bin/hunt-nuclei-wrapper.sh /usr/local/bin/nuclei
-# HUNT_NUCLEI_SPLIT_WRAPPER_END
 
 
 # HUNT_NUCLEI_SPLIT_WRAPPER_V3

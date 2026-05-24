@@ -318,6 +318,7 @@ func buildArgs(cfg Config, profile, inputFile, outputFile string) []string {
 		"-no-stdin",
 		"-l", inputFile,
 		"-jsonl",
+		"-omit-raw",
 		"-o", outputFile,
 		"-silent",
 		"-no-color",
