@@ -110,7 +110,7 @@ EXPOSE 8080
 CMD ["./hunt-engine-api"]
 
 # HUNT_NUCLEI_SPLIT_WRAPPER_START
-COPY hunt-nuclei-wrapper.sh /usr/local/bin/hunt-nuclei-wrapper.sh
+RUN cp /root/hunt-engine/backend/scripts/hunt-nuclei-wrapper.sh /usr/local/bin/hunt-nuclei-wrapper.sh
 RUN set -eux; \
     real="$(command -v nuclei)"; \
     test -n "$real"; \
@@ -120,4 +120,11 @@ RUN set -eux; \
     chmod 0755 /usr/local/bin/nuclei.real /usr/local/bin/hunt-nuclei-wrapper.sh; \
     ln -sf /usr/local/bin/hunt-nuclei-wrapper.sh /usr/local/bin/nuclei
 # HUNT_NUCLEI_SPLIT_WRAPPER_END
+
+
+# HUNT_NUCLEI_SPLIT_WRAPPER_V3
+RUN cp /root/hunt-engine/backend/scripts/hunt-nuclei-wrapper.sh /usr/local/bin/hunt-nuclei-wrapper.sh
+RUN chmod +x /usr/local/bin/hunt-nuclei-wrapper.sh \
+    && if [ -x /usr/local/bin/nuclei ] && [ ! -e /usr/local/bin/nuclei.real ]; then mv /usr/local/bin/nuclei /usr/local/bin/nuclei.real; fi \
+    && ln -sf /usr/local/bin/hunt-nuclei-wrapper.sh /usr/local/bin/nuclei
 

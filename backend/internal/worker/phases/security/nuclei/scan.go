@@ -296,6 +296,7 @@ func countNonEmptyFileLines(path string) int {
 
 	count := 0
 	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 1024*1024), 64*1024*1024)
 	for scanner.Scan() {
 		if strings.TrimSpace(scanner.Text()) != "" {
 			count++
@@ -698,7 +699,7 @@ func ingestOutput(targetID uint, outputFile, profile string, assetIndex map[stri
 
 	seen := make(map[string]struct{})
 	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 1024), 1024*1024)
+	scanner.Buffer(make([]byte, 1024*1024), 64*1024*1024)
 	now := time.Now()
 	lineNumber := 0
 	for scanner.Scan() {
