@@ -73,7 +73,7 @@ func UpdateAssetsWithDiff(ctx Context, targetID uint, results map[string]workert
 						return err
 					}
 					if !isFirstProbing {
-						telegram.SendChangeAlert(targetName, hostInput, field, oldVal, newVal)
+						telegram.SendChangeAlert(target.CreatedByUserID, targetName, hostInput, field, oldVal, newVal)
 					}
 					hasChanged = true
 				}

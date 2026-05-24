@@ -39,6 +39,9 @@ func Run(ctx Context) {
 		if err := workerfindings.GenerateURLFindings(ctx.TargetID); err != nil {
 			log.Printf("⚠️ Failed to generate URL findings for target %d: %v\n", ctx.TargetID, err)
 		}
+		if ctx.AfterCrawling != nil {
+			ctx.AfterCrawling(ctx.TargetID)
+		}
 		ctx.TriggerNextModule(ctx.TargetID, ctx.RootDomain, "CRAWLING")
 		return
 	}
@@ -171,6 +174,9 @@ func Run(ctx Context) {
 	ctx.UpdateTargetPhase(ctx.TargetID, "PHASE 3: GENERATING FINDINGS")
 	if err := workerfindings.GenerateURLFindings(ctx.TargetID); err != nil {
 		log.Printf("⚠️ Failed to generate URL findings for target %d: %v\n", ctx.TargetID, err)
+	}
+	if ctx.AfterCrawling != nil {
+		ctx.AfterCrawling(ctx.TargetID)
 	}
 	ctx.TriggerNextModule(ctx.TargetID, ctx.RootDomain, "CRAWLING")
 }

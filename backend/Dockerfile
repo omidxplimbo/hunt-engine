@@ -47,7 +47,7 @@ LABEL maintainer="Omid Security Researcher"
 
 # 👇 نصب پایتون و ابزارهای بیلد مورد نیاز برای Waymore (gcc, headers, etc)
 # اضافه شدن: gcc python3-dev musl-dev linux-headers libffi-dev + nmap + bash
-RUN apk --no-cache add ca-certificates bind-tools jq curl python3 py3-pip git gcc python3-dev musl-dev linux-headers libffi-dev nmap bash unzip
+RUN apk --no-cache add ca-certificates bind-tools jq curl python3 py3-pip git gcc python3-dev musl-dev linux-headers libffi-dev nmap bash unzip chromium
 
 # نصب Waymore
 # نکته: Waymore نیاز به پایتون دارد. ما آن را از طریق pip نصب می‌کنیم.
@@ -87,7 +87,19 @@ RUN AMASS_URL=$(wget -qO- https://api.github.com/repos/owasp-amass/amass/release
     rm -rf /tmp/amass.tar.gz /tmp/amass_extracted
 
 # دانلود وردلیست‌ها
-RUN mkdir -p /root/nuclei-templates /data/nuclei/custom
+RUN set -eu; \
+    rm -rf /root/nuclei-templates; \
+    mkdir -p /root/nuclei-templates /data/nuclei/custom; \
+    wget -qO /tmp/nuclei-templates.tar.gz https://github.com/projectdiscovery/nuclei-templates/archive/refs/heads/main.tar.gz; \
+    tar -xzf /tmp/nuclei-templates.tar.gz -C /tmp; \
+    src="$(find /tmp -maxdepth 1 -type d -name 'nuclei-templates-*' | head -n 1)"; \
+    test -n "$src"; \
+    cp -a "$src"/. /root/nuclei-templates/; \
+    rm -rf /tmp/nuclei-templates.tar.gz "$src"; \
+    count="$(find /root/nuclei-templates -type f \( -name '*.yaml' -o -name '*.yml' \) | wc -l)"; \
+    echo "Nuclei template count: $count"; \
+    test "$count" -gt 0
+
 RUN mkdir -p /wordlists
 RUN curl -sL https://raw.githubusercontent.com/v0re/dirb/master/wordlists/common.txt -o /wordlists/common.txt
 RUN curl -sL https://raw.githubusercontent.com/PortSwigger/param-miner/master/resources/params -o /wordlists/params.txt
@@ -96,3 +108,12 @@ RUN chmod +x /usr/local/bin/*
 
 EXPOSE 8080
 CMD ["./hunt-engine-api"]
+
+
+
+# HUNT_NUCLEI_SPLIT_WRAPPER_V3
+RUN cp /root/hunt-engine/backend/scripts/hunt-nuclei-wrapper.sh /usr/local/bin/hunt-nuclei-wrapper.sh
+RUN chmod +x /usr/local/bin/hunt-nuclei-wrapper.sh \
+    && if [ -x /usr/local/bin/nuclei ] && [ ! -e /usr/local/bin/nuclei.real ]; then mv /usr/local/bin/nuclei /usr/local/bin/nuclei.real; fi \
+    && ln -sf /usr/local/bin/hunt-nuclei-wrapper.sh /usr/local/bin/nuclei
+

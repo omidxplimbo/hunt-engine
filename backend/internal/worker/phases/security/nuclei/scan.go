@@ -11,12 +11,14 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	workerutils "github.com/omidxplimbo/hunt-engine/backend/internal/worker/utils"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -138,6 +140,14 @@ func Run(ctx Context) error {
 	}
 
 	args := buildArgs(cfg, profile, inputFile, outputFile)
+
+	log.Printf("🔎 Nuclei debug target %d: targets_file=%s targets_count=%d output_file=%s", target.ID, inputFile, countNonEmptyFileLines(inputFile), outputFile)
+	log.Printf("🔎 Nuclei debug target %d: args=%s", target.ID, strings.Join(args, " "))
+
+	if !hasTemplateArgument(args) {
+		return fmt.Errorf("nuclei has no templates available: built-in dir %q and custom dir %q contain no YAML templates", cfg.TemplatesDir, cfg.CustomTemplatesDir)
+	}
+
 	var output []byte
 	if ctx.RunCommandWithTimeout != nil && cfg.Timeout > 0 {
 		output, err = ctx.RunCommandWithTimeout(ctx.TargetID, cfg.Timeout, "nuclei", args...)
@@ -169,6 +179,8 @@ func Run(ctx Context) error {
 	if ctx.ScanMarkStepDone != nil {
 		ctx.ScanMarkStepDone(ctx.TargetID, moduleProbing, StepSecurityScan)
 	}
+
+	log.Printf("🔎 Nuclei debug target %d: output_size=%d output_lines=%d after command", target.ID, fileSizeBytes(outputFile), countNonEmptyFileLines(outputFile))
 	log.Printf("✅ Nuclei security scan complete for target %d: %d active findings\n", ctx.TargetID, len(seen))
 	return nil
 }
@@ -244,10 +256,69 @@ func syncNucleiTemplateFileCache(root string, userID uint) error {
 	return nil
 }
 
+func nucleiRequestTimeoutSeconds() int {
+	value := nucleiIntFromEnv("NUCLEI_REQUEST_TIMEOUT_SECONDS", 10)
+	if value <= 0 {
+		return 10
+	}
+	return value
+}
+
+func nucleiRetries() int {
+	value := nucleiIntFromEnv("NUCLEI_RETRIES", 0)
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
+func nucleiIntFromEnv(name string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		log.Printf("⚠️ Invalid %s value %q; falling back to %d", name, raw, fallback)
+		return fallback
+	}
+
+	return value
+}
+
+func countNonEmptyFileLines(path string) int {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer file.Close()
+
+	count := 0
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 1024*1024), 64*1024*1024)
+	for scanner.Scan() {
+		if strings.TrimSpace(scanner.Text()) != "" {
+			count++
+		}
+	}
+	return count
+}
+
+func fileSizeBytes(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
 func buildArgs(cfg Config, profile, inputFile, outputFile string) []string {
 	args := []string{
+		"-no-stdin",
 		"-l", inputFile,
 		"-jsonl",
+		"-omit-raw",
 		"-o", outputFile,
 		"-silent",
 		"-no-color",
@@ -257,8 +328,18 @@ func buildArgs(cfg Config, profile, inputFile, outputFile string) []string {
 		"-bs", fmt.Sprintf("%d", positiveOrDefault(cfg.BulkSize, DefaultBulkSize)),
 	}
 
-	if directoryHasTemplates(cfg.TemplatesDir) {
-		args = append(args, "-t", cfg.TemplatesDir)
+	requestTimeoutSeconds := nucleiRequestTimeoutSeconds()
+	if requestTimeoutSeconds > 0 {
+		args = append(args, "-timeout", fmt.Sprintf("%d", requestTimeoutSeconds))
+	}
+	retries := nucleiRetries()
+	if retries >= 0 {
+		args = append(args, "-retries", fmt.Sprintf("%d", retries))
+	}
+	for _, templatePath := range builtinTemplateArgs(cfg.TemplatesDir, profile) {
+
+		args = append(args, "-t", templatePath)
+
 	}
 
 	for _, templatePath := range customTemplateArgs(cfg.CustomTemplatesDir, profile) {
@@ -266,6 +347,99 @@ func buildArgs(cfg Config, profile, inputFile, outputFile string) []string {
 	}
 
 	return append(args, profileArgs(profile)...)
+}
+
+func hasTemplateArgument(args []string) bool {
+	for i, arg := range args {
+		if arg != "-t" {
+			continue
+		}
+		if i+1 < len(args) && strings.TrimSpace(args[i+1]) != "" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func builtinTemplateArgs(root string, profile string) []string {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return nil
+	}
+
+	normalized := NormalizeProfile(profile)
+
+	if normalized == "full" || normalized == "custom" {
+		if directoryHasTemplates(root) {
+			return []string{root}
+		}
+		return nil
+	}
+
+	candidates := make([]string, 0, 16)
+	addDir := func(names ...string) {
+		for _, name := range names {
+			candidates = append(candidates, filepath.Join(root, name))
+		}
+	}
+
+	switch normalized {
+	case "fast", "exposure":
+		addDir(
+			"http/exposures",
+			"http/exposed-panels",
+			"http/default-logins",
+			"exposures",
+			"exposed-panels",
+			"default-logins",
+		)
+	case "balanced", "misconfig":
+		addDir(
+			"http/exposures",
+			"http/exposed-panels",
+			"http/default-logins",
+			"http/misconfiguration",
+			"http/vulnerabilities/generic",
+			"exposures",
+			"exposed-panels",
+			"default-logins",
+			"misconfiguration",
+			"vulnerabilities/generic",
+		)
+	case "cves-light":
+		addDir(
+			"http/cves",
+			"cves",
+		)
+	default:
+		addDir(
+			"http/exposures",
+			"http/misconfiguration",
+			"exposures",
+			"misconfiguration",
+		)
+	}
+
+	out := make([]string, 0, len(candidates))
+	seen := map[string]struct{}{}
+	for _, candidate := range candidates {
+		candidate = filepath.Clean(strings.TrimSpace(candidate))
+		if candidate == "" || candidate == "." {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		if !templatePathHasTemplates(candidate) {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		out = append(out, candidate)
+	}
+
+	sort.Strings(out)
+	return out
 }
 
 func customTemplateArgs(root, profile string) []string {
@@ -387,11 +561,11 @@ func profileArgs(profile string) []string {
 	case "custom":
 		return []string{"-severity", "info,low,medium,high,critical"}
 	case "cves-light":
-		return []string{"-tags", "cve", "-severity", "medium,high,critical", "-exclude-tags", "dos,bruteforce,brute-force,intrusive,destructive"}
+		return []string{"-tags", "cve", "-severity", "medium,high,critical", "-exclude-tags", "dos,bruteforce,brute-force,intrusive,destructive,fuzz"}
 	case "misconfig", "balanced":
-		return []string{"-tags", "misconfig,exposure,panel,default-login", "-severity", "low,medium,high,critical", "-exclude-tags", "dos,bruteforce,brute-force,intrusive,destructive"}
+		return []string{"-tags", "misconfig,exposure,panel,default-login", "-severity", "medium,high,critical", "-exclude-tags", "dos,bruteforce,brute-force,intrusive,destructive,fuzz"}
 	case "exposure", "fast":
-		return []string{"-tags", "exposure,panel,default-login", "-severity", "low,medium,high,critical", "-exclude-tags", "dos,bruteforce,brute-force,intrusive,destructive"}
+		return []string{"-tags", "exposure,panel,default-login", "-severity", "medium,high,critical", "-exclude-tags", "dos,bruteforce,brute-force,intrusive,destructive,fuzz"}
 	default:
 		return []string{"-severity", "medium,high,critical", "-exclude-tags", "dos,bruteforce,brute-force,intrusive,destructive,fuzz"}
 	}
@@ -526,7 +700,7 @@ func ingestOutput(targetID uint, outputFile, profile string, assetIndex map[stri
 
 	seen := make(map[string]struct{})
 	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 1024), 1024*1024)
+	scanner.Buffer(make([]byte, 1024*1024), 64*1024*1024)
 	now := time.Now()
 	lineNumber := 0
 	for scanner.Scan() {
@@ -620,6 +794,7 @@ func upsertNucleiFinding(targetID uint, fingerprint string, row resultRow, asset
 		"category":       "nuclei",
 		"source_tool":    SourceToolNuclei,
 		"evidence":       evidence,
+		"evidence_json":  datatypes.JSON([]byte(evidence)),
 		"recommendation": recommendation,
 		"last_seen":      now,
 		"asset_id":       assetID,
@@ -635,14 +810,14 @@ func upsertNucleiFinding(targetID uint, fingerprint string, row resultRow, asset
 	}
 
 	finding := models.Finding{
-		TargetID:       targetID,
-		AssetID:        assetID,
-		Title:          title,
-		Description:    description,
-		Severity:       severity,
-		Category:       "nuclei",
-		SourceTool:     SourceToolNuclei,
-		Evidence:       evidence,
+		TargetID:    targetID,
+		AssetID:     assetID,
+		Title:       title,
+		Description: description,
+		Severity:    severity,
+		Category:    "nuclei",
+		SourceTool:  SourceToolNuclei,
+		Evidence:    evidence, EvidenceJSON: datatypes.JSON([]byte(evidence)),
 		Recommendation: recommendation,
 		Status:         models.FindingStatusOpen,
 		Fingerprint:    fingerprint,

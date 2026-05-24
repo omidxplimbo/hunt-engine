@@ -101,10 +101,10 @@ func SaveDiscoveryResultsToDB(ctx SaveContext, target models.Target, masterList 
 
 					if isLive && !existing.IsLive {
 						if !isFirstRun {
-							telegram.SendNewAssetAlert(target.RootDomain, value)
+							telegram.SendNewAssetAlertWithScreenshot(target.CreatedByUserID, target.ID, target.RootDomain, value, "https://"+value)
 						}
 					} else if !isLive {
-						telegram.SendChangeAlert(target.RootDomain, value, "is_live", "true", "false")
+						telegram.SendChangeAlert(target.CreatedByUserID, target.RootDomain, value, "is_live", "true", "false")
 					}
 
 					updateData["is_live"] = isLive
@@ -146,7 +146,7 @@ func SaveDiscoveryResultsToDB(ctx SaveContext, target models.Target, masterList 
 			toInsert = append(toInsert, newAsset)
 
 			if !isFirstRun && isLive {
-				telegram.SendNewAssetAlert(target.RootDomain, value)
+				telegram.SendNewAssetAlertWithScreenshot(target.CreatedByUserID, target.ID, target.RootDomain, value, "https://"+value)
 			}
 
 			countNew++

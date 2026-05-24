@@ -19,12 +19,10 @@ services:
       - REDIS_PORT=${REDIS_PORT:-6379}
       - PROBE_BATCH_SIZE=${PROBE_BATCH_SIZE:-1000} - DNSX_BATCH_SIZE=${DNSX_BATCH_SIZE:-2000} - DNSX_THREADS=${DNSX_THREADS:-30} - AMASS_TIMEOUT_SECONDS=${AMASS_TIMEOUT_SECONDS:-900}
       - TRUSTED_RESOLVERS=${TRUSTED_RESOLVERS:-1.1.1.1,8.8.8.8,1.0.0.1,8.8.4.4}
-      # تنظیمات تلگرام (مقادیر خودت را جایگزین کردی که عالیه)
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
-      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required and must be at least 32 characters}
       - VIRUSTOTAL_API_KEY=${VIRUSTOTAL_API_KEY:-} - NUCLEI_ALLOW_AI_TEMPLATES=${NUCLEI_ALLOW_AI_TEMPLATES:-false}
       - NUCLEI_CUSTOM_TEMPLATES_DIR=/data/nuclei/custom
+      - HUNT_NUCLEI_TIMEOUT=${HUNT_NUCLEI_TIMEOUT:-10m}
     volumes:
       # 👇 این خط برای وردلیست‌های سفارشی اضافه شد (برای آینده)
       - ./custom_wordlists:/wordlists/custom

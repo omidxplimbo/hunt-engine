@@ -22,6 +22,12 @@ import (
 func SaveURLs(targetID uint, rootDomain string, urls map[string]string, silent bool) {
 	log.Printf(" Processing %d collected URLs...", len(urls))
 
+	var ownerUserID uint
+	var target models.Target
+	if err := database.DB.Select("id", "created_by_user_id").First(&target, targetID).Error; err == nil {
+		ownerUserID = target.CreatedByUserID
+	}
+
 	ignoredExts := []string{
 		".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp", ".ico", ".webp",
 		".woff", ".woff2", ".ttf", ".eot", ".otf", ".css",
@@ -114,7 +120,7 @@ func SaveURLs(targetID uint, rootDomain string, urls map[string]string, silent b
 		redisq.Client.SAdd(context.Background(), redisKey, canonicalValue)
 
 		if !silent {
-			telegram.SendNewURLAlert(rootDomain, rawURL, source)
+			telegram.SendNewURLAlert(ownerUserID, rootDomain, rawURL, source)
 		}
 	}
 

@@ -24,7 +24,9 @@ import (
 	discoverytools "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/discovery/tools"
 	probing "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/probing"
 	probingpersist "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/probing/persistence"
+	jsintelphase "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/security/jsintel"
 	nucleiphase "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/security/nuclei"
+	takeoverphase "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/security/takeover"
 	workerruntime "github.com/omidxplimbo/hunt-engine/backend/internal/worker/runtime"
 	workerstate "github.com/omidxplimbo/hunt-engine/backend/internal/worker/state"
 	workertypes "github.com/omidxplimbo/hunt-engine/backend/internal/worker/types"
@@ -468,26 +470,43 @@ func runProbingPhase(targetID uint, rootDomain string) {
 		RunCommand:        runCommandWithKillSwitch,
 		UpdateAssets: func(targetID uint, results map[string]probing.HTTPXResult) {
 			UpdateAssetsWithDiff(targetID, results)
-
-			if err := workerfindings.GenerateBuiltinFindings(targetID); err != nil {
-				log.Printf("⚠️ Failed to generate builtin findings for target %d: %v\n", targetID, err)
-			}
-
-			if err := nucleiphase.Run(nucleiphase.Context{
-				TargetID:              targetID,
-				RootDomain:            rootDomain,
-				CheckStop:             checkStopRequest,
-				UpdateTargetPhase:     updateTargetPhase,
-				ScanIsStepDone:        scanIsStepDone,
-				ScanMarkRunning:       scanMarkRunning,
-				ScanMarkStepDone:      scanMarkStepDone,
-				RunCommand:            runCommandWithKillSwitch,
-				RunCommandWithTimeout: runCommandWithTimeoutAndKillSwitch,
-			}); err != nil {
-				log.Printf("⚠️ Nuclei security scan failed for target %d: %v\n", targetID, err)
-			}
+		},
+		AfterProbing: func(targetID uint) {
+			runPostProbingSecurity(targetID, rootDomain)
 		},
 	})
+}
+
+func runPostProbingSecurity(targetID uint, rootDomain string) {
+	if err := workerfindings.GenerateBuiltinFindings(targetID); err != nil {
+		log.Printf("⚠️ Failed to generate builtin findings for target %d: %v\n", targetID, err)
+	}
+
+	if err := takeoverphase.Run(takeoverphase.Context{
+		TargetID:          targetID,
+		RootDomain:        rootDomain,
+		CheckStop:         checkStopRequest,
+		UpdateTargetPhase: updateTargetPhase,
+		ScanIsStepDone:    scanIsStepDone,
+		ScanMarkRunning:   scanMarkRunning,
+		ScanMarkStepDone:  scanMarkStepDone,
+	}); err != nil {
+		log.Printf("⚠️ Takeover detection failed for target %d: %v\n", targetID, err)
+	}
+
+	if err := nucleiphase.Run(nucleiphase.Context{
+		TargetID:              targetID,
+		RootDomain:            rootDomain,
+		CheckStop:             checkStopRequest,
+		UpdateTargetPhase:     updateTargetPhase,
+		ScanIsStepDone:        scanIsStepDone,
+		ScanMarkRunning:       scanMarkRunning,
+		ScanMarkStepDone:      scanMarkStepDone,
+		RunCommand:            runCommandWithKillSwitch,
+		RunCommandWithTimeout: runCommandWithTimeoutAndKillSwitch,
+	}); err != nil {
+		log.Printf("⚠️ Nuclei security scan failed for target %d: %v\n", targetID, err)
+	}
 }
 
 // =================================================================
@@ -506,7 +525,24 @@ func runCrawlingPhase(targetID uint, rootDomain string) {
 		TriggerNextModule:   triggerNextModule,
 		RunCommand:          runCommandWithKillSwitch,
 		RunCommandWithStdin: runCommandWithStdinAndKillSwitch,
+		AfterCrawling: func(targetID uint) {
+			runPostCrawlingSecurity(targetID, rootDomain)
+		},
 	})
+}
+
+func runPostCrawlingSecurity(targetID uint, rootDomain string) {
+	if err := jsintelphase.Run(jsintelphase.Context{
+		TargetID:          targetID,
+		RootDomain:        rootDomain,
+		CheckStop:         checkStopRequest,
+		UpdateTargetPhase: updateTargetPhase,
+		ScanIsStepDone:    scanIsStepDone,
+		ScanMarkRunning:   scanMarkRunning,
+		ScanMarkStepDone:  scanMarkStepDone,
+	}); err != nil {
+		log.Printf("⚠️ JS intelligence failed for target %d: %v\n", targetID, err)
+	}
 }
 
 // saveCrawledURLs (UPDATED) اضافه شدن پارامتر silent

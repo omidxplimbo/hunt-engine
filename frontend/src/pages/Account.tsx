@@ -1,39 +1,55 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { KeyRound, User2, Key, Plus, Save, Trash2, Eye, EyeOff } from 'lucide-react';
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import {
+  KeyRound,
+  User2,
+  Key,
+  Plus,
+  Save,
+  Trash2,
+  Eye,
+  EyeOff,
+} from "lucide-react";
 import {
   changeMyPassword,
   getMe,
   getMySubfinderProviders,
   putMySubfinderProviders,
   type SubfinderProviderItem,
-} from '../api/me';
-import { QueueManager } from '../components/QueueManager';
+} from "../api/me";
+import { QueueManager } from "../components/QueueManager";
+import TelegramConfigPanel from "../components/TelegramConfigPanel";
 
 const Account = () => {
-  const { data: me, isLoading, isError } = useQuery({
-    queryKey: ['me'],
+  const {
+    data: me,
+    isLoading,
+    isError,
+  } = useQuery({
+    queryKey: ["me"],
     queryFn: getMe,
     refetchInterval: 30000,
   });
 
   const subfinderProvidersQuery = useQuery({
-    queryKey: ['me', 'subfinder', 'providers'],
+    queryKey: ["me", "subfinder", "providers"],
     queryFn: getMySubfinderProviders,
     staleTime: 60_000,
   });
 
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [sfMessage, setSfMessage] = useState<string | null>(null);
   const [sfError, setSfError] = useState<string | null>(null);
   const [showKeys, setShowKeys] = useState(false);
-  const [sfRows, setSfRows] = useState<{ provider: string; apiKey: string }[]>([]);
+  const [sfRows, setSfRows] = useState<{ provider: string; apiKey: string }[]>(
+    [],
+  );
 
   const createdAt = useMemo(() => {
-    if (!me?.createdAt) return '-';
+    if (!me?.createdAt) return "-";
     const d = new Date(me.createdAt);
     return Number.isNaN(d.getTime()) ? me.createdAt : d.toLocaleString();
   }, [me?.createdAt]);
@@ -44,10 +60,13 @@ const Account = () => {
 
     const rows = data
       .map((p) => {
-        const apiKey = Array.isArray(p.entries) && typeof p.entries[0] === 'string' ? (p.entries[0] as string) : '';
-        return { provider: p.provider || '', apiKey };
+        const apiKey =
+          Array.isArray(p.entries) && typeof p.entries[0] === "string"
+            ? (p.entries[0] as string)
+            : "";
+        return { provider: p.provider || "", apiKey };
       })
-      .filter((r) => r.provider.trim() !== '');
+      .filter((r) => r.provider.trim() !== "");
 
     setSfRows(rows);
   }, [subfinderProvidersQuery.data]);
@@ -56,13 +75,13 @@ const Account = () => {
     mutationFn: changeMyPassword,
     onSuccess: (res) => {
       setErrorMsg(null);
-      setMessage(res?.message || 'Password changed');
-      setCurrentPassword('');
-      setNewPassword('');
+      setMessage(res?.message || "Password changed");
+      setCurrentPassword("");
+      setNewPassword("");
     },
     onError: (err: any) => {
       setMessage(null);
-      setErrorMsg(err?.response?.data?.error || 'Failed to change password');
+      setErrorMsg(err?.response?.data?.error || "Failed to change password");
     },
   });
 
@@ -73,32 +92,45 @@ const Account = () => {
           provider: r.provider.trim().toLowerCase(),
           entries: r.apiKey.trim() ? [r.apiKey.trim()] : [],
         }))
-        .filter((p) => p.provider !== '' && p.entries.length > 0);
+        .filter((p) => p.provider !== "" && p.entries.length > 0);
 
       return putMySubfinderProviders(providers);
     },
     onSuccess: (res) => {
       setSfError(null);
-      setSfMessage(res?.message || 'Saved');
+      setSfMessage(res?.message || "Saved");
       subfinderProvidersQuery.refetch();
     },
     onError: (err: any) => {
       setSfMessage(null);
-      setSfError(err?.response?.data?.error || 'Failed to save subfinder providers');
+      setSfError(
+        err?.response?.data?.error || "Failed to save subfinder providers",
+      );
     },
   });
 
-  if (isLoading) return <div className="font-mono text-hack-dim">Loading account data...</div>;
+  if (isLoading)
+    return (
+      <div className="font-mono text-hack-dim">Loading account data...</div>
+    );
 
   if (isError || !me) {
-    return <div className="font-mono text-hack-danger">SYSTEM ERROR: Failed to fetch account data.</div>;
+    return (
+      <div className="font-mono text-hack-danger">
+        SYSTEM ERROR: Failed to fetch account data.
+      </div>
+    );
   }
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="font-mono text-2xl uppercase tracking-wider text-hack-primary">ACCOUNT</h1>
-        <p className="text-hack-dim font-mono text-sm">Identity, credentials, provider keys, and personal queue control.</p>
+        <h1 className="font-mono text-2xl uppercase tracking-wider text-hack-primary">
+          ACCOUNT
+        </h1>
+        <p className="text-hack-dim font-mono text-sm">
+          Identity, credentials, provider keys, and personal queue control.
+        </p>
       </div>
 
       <div className="grid gap-6 xl:grid-cols-2">
@@ -112,7 +144,11 @@ const Account = () => {
             <Row label="Created" value={createdAt} />
             <Row
               label="Concurrent Scan Slots"
-              value={me.role === 'admin' ? 'UNLIMITED (ADMIN)' : String(me.max_concurrent_scans || 1)}
+              value={
+                me.role === "admin"
+                  ? "UNLIMITED (ADMIN)"
+                  : String(me.max_concurrent_scans || 1)
+              }
             />
           </div>
         </div>
@@ -122,8 +158,16 @@ const Account = () => {
             <KeyRound size={18} /> Change Password
           </h2>
 
-          {message && <div className="mb-3 border border-hack-primary/60 bg-hack-primary/10 p-3 text-sm text-hack-primary font-mono">{message}</div>}
-          {errorMsg && <div className="mb-3 border border-hack-danger/60 bg-hack-danger/10 p-3 text-sm text-hack-danger font-mono">{errorMsg}</div>}
+          {message && (
+            <div className="mb-3 border border-hack-primary/60 bg-hack-primary/10 p-3 text-sm text-hack-primary font-mono">
+              {message}
+            </div>
+          )}
+          {errorMsg && (
+            <div className="mb-3 border border-hack-danger/60 bg-hack-danger/10 p-3 text-sm text-hack-danger font-mono">
+              {errorMsg}
+            </div>
+          )}
 
           <form
             className="space-y-4"
@@ -131,7 +175,10 @@ const Account = () => {
               e.preventDefault();
               setMessage(null);
               setErrorMsg(null);
-              changePwMutation.mutate({ current_password: currentPassword, new_password: newPassword });
+              changePwMutation.mutate({
+                current_password: currentPassword,
+                new_password: newPassword,
+              });
             }}
           >
             <input
@@ -151,8 +198,12 @@ const Account = () => {
               placeholder="New Password"
               className="w-full bg-black/40 border border-hack-border px-3 py-3 font-mono text-white focus:border-hack-primary focus:outline-none"
             />
-            <button type="submit" className="hack-btn w-full py-3" disabled={changePwMutation.isPending}>
-              {changePwMutation.isPending ? 'UPDATING...' : 'UPDATE PASSWORD'}
+            <button
+              type="submit"
+              className="hack-btn w-full py-3"
+              disabled={changePwMutation.isPending}
+            >
+              {changePwMutation.isPending ? "UPDATING..." : "UPDATE PASSWORD"}
             </button>
           </form>
         </div>
@@ -163,6 +214,8 @@ const Account = () => {
         description="Only your queued scan jobs are shown here. Reordering is applied to your own queue. Admins manage their own queue here, not other users' queues."
       />
 
+      <TelegramConfigPanel role={me.role} />
+
       <div className="border border-hack-border bg-black/30 p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -170,7 +223,8 @@ const Account = () => {
               <Key size={18} /> Subfinder Provider API Keys
             </h2>
             <p className="mt-1 text-xs text-hack-dim font-mono">
-              These keys are stored per-user and are only used when Subfinder runs for targets owned by you.
+              These keys are stored per-user and are only used when Subfinder
+              runs for targets owned by you.
             </p>
           </div>
           <div className="flex gap-2">
@@ -178,13 +232,15 @@ const Account = () => {
               type="button"
               onClick={() => setShowKeys((v) => !v)}
               className="hack-btn-ghost border border-hack-border px-3 py-1 text-[10px] uppercase tracking-wider text-hack-dim hover:text-white"
-              title={showKeys ? 'Hide keys' : 'Show keys'}
+              title={showKeys ? "Hide keys" : "Show keys"}
             >
               {showKeys ? <EyeOff size={14} /> : <Eye size={14} />}
             </button>
             <button
               type="button"
-              onClick={() => setSfRows((prev) => [...prev, { provider: '', apiKey: '' }])}
+              onClick={() =>
+                setSfRows((prev) => [...prev, { provider: "", apiKey: "" }])
+              }
               className="hack-btn-ghost border border-hack-border px-3 py-1 text-[10px] uppercase tracking-wider text-hack-dim hover:text-white"
               title="Add provider key"
             >
@@ -201,16 +257,27 @@ const Account = () => {
               disabled={saveSubfinderMutation.isPending}
               title="Save keys"
             >
-              <Save size={14} /> {saveSubfinderMutation.isPending ? 'Saving...' : 'Save'}
+              <Save size={14} />{" "}
+              {saveSubfinderMutation.isPending ? "Saving..." : "Save"}
             </button>
           </div>
         </div>
 
-        {sfMessage && <div className="mb-3 border border-hack-primary/60 bg-hack-primary/10 p-3 text-sm text-hack-primary font-mono">{sfMessage}</div>}
-        {sfError && <div className="mb-3 border border-hack-danger/60 bg-hack-danger/10 p-3 text-sm text-hack-danger font-mono">{sfError}</div>}
+        {sfMessage && (
+          <div className="mb-3 border border-hack-primary/60 bg-hack-primary/10 p-3 text-sm text-hack-primary font-mono">
+            {sfMessage}
+          </div>
+        )}
+        {sfError && (
+          <div className="mb-3 border border-hack-danger/60 bg-hack-danger/10 p-3 text-sm text-hack-danger font-mono">
+            {sfError}
+          </div>
+        )}
 
         {subfinderProvidersQuery.isLoading ? (
-          <div className="font-mono text-hack-dim">Loading subfinder providers...</div>
+          <div className="font-mono text-hack-dim">
+            Loading subfinder providers...
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left font-mono text-sm">
@@ -236,7 +303,11 @@ const Account = () => {
                           value={row.provider}
                           onChange={(e) => {
                             const v = e.target.value;
-                            setSfRows((prev) => prev.map((r, i) => (i === idx ? { ...r, provider: v } : r)));
+                            setSfRows((prev) =>
+                              prev.map((r, i) =>
+                                i === idx ? { ...r, provider: v } : r,
+                              ),
+                            );
                           }}
                           placeholder="chaos"
                           className="w-full bg-black/40 border border-hack-border px-3 py-2 text-white focus:border-hack-primary focus:outline-none"
@@ -244,11 +315,15 @@ const Account = () => {
                       </td>
                       <td className="py-2 pr-3">
                         <input
-                          type={showKeys ? 'text' : 'password'}
+                          type={showKeys ? "text" : "password"}
                           value={row.apiKey}
                           onChange={(e) => {
                             const v = e.target.value;
-                            setSfRows((prev) => prev.map((r, i) => (i === idx ? { ...r, apiKey: v } : r)));
+                            setSfRows((prev) =>
+                              prev.map((r, i) =>
+                                i === idx ? { ...r, apiKey: v } : r,
+                              ),
+                            );
                           }}
                           placeholder="api-key"
                           className="w-full bg-black/40 border border-hack-border px-3 py-2 text-white focus:border-hack-primary focus:outline-none"
@@ -257,7 +332,11 @@ const Account = () => {
                       <td className="py-2 text-right">
                         <button
                           type="button"
-                          onClick={() => setSfRows((prev) => prev.filter((_, i) => i !== idx))}
+                          onClick={() =>
+                            setSfRows((prev) =>
+                              prev.filter((_, i) => i !== idx),
+                            )
+                          }
                           className="p-2 text-hack-danger/70 hover:text-hack-danger"
                         >
                           <Trash2 size={16} />
