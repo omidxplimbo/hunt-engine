@@ -153,6 +153,10 @@ func Run(ctx Context) {
 	}
 
 	log.Printf("🏁 PHASE 2 finished. Total processed: %d in %s.\n", processedCount, time.Since(startTime))
+	if ctx.AfterProbing != nil {
+		ctx.AfterProbing(targetID)
+	}
+
 	ctx.ScanMarkStepDone(targetID, "PROBING", "DONE")
 	ctx.TriggerNextModule(targetID, rootDomain, "PROBING")
 }

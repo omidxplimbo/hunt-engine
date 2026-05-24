@@ -19,4 +19,6 @@ type Context struct {
 
 	RunCommand   func(targetID uint, name string, args ...string) ([]byte, error)
 	UpdateAssets func(targetID uint, results map[string]HTTPXResult)
+
+	AfterProbing func(targetID uint)
 }
