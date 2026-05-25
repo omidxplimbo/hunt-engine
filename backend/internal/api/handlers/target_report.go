@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/auditlog"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/reports/targetpdf"
 )
 
@@ -31,6 +32,23 @@ func DownloadTargetPDFReport(c *fiber.Ctx) error {
 			"status":  "error",
 			"message": "Failed to generate target report",
 			"error":   err.Error(),
+		})
+	}
+
+	if uid, uidErr := currentUserID(c); uidErr == nil {
+		entityID := target.ID
+		_ = auditlog.Record(auditlog.Entry{
+			ActorUserID: &uid,
+			Action:      "target.report_pdf.download",
+			EntityType:  "target",
+			EntityID:    &entityID,
+			TargetID:    &target.ID,
+			IPAddress:   auditlog.ClientIP(c),
+			UserAgent:   auditlog.UserAgent(c),
+			Metadata: map[string]interface{}{
+				"filename":    filename,
+				"root_domain": target.RootDomain,
+			},
 		})
 	}
 
