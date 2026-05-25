@@ -8,6 +8,7 @@ import {
   exportTargetIPs,
   downloadAssets,
   downloadURLs,
+  downloadTargetPDFReport,
 } from '../api/targets';
 import FindingsPanel from '../components/FindingsPanel';
 import {
@@ -137,6 +138,7 @@ const TargetAssets = () => {
 
   const [filterJsOnly, setFilterJsOnly] = useState(false);
   const [filterSources, setFilterSources] = useState<string[]>([]);
+  const [reportDownloading, setReportDownloading] = useState(false);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -260,6 +262,17 @@ const TargetAssets = () => {
     await downloadURLs(targetId, targetQuery.data?.root_domain || 'target', debouncedSearch, filterJsOnly, sortBy, sortOrder, filterSources);
   };
 
+  const handleDownloadReport = async () => {
+    if (!targetQuery.data || reportDownloading) return;
+
+    try {
+      setReportDownloading(true);
+      await downloadTargetPDFReport(targetId, targetQuery.data.root_domain || targetQuery.data.name || 'target');
+    } finally {
+      setReportDownloading(false);
+    }
+  };
+
   return (
     <div className="space-y-5 p-4 md:p-6">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -279,6 +292,18 @@ const TargetAssets = () => {
         </div>
 
         <div className="flex flex-wrap gap-2">
+          {targetQuery.data && (
+            <button
+              onClick={handleDownloadReport}
+              disabled={reportDownloading}
+              className="hack-btn-ghost flex items-center gap-2 border border-hack-primary/60 px-3 text-hack-primary disabled:opacity-50"
+              title="Download a professional PDF report for this target"
+            >
+              {reportDownloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+              PDF Report
+            </button>
+          )}
+
           <button onClick={() => setActiveTab('assets')} className={clsx('hack-btn flex-1 justify-center md:flex-none', activeTab === 'assets' ? 'bg-hack-primary text-black' : 'bg-transparent text-hack-dim border-hack-dim/30')}>
             <Database className="mr-1 h-4 w-4" /> Assets
           </button>

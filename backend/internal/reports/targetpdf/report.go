@@ -1,0 +1,764 @@
+package targetpdf
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/jung-kurt/gofpdf"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
+)
+
+type ReportData struct {
+	GeneratedAt time.Time
+	Target      models.Target
+	ScanState   *models.TargetScanState
+
+	Counts ReportCounts
+
+	FindingsBySeverity map[string]int64
+	FindingsByStatus   map[string]int64
+	FindingsBySource   map[string]int64
+	FindingsByCategory map[string]int64
+
+	TopFindings      []models.Finding
+	TakeoverFindings []models.Finding
+	JSFindings       []models.Finding
+	NucleiFindings   []models.Finding
+	RecentAssets     []models.Asset
+	RecentURLs       []models.FoundURL
+	AssetChanges     []models.AssetHistory
+}
+
+type ReportCounts struct {
+	TotalAssets int64
+	LiveAssets  int64
+	DeadAssets  int64
+	WebAssets   int64
+	CDNAssets   int64
+	WAFAssets   int64
+	CloudAssets int64
+	PortAssets  int64
+
+	TotalURLs int64
+	JSURLs    int64
+
+	TotalFindings int64
+	OpenFindings  int64
+}
+
+type statRow struct {
+	Key   string `gorm:"column:key"`
+	Count int64  `gorm:"column:count"`
+}
+
+type barRow struct {
+	Label string
+	Value int64
+}
+
+var filenameUnsafe = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
+
+func Generate(targetID uint) ([]byte, string, error) {
+	data, err := Load(targetID)
+	if err != nil {
+		return nil, "", err
+	}
+
+	pdfBytes, err := Render(data)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return pdfBytes, Filename(data), nil
+}
+
+func Load(targetID uint) (*ReportData, error) {
+	if targetID == 0 {
+		return nil, fmt.Errorf("target id is required")
+	}
+
+	data := &ReportData{
+		GeneratedAt:        time.Now().UTC(),
+		FindingsBySeverity: map[string]int64{},
+		FindingsByStatus:   map[string]int64{},
+		FindingsBySource:   map[string]int64{},
+		FindingsByCategory: map[string]int64{},
+	}
+
+	if err := database.DB.First(&data.Target, targetID).Error; err != nil {
+		return nil, fmt.Errorf("load target: %w", err)
+	}
+
+	var scanState models.TargetScanState
+	if err := database.DB.Where("target_id = ?", targetID).First(&scanState).Error; err == nil {
+		data.ScanState = &scanState
+	}
+
+	var err error
+	if data.Counts.TotalAssets, err = countModel(&models.Asset{}, "target_id = ?", targetID); err != nil {
+		return nil, err
+	}
+	if data.Counts.LiveAssets, err = countModel(&models.Asset{}, "target_id = ? AND is_live = true", targetID); err != nil {
+		return nil, err
+	}
+	if data.Counts.DeadAssets, err = countModel(&models.Asset{}, "target_id = ? AND is_live = false", targetID); err != nil {
+		return nil, err
+	}
+	if data.Counts.WebAssets, err = countModel(&models.Asset{}, "target_id = ? AND (status_code > 0 OR final_url <> '')", targetID); err != nil {
+		return nil, err
+	}
+	if data.Counts.CDNAssets, err = countModel(&models.Asset{}, "target_id = ? AND (cdncheck = true OR cdn_name <> '' OR cdncheck_name <> '')", targetID); err != nil {
+		return nil, err
+	}
+	if data.Counts.WAFAssets, err = countModel(&models.Asset{}, "target_id = ? AND (wafcheck = true OR wafcheck_name <> '')", targetID); err != nil {
+		return nil, err
+	}
+	if data.Counts.CloudAssets, err = countModel(&models.Asset{}, "target_id = ? AND (cloudcheck = true OR cloudcheck_name <> '')", targetID); err != nil {
+		return nil, err
+	}
+	if data.Counts.PortAssets, err = countModel(&models.Asset{}, "target_id = ? AND open_ports IS NOT NULL AND open_ports::text <> '{}' AND open_ports::text <> 'null' AND open_ports::text <> ''", targetID); err != nil {
+		return nil, err
+	}
+	if data.Counts.TotalURLs, err = countModel(&models.FoundURL{}, "target_id = ?", targetID); err != nil {
+		return nil, err
+	}
+	if data.Counts.JSURLs, err = countModel(&models.FoundURL{}, "target_id = ? AND (LOWER(value) LIKE '%.js%' OR LOWER(value) LIKE '%.mjs%' OR LOWER(value) LIKE '%.map%')", targetID); err != nil {
+		return nil, err
+	}
+	if data.Counts.TotalFindings, err = countModel(&models.Finding{}, "target_id = ?", targetID); err != nil {
+		return nil, err
+	}
+	if data.Counts.OpenFindings, err = countModel(&models.Finding{}, "target_id = ? AND status = ?", targetID, models.FindingStatusOpen); err != nil {
+		return nil, err
+	}
+
+	if data.FindingsBySeverity, err = countFindingsBy(targetID, "severity"); err != nil {
+		return nil, err
+	}
+	if data.FindingsByStatus, err = countFindingsBy(targetID, "status"); err != nil {
+		return nil, err
+	}
+	if data.FindingsBySource, err = countFindingsBy(targetID, "source_tool"); err != nil {
+		return nil, err
+	}
+	if data.FindingsByCategory, err = countFindingsBy(targetID, "category"); err != nil {
+		return nil, err
+	}
+
+	severityOrder := "CASE severity WHEN 'critical' THEN 5 WHEN 'high' THEN 4 WHEN 'medium' THEN 3 WHEN 'low' THEN 2 ELSE 1 END DESC"
+	if err := database.DB.Where("target_id = ? AND status <> ?", targetID, models.FindingStatusFixed).
+		Order(severityOrder).Order("last_seen DESC").Limit(15).Find(&data.TopFindings).Error; err != nil {
+		return nil, fmt.Errorf("load top findings: %w", err)
+	}
+	if err := database.DB.Where("target_id = ? AND source_tool = ?", targetID, "takeover").
+		Order(severityOrder).Order("last_seen DESC").Limit(20).Find(&data.TakeoverFindings).Error; err != nil {
+		return nil, fmt.Errorf("load takeover findings: %w", err)
+	}
+	if err := database.DB.Where("target_id = ? AND source_tool = ?", targetID, "js-intel").
+		Order(severityOrder).Order("last_seen DESC").Limit(20).Find(&data.JSFindings).Error; err != nil {
+		return nil, fmt.Errorf("load js intelligence findings: %w", err)
+	}
+	if err := database.DB.Where("target_id = ? AND source_tool = ?", targetID, "nuclei").
+		Order(severityOrder).Order("last_seen DESC").Limit(20).Find(&data.NucleiFindings).Error; err != nil {
+		return nil, fmt.Errorf("load nuclei findings: %w", err)
+	}
+	if err := database.DB.Where("target_id = ?", targetID).
+		Order("updated_at DESC").Limit(20).Find(&data.RecentAssets).Error; err != nil {
+		return nil, fmt.Errorf("load recent assets: %w", err)
+	}
+	if err := database.DB.Where("target_id = ?", targetID).
+		Order("id DESC").Limit(20).Find(&data.RecentURLs).Error; err != nil {
+		return nil, fmt.Errorf("load recent urls: %w", err)
+	}
+	if err := database.DB.Preload("Asset").
+		Joins("JOIN assets ON assets.id = asset_histories.asset_id").
+		Where("assets.target_id = ?", targetID).
+		Order("asset_histories.created_at DESC").Limit(20).Find(&data.AssetChanges).Error; err != nil {
+		return nil, fmt.Errorf("load asset changes: %w", err)
+	}
+
+	return data, nil
+}
+
+func countModel(model interface{}, where string, args ...interface{}) (int64, error) {
+	var count int64
+	query := database.DB.Model(model)
+	if strings.TrimSpace(where) != "" {
+		query = query.Where(where, args...)
+	}
+	if err := query.Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func countFindingsBy(targetID uint, field string) (map[string]int64, error) {
+	switch field {
+	case "severity", "status", "source_tool", "category":
+	default:
+		return nil, fmt.Errorf("unsupported finding stat field: %s", field)
+	}
+
+	rows := make([]statRow, 0)
+	if err := database.DB.Model(&models.Finding{}).
+		Select(field+" AS key, COUNT(*) AS count").
+		Where("target_id = ?", targetID).
+		Where(field + " <> ''").
+		Group(field).
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	out := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		out[row.Key] = row.Count
+	}
+	return out, nil
+}
+
+func Filename(data *ReportData) string {
+	domain := strings.TrimSpace(data.Target.RootDomain)
+	if domain == "" {
+		domain = fmt.Sprintf("target-%d", data.Target.ID)
+	}
+	domain = filenameUnsafe.ReplaceAllString(strings.ToLower(domain), "-")
+	domain = strings.Trim(domain, "-._")
+	if domain == "" {
+		domain = fmt.Sprintf("target-%d", data.Target.ID)
+	}
+	return fmt.Sprintf("hunt-target-%d-%s-report-%s.pdf", data.Target.ID, domain, data.GeneratedAt.Format("20060102"))
+}
+
+func Render(data *ReportData) ([]byte, error) {
+	pdf := gofpdf.New("P", "mm", "A4", "")
+	pdf.SetTitle("Hunt Engine Target Report", false)
+	pdf.SetAuthor("Hunt Engine", false)
+	pdf.SetSubject("Target reconnaissance and security report", false)
+	pdf.SetMargins(14, 14, 14)
+	pdf.SetAutoPageBreak(true, 17)
+	pdf.SetCompression(true)
+	pdf.SetFooterFunc(func() {
+		pdf.SetY(-12)
+		pdf.SetFont("Helvetica", "", 8)
+		pdf.SetTextColor(110, 120, 135)
+		pdf.CellFormat(0, 8, fmt.Sprintf("Hunt Engine Target Report - Page %d", pdf.PageNo()), "", 0, "C", false, 0, "")
+	})
+
+	coverPage(pdf, data)
+	pdf.AddPage()
+	sectionTitle(pdf, "Executive Summary")
+	paragraph(pdf, "This report summarizes the current Hunt Engine reconnaissance and security findings for the selected target. It is generated from stored scan data, assets, URLs, findings, and structured evidence. AI-generated analysis will be added in a later v3.5.0 milestone.")
+	metricsGrid(pdf, data)
+	scanStateSection(pdf, data)
+	assetAndURLSection(pdf, data)
+	findingSummarySection(pdf, data)
+	findingTables(pdf, data)
+	assetTables(pdf, data)
+
+	var buf bytes.Buffer
+	if err := pdf.Output(&buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func coverPage(pdf *gofpdf.Fpdf, data *ReportData) {
+	pdf.AddPage()
+	pdf.SetFillColor(16, 24, 40)
+	pdf.Rect(0, 0, 210, 297, "F")
+
+	pdf.SetTextColor(255, 255, 255)
+	pdf.SetFont("Helvetica", "B", 26)
+	pdf.SetXY(18, 38)
+	pdf.CellFormat(0, 12, "Hunt Engine", "", 1, "L", false, 0, "")
+	pdf.SetFont("Helvetica", "B", 20)
+	pdf.SetTextColor(73, 222, 128)
+	pdf.CellFormat(0, 10, "Target Security Report", "", 1, "L", false, 0, "")
+
+	pdf.SetDrawColor(73, 222, 128)
+	pdf.SetLineWidth(0.6)
+	pdf.Line(18, 68, 190, 68)
+
+	pdf.SetY(88)
+	coverKV(pdf, "Target", data.Target.Name)
+	coverKV(pdf, "Root Domain", data.Target.RootDomain)
+	coverKV(pdf, "Target ID", fmt.Sprintf("%d", data.Target.ID))
+	coverKV(pdf, "Status", data.Target.Status)
+	coverKV(pdf, "Current Phase", data.Target.CurrentPhase)
+	coverKV(pdf, "Generated At", data.GeneratedAt.Format(time.RFC3339))
+	if data.Target.LastScanAt != nil {
+		coverKV(pdf, "Last Scan At", data.Target.LastScanAt.UTC().Format(time.RFC3339))
+	}
+
+	pdf.SetY(208)
+	pdf.SetFont("Helvetica", "", 10)
+	pdf.SetTextColor(190, 200, 214)
+	pdf.MultiCell(170, 6, cleanText("Non-AI report foundation for Hunt Engine v3.5.0. The report includes target metadata, scan state, asset and URL inventory, findings, structured evidence summaries, and source-specific security sections."), "", "L", false)
+}
+
+func coverKV(pdf *gofpdf.Fpdf, label string, value string) {
+	pdf.SetX(22)
+	pdf.SetFont("Helvetica", "B", 10)
+	pdf.SetTextColor(148, 163, 184)
+	pdf.CellFormat(40, 8, cleanText(label), "", 0, "L", false, 0, "")
+	pdf.SetFont("Helvetica", "", 11)
+	pdf.SetTextColor(255, 255, 255)
+	pdf.CellFormat(120, 8, cleanText(emptyDash(value)), "", 1, "L", false, 0, "")
+}
+
+func metricsGrid(pdf *gofpdf.Fpdf, data *ReportData) {
+	ensureSpace(pdf, 54)
+	y := pdf.GetY() + 2
+	w := 56.5
+	h := 28.0
+	gap := 4.0
+	x := 14.0
+
+	cards := []struct {
+		Label string
+		Value string
+		Hint  string
+	}{
+		{"Assets", fmt.Sprintf("%d", data.Counts.TotalAssets), fmt.Sprintf("%d live / %d dead", data.Counts.LiveAssets, data.Counts.DeadAssets)},
+		{"Web Assets", fmt.Sprintf("%d", data.Counts.WebAssets), fmt.Sprintf("%d CDN / %d WAF", data.Counts.CDNAssets, data.Counts.WAFAssets)},
+		{"URLs", fmt.Sprintf("%d", data.Counts.TotalURLs), fmt.Sprintf("%d JS-like resources", data.Counts.JSURLs)},
+		{"Findings", fmt.Sprintf("%d", data.Counts.TotalFindings), fmt.Sprintf("%d open", data.Counts.OpenFindings)},
+		{"Takeover", fmt.Sprintf("%d", len(data.TakeoverFindings)), "subdomain takeover candidates"},
+		{"JS Intel", fmt.Sprintf("%d", len(data.JSFindings)), "JS endpoint/secret/map findings"},
+	}
+
+	for i, c := range cards {
+		cx := x + float64(i%3)*(w+gap)
+		cy := y + float64(i/3)*(h+gap)
+		metricCard(pdf, cx, cy, w, h, c.Label, c.Value, c.Hint)
+	}
+	pdf.SetY(y + 2*h + gap + 8)
+}
+
+func metricCard(pdf *gofpdf.Fpdf, x, y, w, h float64, label, value, hint string) {
+	pdf.SetFillColor(248, 250, 252)
+	pdf.SetDrawColor(210, 220, 230)
+	pdf.Rect(x, y, w, h, "FD")
+	pdf.SetXY(x+4, y+4)
+	pdf.SetFont("Helvetica", "B", 16)
+	pdf.SetTextColor(15, 23, 42)
+	pdf.CellFormat(w-8, 7, cleanText(value), "", 1, "L", false, 0, "")
+	pdf.SetX(x + 4)
+	pdf.SetFont("Helvetica", "B", 8)
+	pdf.SetTextColor(30, 64, 175)
+	pdf.CellFormat(w-8, 5, cleanText(strings.ToUpper(label)), "", 1, "L", false, 0, "")
+	pdf.SetX(x + 4)
+	pdf.SetFont("Helvetica", "", 7)
+	pdf.SetTextColor(100, 116, 139)
+	pdf.CellFormat(w-8, 5, cleanText(hint), "", 0, "L", false, 0, "")
+}
+
+func scanStateSection(pdf *gofpdf.Fpdf, data *ReportData) {
+	ensureSpace(pdf, 36)
+	sectionTitle(pdf, "Scan State")
+	rows := [][2]string{
+		{"Target Status", data.Target.Status},
+		{"Current Phase", data.Target.CurrentPhase},
+		{"Scan Count", fmt.Sprintf("%d", data.Target.ScanCount)},
+		{"Modules", strings.Join(parseStringList(data.Target.ScanModules), ", ")},
+		{"Nuclei Enabled", boolText(data.Target.UseNuclei)},
+		{"Nuclei Profile", data.Target.NucleiProfile},
+	}
+	if data.Target.LastScanAt != nil {
+		rows = append(rows, [2]string{"Last Scan", data.Target.LastScanAt.UTC().Format(time.RFC3339)})
+	}
+	if data.ScanState != nil {
+		rows = append(rows,
+			[2]string{"Persistent State", data.ScanState.Status},
+			[2]string{"Current Step", joinNonEmpty(data.ScanState.CurrentModule, data.ScanState.CurrentStep, ":")},
+			[2]string{"Completed Steps", fmt.Sprintf("%d", len(parseStringList(data.ScanState.CompletedSteps)))},
+			[2]string{"Last Error", data.ScanState.LastError},
+		)
+	}
+	keyValueTable(pdf, rows)
+}
+
+func assetAndURLSection(pdf *gofpdf.Fpdf, data *ReportData) {
+	ensureSpace(pdf, 42)
+	sectionTitle(pdf, "Asset and URL Inventory")
+	drawBars(pdf, "Asset Distribution", []barRow{
+		{"Live assets", data.Counts.LiveAssets},
+		{"Dead assets", data.Counts.DeadAssets},
+		{"Web probed", data.Counts.WebAssets},
+		{"CDN tagged", data.Counts.CDNAssets},
+		{"WAF tagged", data.Counts.WAFAssets},
+		{"Cloud tagged", data.Counts.CloudAssets},
+		{"Open ports", data.Counts.PortAssets},
+	})
+	drawBars(pdf, "URL Distribution", []barRow{
+		{"Total URLs", data.Counts.TotalURLs},
+		{"JS-like resources", data.Counts.JSURLs},
+	})
+}
+
+func findingSummarySection(pdf *gofpdf.Fpdf, data *ReportData) {
+	ensureSpace(pdf, 55)
+	sectionTitle(pdf, "Findings Summary")
+	drawBars(pdf, "Severity Breakdown", rowsFromMap(data.FindingsBySeverity, []string{"critical", "high", "medium", "low", "info"}))
+	drawBars(pdf, "Finding Sources", rowsFromMap(data.FindingsBySource, []string{"builtin", "nuclei", "takeover", "js-intel"}))
+	drawBars(pdf, "Finding Status", rowsFromMap(data.FindingsByStatus, []string{"open", "accepted", "false_positive", "fixed"}))
+}
+
+func findingTables(pdf *gofpdf.Fpdf, data *ReportData) {
+	findingsTable(pdf, "Top Active Findings", data.TopFindings)
+	takeoverTable(pdf, data.TakeoverFindings)
+	jsIntelTable(pdf, data.JSFindings)
+	nucleiTable(pdf, data.NucleiFindings)
+}
+
+func assetTables(pdf *gofpdf.Fpdf, data *ReportData) {
+	recentAssetsTable(pdf, data.RecentAssets)
+	recentURLsTable(pdf, data.RecentURLs)
+	assetChangesTable(pdf, data.AssetChanges)
+}
+
+func findingsTable(pdf *gofpdf.Fpdf, title string, findings []models.Finding) {
+	ensureSpace(pdf, 24)
+	sectionTitle(pdf, title)
+	if len(findings) == 0 {
+		paragraph(pdf, "No findings were available for this section.")
+		return
+	}
+	tableHeader(pdf, []string{"Severity", "Source", "Category", "Title"}, []float64{22, 26, 38, 92})
+	for _, f := range findings {
+		ensureSpace(pdf, 8)
+		tableRow(pdf, []string{f.Severity, f.SourceTool, f.Category, ellipsize(f.Title, 72)}, []float64{22, 26, 38, 92})
+	}
+	pdf.Ln(2)
+}
+
+func takeoverTable(pdf *gofpdf.Fpdf, findings []models.Finding) {
+	ensureSpace(pdf, 24)
+	sectionTitle(pdf, "Takeover Detection")
+	if len(findings) == 0 {
+		paragraph(pdf, "No takeover findings were available.")
+		return
+	}
+	tableHeader(pdf, []string{"Asset", "Provider", "Confidence", "CNAME"}, []float64{50, 36, 24, 68})
+	for _, f := range findings {
+		ensureSpace(pdf, 8)
+		tableRow(pdf, []string{
+			ellipsize(evidenceValue(f, "asset"), 34),
+			ellipsize(evidenceValue(f, "provider"), 25),
+			ellipsize(evidenceValue(f, "confidence"), 18),
+			ellipsize(evidenceValue(f, "cname"), 48),
+		}, []float64{50, 36, 24, 68})
+	}
+	pdf.Ln(2)
+}
+
+func jsIntelTable(pdf *gofpdf.Fpdf, findings []models.Finding) {
+	ensureSpace(pdf, 24)
+	sectionTitle(pdf, "JavaScript Intelligence")
+	if len(findings) == 0 {
+		paragraph(pdf, "No JavaScript intelligence findings were available.")
+		return
+	}
+	tableHeader(pdf, []string{"Severity", "Type", "Count", "JS URL"}, []float64{22, 42, 18, 96})
+	for _, f := range findings {
+		ensureSpace(pdf, 8)
+		tableRow(pdf, []string{
+			f.Severity,
+			ellipsize(evidenceValue(f, "signal_type"), 28),
+			ellipsize(evidenceValue(f, "endpoints_count"), 8),
+			ellipsize(evidenceValue(f, "js_url"), 70),
+		}, []float64{22, 42, 18, 96})
+	}
+	pdf.Ln(2)
+}
+
+func nucleiTable(pdf *gofpdf.Fpdf, findings []models.Finding) {
+	ensureSpace(pdf, 24)
+	sectionTitle(pdf, "Nuclei Findings")
+	if len(findings) == 0 {
+		paragraph(pdf, "No Nuclei findings were available.")
+		return
+	}
+	tableHeader(pdf, []string{"Severity", "Template", "Host", "Matched At"}, []float64{22, 54, 42, 60})
+	for _, f := range findings {
+		ensureSpace(pdf, 8)
+		tableRow(pdf, []string{
+			f.Severity,
+			ellipsize(evidenceValue(f, "template_id"), 38),
+			ellipsize(evidenceValue(f, "host"), 28),
+			ellipsize(evidenceValue(f, "matched_at"), 44),
+		}, []float64{22, 54, 42, 60})
+	}
+	pdf.Ln(2)
+}
+
+func recentAssetsTable(pdf *gofpdf.Fpdf, assets []models.Asset) {
+	ensureSpace(pdf, 24)
+	sectionTitle(pdf, "Recent Assets")
+	if len(assets) == 0 {
+		paragraph(pdf, "No assets were available.")
+		return
+	}
+	tableHeader(pdf, []string{"Asset", "Live", "Status", "Title"}, []float64{58, 18, 20, 82})
+	for _, a := range assets {
+		ensureSpace(pdf, 8)
+		tableRow(pdf, []string{
+			ellipsize(a.Value, 42),
+			boolText(a.IsLive),
+			fmt.Sprintf("%d", a.StatusCode),
+			ellipsize(a.Title, 58),
+		}, []float64{58, 18, 20, 82})
+	}
+	pdf.Ln(2)
+}
+
+func recentURLsTable(pdf *gofpdf.Fpdf, urls []models.FoundURL) {
+	ensureSpace(pdf, 24)
+	sectionTitle(pdf, "Recent URLs")
+	if len(urls) == 0 {
+		paragraph(pdf, "No URLs were available.")
+		return
+	}
+	tableHeader(pdf, []string{"Source", "URL"}, []float64{32, 146})
+	for _, u := range urls {
+		ensureSpace(pdf, 8)
+		tableRow(pdf, []string{ellipsize(u.Source, 22), ellipsize(u.Value, 110)}, []float64{32, 146})
+	}
+	pdf.Ln(2)
+}
+
+func assetChangesTable(pdf *gofpdf.Fpdf, changes []models.AssetHistory) {
+	ensureSpace(pdf, 24)
+	sectionTitle(pdf, "Recent Asset Changes")
+	if len(changes) == 0 {
+		paragraph(pdf, "No recent asset changes were available.")
+		return
+	}
+	tableHeader(pdf, []string{"Asset", "Field", "Old", "New"}, []float64{45, 28, 52, 53})
+	for _, ch := range changes {
+		assetValue := ""
+		if ch.Asset != nil {
+			assetValue = ch.Asset.Value
+		}
+		ensureSpace(pdf, 8)
+		tableRow(pdf, []string{
+			ellipsize(assetValue, 32),
+			ellipsize(ch.FieldName, 18),
+			ellipsize(ch.OldValue, 38),
+			ellipsize(ch.NewValue, 38),
+		}, []float64{45, 28, 52, 53})
+	}
+	pdf.Ln(2)
+}
+
+func sectionTitle(pdf *gofpdf.Fpdf, title string) {
+	ensureSpace(pdf, 12)
+	pdf.SetFont("Helvetica", "B", 13)
+	pdf.SetTextColor(15, 23, 42)
+	pdf.CellFormat(0, 8, cleanText(title), "", 1, "L", false, 0, "")
+	pdf.SetDrawColor(73, 222, 128)
+	pdf.SetLineWidth(0.4)
+	y := pdf.GetY()
+	pdf.Line(14, y, 196, y)
+	pdf.Ln(3)
+}
+
+func paragraph(pdf *gofpdf.Fpdf, text string) {
+	pdf.SetFont("Helvetica", "", 9)
+	pdf.SetTextColor(71, 85, 105)
+	pdf.MultiCell(0, 5, cleanText(text), "", "L", false)
+	pdf.Ln(2)
+}
+
+func keyValueTable(pdf *gofpdf.Fpdf, rows [][2]string) {
+	for _, row := range rows {
+		ensureSpace(pdf, 7)
+		pdf.SetFont("Helvetica", "B", 8)
+		pdf.SetTextColor(51, 65, 85)
+		pdf.SetFillColor(241, 245, 249)
+		pdf.CellFormat(45, 6, cleanText(row[0]), "1", 0, "L", true, 0, "")
+		pdf.SetFont("Helvetica", "", 8)
+		pdf.SetTextColor(15, 23, 42)
+		pdf.CellFormat(133, 6, cleanText(ellipsize(emptyDash(row[1]), 110)), "1", 1, "L", false, 0, "")
+	}
+	pdf.Ln(3)
+}
+
+func drawBars(pdf *gofpdf.Fpdf, title string, rows []barRow) {
+	filtered := make([]barRow, 0, len(rows))
+	for _, row := range rows {
+		if row.Value > 0 {
+			filtered = append(filtered, row)
+		}
+	}
+	if len(filtered) == 0 {
+		return
+	}
+	ensureSpace(pdf, 12+float64(len(filtered))*8)
+	pdf.SetFont("Helvetica", "B", 9)
+	pdf.SetTextColor(30, 64, 175)
+	pdf.CellFormat(0, 6, cleanText(title), "", 1, "L", false, 0, "")
+
+	max := int64(1)
+	for _, row := range filtered {
+		if row.Value > max {
+			max = row.Value
+		}
+	}
+
+	for _, row := range filtered {
+		ensureSpace(pdf, 7)
+		y := pdf.GetY() + 1
+		pdf.SetFont("Helvetica", "", 8)
+		pdf.SetTextColor(51, 65, 85)
+		pdf.CellFormat(46, 5, cleanText(ellipsize(row.Label, 28)), "", 0, "L", false, 0, "")
+		barX := pdf.GetX()
+		barMaxW := 92.0
+		barW := barMaxW * float64(row.Value) / float64(max)
+		if barW < 1.5 {
+			barW = 1.5
+		}
+		pdf.SetFillColor(96, 165, 250)
+		pdf.Rect(barX, y, barW, 4.2, "F")
+		pdf.SetDrawColor(203, 213, 225)
+		pdf.Rect(barX, y, barMaxW, 4.2, "D")
+		pdf.SetX(barX + barMaxW + 4)
+		pdf.CellFormat(20, 5, fmt.Sprintf("%d", row.Value), "", 1, "L", false, 0, "")
+	}
+	pdf.Ln(3)
+}
+
+func tableHeader(pdf *gofpdf.Fpdf, headers []string, widths []float64) {
+	ensureSpace(pdf, 8)
+	pdf.SetFont("Helvetica", "B", 7)
+	pdf.SetTextColor(255, 255, 255)
+	pdf.SetFillColor(30, 41, 59)
+	for i, header := range headers {
+		pdf.CellFormat(widths[i], 6, cleanText(header), "1", 0, "L", true, 0, "")
+	}
+	pdf.Ln(-1)
+}
+
+func tableRow(pdf *gofpdf.Fpdf, values []string, widths []float64) {
+	pdf.SetFont("Helvetica", "", 7)
+	pdf.SetTextColor(15, 23, 42)
+	for i, value := range values {
+		pdf.CellFormat(widths[i], 6, cleanText(emptyDash(value)), "1", 0, "L", false, 0, "")
+	}
+	pdf.Ln(-1)
+}
+
+func rowsFromMap(values map[string]int64, preferred []string) []barRow {
+	seen := make(map[string]bool)
+	rows := make([]barRow, 0, len(values))
+	for _, key := range preferred {
+		if values[key] > 0 {
+			rows = append(rows, barRow{Label: key, Value: values[key]})
+			seen[key] = true
+		}
+	}
+	extra := make([]string, 0)
+	for key, value := range values {
+		if value > 0 && !seen[key] {
+			extra = append(extra, key)
+		}
+	}
+	sort.Strings(extra)
+	for _, key := range extra {
+		rows = append(rows, barRow{Label: key, Value: values[key]})
+	}
+	return rows
+}
+
+func ensureSpace(pdf *gofpdf.Fpdf, height float64) {
+	if pdf.GetY()+height > 280 {
+		pdf.AddPage()
+	}
+}
+
+func parseStringList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var items []string
+	if err := json.Unmarshal([]byte(raw), &items); err == nil {
+		return items
+	}
+	return nil
+}
+
+func evidenceValue(f models.Finding, key string) string {
+	var obj map[string]interface{}
+	if len(f.EvidenceJSON) == 0 || json.Unmarshal([]byte(f.EvidenceJSON), &obj) != nil {
+		return ""
+	}
+	value, ok := obj[key]
+	if !ok || value == nil {
+		return ""
+	}
+	switch v := value.(type) {
+	case string:
+		return v
+	case []interface{}, map[string]interface{}:
+		b, _ := json.Marshal(v)
+		return string(b)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+func boolText(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
+}
+
+func emptyDash(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "-"
+	}
+	return value
+}
+
+func joinNonEmpty(a, b, sep string) string {
+	a = strings.TrimSpace(a)
+	b = strings.TrimSpace(b)
+	if a == "" {
+		return b
+	}
+	if b == "" {
+		return a
+	}
+	return a + sep + b
+}
+
+func ellipsize(value string, max int) string {
+	value = strings.TrimSpace(strings.ReplaceAll(value, "\n", " "))
+	if max <= 3 || len(value) <= max {
+		return value
+	}
+	return value[:max-3] + "..."
+}
+
+func cleanText(value string) string {
+	value = strings.ReplaceAll(value, "\r", " ")
+	value = strings.ReplaceAll(value, "\n", " ")
+	value = strings.ReplaceAll(value, "\t", " ")
+	return strings.Map(func(r rune) rune {
+		if r < 32 {
+			return -1
+		}
+		if r > 126 {
+			return '?'
+		}
+		return r
+	}, value)
+}

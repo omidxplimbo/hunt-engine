@@ -420,3 +420,28 @@ export const downloadURLs = async (
   document.body.removeChild(link);
   window.URL.revokeObjectURL(url);
 };
+
+export const downloadTargetPDFReport = async (targetId: number, targetName = 'target') => {
+  const response = await apiClient.get(`/targets/${targetId}/report.pdf`, {
+    responseType: 'blob',
+  });
+
+  const disposition = String(response.headers?.['content-disposition'] || '');
+  const match = disposition.match(/filename="?([^";]+)"?/i);
+  const fallback = `hunt-${String(targetName).replace(/[^a-z0-9._-]+/gi, '-')}-report.pdf`;
+  const filename = match?.[1] || fallback;
+
+  const blob = new Blob([response.data], { type: 'application/pdf' });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+
+  link.href = url;
+  link.download = filename;
+
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+
+  window.URL.revokeObjectURL(url);
+};
+
