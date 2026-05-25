@@ -138,6 +138,7 @@ func main() {
 	api.Patch("/findings/:id/status", handlers.UpdateFindingStatus)
 
 	api.Get("/targets/:id/ai/analyses", handlers.GetTargetAIAnalyses)
+	api.Post("/targets/:id/ai/analyses/generate", handlers.GenerateTargetAIAnalysis)
 	api.Get("/targets/:id/ai/recommendations", handlers.GetTargetAIRecommendations)
 	api.Get("/targets/:id/audit-logs", handlers.GetTargetAuditLogs)
 

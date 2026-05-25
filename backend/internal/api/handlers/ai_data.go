@@ -6,7 +6,9 @@ import (
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/ai/analysis"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/auditlog"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"gorm.io/gorm"
 )
@@ -201,4 +203,52 @@ func GetTargetAuditLogs(c *fiber.Ctx) error {
 		"total_count": total,
 		"page":        page,
 	})
+}
+
+// GenerateTargetAIAnalysis creates a deterministic local target analysis row.
+// This is the v3.5.0 ai_analyses foundation; external LLM providers are wired later.
+func GenerateTargetAIAnalysis(c *fiber.Ctx) error {
+	targetID, err := parseTargetIDParam(c)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+
+	row, err := analysis.GenerateTargetAnalysis(analysis.TargetAnalysisInput{
+		TargetID:        target.ID,
+		CreatedByUserID: &uid,
+	})
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	entityID := row.ID
+	_ = auditlog.Record(auditlog.Entry{
+		ActorUserID: &uid,
+		Action:      "target.ai_analysis.generate",
+		EntityType:  "ai_analysis",
+		EntityID:    &entityID,
+		TargetID:    &target.ID,
+		IPAddress:   auditlog.ClientIP(c),
+		UserAgent:   auditlog.UserAgent(c),
+		Metadata: map[string]interface{}{
+			"target_id":    target.ID,
+			"root_domain":  target.RootDomain,
+			"analysis_id":  row.ID,
+			"provider":     row.Provider,
+			"model":        row.Model,
+			"input_digest": row.InputDigest,
+		},
+	})
+
+	return c.JSON(fiber.Map{"status": "success", "data": row})
 }
