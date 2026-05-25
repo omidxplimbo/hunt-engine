@@ -325,7 +325,7 @@ func buildTargetAnalysisOutput(snapshot map[string]interface{}) map[string]inter
 	bySource := int64Map(findings["by_source"])
 	byCategory := int64Map(findings["by_category"])
 
-	riskScore := calculateRiskScore(activeBySeverity)
+	riskScore := calculateRiskScore(activeBySeverity, bySource, byCategory)
 	riskLevel := riskLevelForScore(riskScore)
 
 	exposureBuckets := buildExposureBuckets(activeBySeverity, bySource, byCategory, assets, urls)
@@ -360,13 +360,50 @@ func buildTargetAnalysisOutput(snapshot map[string]interface{}) map[string]inter
 	}
 }
 
-func calculateRiskScore(activeBySeverity map[string]int64) int {
+func calculateRiskScore(activeBySeverity, bySource, byCategory map[string]int64) int {
+	critical := activeBySeverity[models.FindingSeverityCritical]
+	high := activeBySeverity[models.FindingSeverityHigh]
+	medium := activeBySeverity[models.FindingSeverityMedium]
+	low := activeBySeverity[models.FindingSeverityLow]
+
 	score := 0
-	score += int(activeBySeverity[models.FindingSeverityCritical]) * 35
-	score += int(activeBySeverity[models.FindingSeverityHigh]) * 20
-	score += int(activeBySeverity[models.FindingSeverityMedium]) * 8
-	score += int(activeBySeverity[models.FindingSeverityLow]) * 3
-	score += int(activeBySeverity[models.FindingSeverityInfo]) * 1
+
+	// Severity weights are intentionally capped. Many weak signals should not become CRITICAL.
+	score += cappedInt(int(critical)*30, 70)
+	score += cappedInt(int(high)*16, 60)
+	score += cappedInt(int(medium)*4, 35)
+	score += cappedInt(int(low)*1, 10)
+
+	// Category/source confidence. These are stronger than generic builtin hints.
+	score += cappedInt(int(byCategory["subdomain-takeover"])*18, 45)
+	score += cappedInt(int(byCategory["js-secret"])*16, 40)
+	score += cappedInt(int(byCategory["exposed-vcs"])*14, 35)
+	score += cappedInt(int(byCategory["exposed-config"])*12, 30)
+	score += cappedInt(int(byCategory["exposed-service"])*10, 30)
+	score += cappedInt(int(bySource["nuclei"])*6, 24)
+
+	// Builtin hints are useful for triage but low-confidence by default.
+	score += cappedInt(int(byCategory["exposed-interface"])*3, 15)
+	score += cappedInt(int(byCategory["server-error"])*1, 5)
+
+	// JS endpoint discovery is reconnaissance context, not a vulnerability by itself.
+	// Coverage gaps are also not risk; they are reported separately.
+
+	strongSignal := critical > 0 ||
+		high > 0 ||
+		byCategory["subdomain-takeover"] > 0 ||
+		byCategory["js-secret"] > 0 ||
+		byCategory["exposed-vcs"] > 0 ||
+		byCategory["exposed-config"] > 0 ||
+		byCategory["exposed-service"] > 0
+
+	if !strongSignal && score > 49 {
+		score = 49
+	}
+
+	if critical == 0 && high == 0 && score > 69 {
+		score = 69
+	}
 
 	if score > 100 {
 		return 100
@@ -374,15 +411,25 @@ func calculateRiskScore(activeBySeverity map[string]int64) int {
 	return score
 }
 
+func cappedInt(value, max int) int {
+	if value > max {
+		return max
+	}
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
 func riskLevelForScore(score int) string {
 	switch {
 	case score >= 85:
 		return "critical"
-	case score >= 60:
+	case score >= 65:
 		return "high"
-	case score >= 30:
+	case score >= 35:
 		return "medium"
-	case score > 0:
+	case score >= 10:
 		return "low"
 	default:
 		return "informational"
