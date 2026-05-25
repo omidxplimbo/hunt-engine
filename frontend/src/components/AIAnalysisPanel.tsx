@@ -251,7 +251,7 @@ const AnalysisDetails = ({ analysis }: { analysis: TargetAIAnalysis }) => {
 
       <details className="border border-hack-border bg-black/20 p-4">
         <summary className="cursor-pointer font-mono text-xs uppercase tracking-wider text-hack-dim hover:text-white">
-          Raw AI Output JSON
+          Raw Analysis Output JSON
         </summary>
         <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words bg-black/40 p-3 text-xs text-hack-dim">
           {JSON.stringify(output, null, 2)}
@@ -328,7 +328,7 @@ const AIAnalysisPanel = ({ targetId }: Props) => {
       {!query.isLoading && !latest && (
         <div className="border border-hack-border bg-black/20 p-6 text-center">
           <div className="font-mono text-hack-dim">
-            No AI analysis exists for this target yet.
+            No target analysis exists for this target yet.
           </div>
           <div className="mt-2 text-sm text-hack-dim">
             Click Generate Analysis to create the first deterministic analysis

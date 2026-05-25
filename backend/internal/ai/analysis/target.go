@@ -317,47 +317,7 @@ func collectTopFindings(targetID uint) ([]topFinding, error) {
 }
 
 func buildTargetAnalysisOutput(snapshot map[string]interface{}) map[string]interface{} {
-	target := mapValue(snapshot["target"])
-	assets := int64Map(snapshot["assets"])
-	urls := int64Map(snapshot["urls"])
-	findings := mapValue(snapshot["findings"])
-	activeBySeverity := int64Map(findings["active_by_severity"])
-	bySource := int64Map(findings["by_source"])
-	byCategory := int64Map(findings["by_category"])
-
-	riskScore := calculateRiskScore(activeBySeverity, bySource, byCategory)
-	riskLevel := riskLevelForScore(riskScore)
-
-	exposureBuckets := buildExposureBuckets(activeBySeverity, bySource, byCategory, assets, urls)
-	coverageGaps := buildCoverageGaps(assets, urls, bySource)
-	nextActions := buildNextActions(riskScore, activeBySeverity, bySource, byCategory, assets, urls)
-
-	rootDomain := fmt.Sprint(target["root_domain"])
-	summary := fmt.Sprintf(
-		"Deterministic analysis for %s: %d assets (%d live), %d URLs, and %d active findings. Current risk is %s (%d/100).",
-		rootDomain,
-		assets["total"],
-		assets["live"],
-		urls["total"],
-		toInt64(findings["active_total"]),
-		riskLevel,
-		riskScore,
-	)
-
-	return map[string]interface{}{
-		"summary":          summary,
-		"risk_score":       riskScore,
-		"risk_level":       riskLevel,
-		"exposure_buckets": exposureBuckets,
-		"coverage_gaps":    coverageGaps,
-		"next_actions":     nextActions,
-		"counts": map[string]interface{}{
-			"assets":   assets,
-			"urls":     urls,
-			"findings": findings,
-		},
-		"top_findings": snapshot["top_findings"],
-	}
+	return buildCommercialTargetAnalysisOutput(snapshot)
 }
 
 func calculateRiskScore(activeBySeverity, bySource, byCategory map[string]int64) int {
