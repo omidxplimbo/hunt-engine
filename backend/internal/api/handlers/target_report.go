@@ -11,10 +11,6 @@ import (
 
 // DownloadTargetPDFReport returns a professional PDF report for one accessible target.
 func DownloadTargetPDFReport(c *fiber.Ctx) error {
-	if !featureflags.IsEnabled(featureflags.KeyTargetPDFReport) {
-		return featureflags.DisabledResponse(c, featureflags.KeyTargetPDFReport)
-	}
-
 	id := c.Params("id")
 
 	var targetID uint
@@ -29,6 +25,14 @@ func DownloadTargetPDFReport(c *fiber.Ctx) error {
 	target, err := getAccessibleTarget(c, targetID)
 	if err != nil {
 		return err
+	}
+
+	_, ownerKey, _, _, ownerErr := currentAccountOwner(c)
+	if ownerErr != nil {
+		return ownerErr
+	}
+	if !featureflags.IsEnabledForOwner(ownerKey, featureflags.KeyTargetPDFReport) {
+		return featureflags.DisabledResponse(c, featureflags.KeyTargetPDFReport)
 	}
 
 	pdfBytes, filename, err := targetpdf.Generate(target.ID)

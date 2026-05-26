@@ -1,11 +1,14 @@
 package featureflags
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	configsvc "github.com/omidxplimbo/hunt-engine/backend/internal/platform/config"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 )
 
@@ -15,6 +18,10 @@ const (
 	KeyLLMAssistedAnalysis    = "feature.llm_assisted_analysis"
 	KeyAIRecommendations      = "feature.ai_recommendations"
 	KeyAINucleiTemplateDrafts = "feature.ai_nuclei_template_drafts"
+
+	StateInherit  = "inherit"
+	StateEnabled  = "enabled"
+	StateDisabled = "disabled"
 )
 
 const cacheTTL = 60 * time.Second
@@ -23,6 +30,20 @@ type Definition struct {
 	Key         string `json:"key"`
 	Default     bool   `json:"default"`
 	Description string `json:"description"`
+}
+
+type AccountFeatureFlag struct {
+	Key         string `json:"key"`
+	Description string `json:"description"`
+	Default     bool   `json:"default"`
+
+	GlobalValue bool   `json:"global_value"`
+	State       string `json:"state"`
+	Effective   bool   `json:"effective"`
+	Source      string `json:"source"`
+
+	Scope    string `json:"scope"`
+	OwnerKey string `json:"owner_key"`
 }
 
 var definitions = []Definition{
@@ -76,25 +97,152 @@ func BoolString(value bool) string {
 	return "false"
 }
 
+func NormalizeState(state string) string {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "", StateInherit:
+		return StateInherit
+	case "true", "1", "yes", "on", StateEnabled:
+		return StateEnabled
+	case "false", "0", "no", "off", StateDisabled:
+		return StateDisabled
+	default:
+		return ""
+	}
+}
+
+func OwnerKeyForUser(user models.User) (string, string, *uint) {
+	if strings.ToLower(strings.TrimSpace(user.Role)) == "admin" {
+		return "admin", "admin-shared", nil
+	}
+
+	uid := user.ID
+	return fmt.Sprintf("user:%d", user.ID), "user", &uid
+}
+
+func OwnerKeyForUserID(userID uint) string {
+	if userID == 0 {
+		return "admin"
+	}
+
+	var user models.User
+	if err := database.DB.First(&user, userID).Error; err == nil {
+		ownerKey, _, _ := OwnerKeyForUser(user)
+		return ownerKey
+	}
+
+	return fmt.Sprintf("user:%d", userID)
+}
+
 func IsEnabled(key string) bool {
+	return IsEnabledForOwner("", key)
+}
+
+func IsEnabledForOwner(ownerKey string, key string) bool {
 	defaultValue, ok := defaultFor(key)
 	if !ok {
 		return false
 	}
 
-	if redisq.Client != nil {
+	ownerKey = strings.TrimSpace(ownerKey)
+	key = strings.TrimSpace(key)
+
+	if ownerKey != "" && redisq.Client != nil {
+		if raw, err := redisq.Client.Get(redisq.Ctx, cacheKeyForOwner(ownerKey, key)).Result(); err == nil {
+			return parseBool(raw, defaultValue)
+		}
+	}
+
+	if ownerKey == "" && redisq.Client != nil {
 		if raw, err := redisq.Client.Get(redisq.Ctx, cacheKey(key)).Result(); err == nil {
 			return parseBool(raw, defaultValue)
 		}
 	}
 
-	value := configsvc.GetBool(key, defaultValue)
+	globalValue := configsvc.GetBool(key, defaultValue)
+	value := globalValue
+
+	if ownerKey != "" {
+		var row models.UserFeatureFlagConfig
+		if err := database.DB.
+			Where("owner_key = ? AND feature_key = ?", ownerKey, key).
+			First(&row).Error; err == nil {
+			switch NormalizeState(row.State) {
+			case StateEnabled:
+				value = true
+			case StateDisabled:
+				value = false
+			}
+		}
+	}
 
 	if redisq.Client != nil {
-		_ = redisq.Client.Set(redisq.Ctx, cacheKey(key), BoolString(value), cacheTTL).Err()
+		if ownerKey != "" {
+			_ = redisq.Client.Set(redisq.Ctx, cacheKeyForOwner(ownerKey, key), BoolString(value), cacheTTL).Err()
+		} else {
+			_ = redisq.Client.Set(redisq.Ctx, cacheKey(key), BoolString(value), cacheTTL).Err()
+		}
 	}
 
 	return value
+}
+
+func FlagsForOwner(ownerKey string, scope string) ([]AccountFeatureFlag, error) {
+	ownerKey = strings.TrimSpace(ownerKey)
+
+	rows := make([]models.UserFeatureFlagConfig, 0)
+	if ownerKey != "" {
+		if err := database.DB.
+			Where("owner_key = ?", ownerKey).
+			Find(&rows).Error; err != nil {
+			return nil, err
+		}
+	}
+
+	overrideByKey := make(map[string]string, len(rows))
+	for _, row := range rows {
+		state := NormalizeState(row.State)
+		if state == "" {
+			state = StateInherit
+		}
+		overrideByKey[row.FeatureKey] = state
+	}
+
+	out := make([]AccountFeatureFlag, 0, len(definitions))
+	for _, def := range definitions {
+		globalValue := configsvc.GetBool(def.Key, def.Default)
+		state := overrideByKey[def.Key]
+		if state == "" {
+			state = StateInherit
+		}
+
+		effective := globalValue
+		source := "global"
+
+		switch state {
+		case StateEnabled:
+			effective = true
+			source = "account"
+		case StateDisabled:
+			effective = false
+			source = "account"
+		default:
+			state = StateInherit
+		}
+
+		out = append(out, AccountFeatureFlag{
+			Key:         def.Key,
+			Description: def.Description,
+			Default:     def.Default,
+			GlobalValue: globalValue,
+			State:       state,
+			Effective:   effective,
+			Source:      source,
+			Scope:       scope,
+			OwnerKey:    ownerKey,
+		})
+	}
+
+	return out, nil
 }
 
 func DisabledResponse(c *fiber.Ctx, key string) error {
@@ -113,12 +261,45 @@ func Require(c *fiber.Ctx, key string) error {
 	return DisabledResponse(c, key)
 }
 
+func RequireForOwner(c *fiber.Ctx, ownerKey string, key string) error {
+	if IsEnabledForOwner(ownerKey, key) {
+		return nil
+	}
+
+	return DisabledResponse(c, key)
+}
+
 func Invalidate(key string) {
 	if redisq.Client == nil {
 		return
 	}
 
-	_ = redisq.Client.Del(redisq.Ctx, cacheKey(key)).Err()
+	key = strings.TrimSpace(key)
+	keys := []string{cacheKey(key)}
+
+	if ownerKeys, err := redisq.Client.Keys(redisq.Ctx, "hunt:feature_flags:*:"+key).Result(); err == nil {
+		keys = append(keys, ownerKeys...)
+	}
+
+	if len(keys) > 0 {
+		_ = redisq.Client.Del(redisq.Ctx, keys...).Err()
+	}
+}
+
+func InvalidateOwner(ownerKey string) {
+	if redisq.Client == nil {
+		return
+	}
+
+	ownerKey = strings.TrimSpace(ownerKey)
+	if ownerKey == "" {
+		return
+	}
+
+	keys, err := redisq.Client.Keys(redisq.Ctx, "hunt:feature_flags:"+ownerKey+":*").Result()
+	if err == nil && len(keys) > 0 {
+		_ = redisq.Client.Del(redisq.Ctx, keys...).Err()
+	}
 }
 
 func InvalidateAll() {
@@ -126,12 +307,8 @@ func InvalidateAll() {
 		return
 	}
 
-	keys := make([]string, 0, len(definitions))
-	for _, def := range definitions {
-		keys = append(keys, cacheKey(def.Key))
-	}
-
-	if len(keys) > 0 {
+	keys, err := redisq.Client.Keys(redisq.Ctx, "hunt:feature_flags:*").Result()
+	if err == nil && len(keys) > 0 {
 		_ = redisq.Client.Del(redisq.Ctx, keys...).Err()
 	}
 }
@@ -148,6 +325,10 @@ func defaultFor(key string) (bool, bool) {
 
 func cacheKey(key string) string {
 	return "hunt:feature_flags:" + strings.TrimSpace(key)
+}
+
+func cacheKeyForOwner(ownerKey string, key string) string {
+	return "hunt:feature_flags:" + strings.TrimSpace(ownerKey) + ":" + strings.TrimSpace(key)
 }
 
 func parseBool(raw string, defaultValue bool) bool {

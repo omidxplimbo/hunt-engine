@@ -10,6 +10,7 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/api/dto"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/featureflags"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/llmconfig"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/telegram"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/utils"
@@ -495,6 +496,156 @@ func parseTelegramEventList(raw string) []string {
 }
 
 // -----------------------------
+// Feature flag config (account-scoped)
+// -----------------------------
+
+type featureFlagRequest struct {
+	Key   string `json:"key"`
+	State string `json:"state"`
+}
+
+type putMyFeatureFlagsRequest struct {
+	Flags []featureFlagRequest `json:"flags"`
+}
+
+// GetMyFeatureFlags returns effective feature flags for the current account scope.
+func GetMyFeatureFlags(c *fiber.Ctx) error {
+	_, ownerKey, scope, _, err := currentAccountOwner(c)
+	if err != nil {
+		return err
+	}
+
+	flags, err := featureflags.FlagsForOwner(ownerKey, scope)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to load feature flags"})
+	}
+
+	return c.JSON(fiber.Map{
+		"status": "success",
+		"data": fiber.Map{
+			"flags":     flags,
+			"scope":     scope,
+			"owner_key": ownerKey,
+		},
+	})
+}
+
+// PutMyFeatureFlags replaces account-scoped feature flag overrides.
+// state can be: inherit, enabled, disabled.
+func PutMyFeatureFlags(c *fiber.Ctx) error {
+	_, ownerKey, scope, ownerUserID, err := currentAccountOwner(c)
+	if err != nil {
+		return err
+	}
+
+	req := new(putMyFeatureFlagsRequest)
+	if err := c.BodyParser(req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	states := make(map[string]string)
+	seen := make(map[string]bool)
+
+	for _, item := range req.Flags {
+		key := strings.TrimSpace(item.Key)
+		if key == "" {
+			continue
+		}
+		if !featureflags.IsKnownKey(key) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Unknown feature flag: " + key})
+		}
+		if seen[key] {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Duplicate feature flag: " + key})
+		}
+		seen[key] = true
+
+		state := featureflags.NormalizeState(item.State)
+		if state == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid state for feature flag: " + key})
+		}
+
+		states[key] = state
+	}
+
+	tx := database.DB.Begin()
+	if tx.Error != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to start transaction"})
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := tx.Unscoped().
+		Where("owner_key = ?", ownerKey).
+		Delete(&models.UserFeatureFlagConfig{}).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update feature flags"})
+	}
+
+	for _, def := range featureflags.All() {
+		state := states[def.Key]
+		if state == "" || state == featureflags.StateInherit {
+			continue
+		}
+
+		row := models.UserFeatureFlagConfig{
+			UserID:     ownerUserID,
+			OwnerKey:   ownerKey,
+			FeatureKey: def.Key,
+			State:      state,
+		}
+
+		if err := tx.Create(&row).Error; err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save feature flag"})
+		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update feature flags"})
+	}
+
+	featureflags.InvalidateOwner(ownerKey)
+
+	flags, err := featureflags.FlagsForOwner(ownerKey, scope)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Feature flags saved but reload failed"})
+	}
+
+	return c.JSON(fiber.Map{
+		"status":  "success",
+		"message": "Feature flags updated",
+		"data": fiber.Map{
+			"flags":     flags,
+			"scope":     scope,
+			"owner_key": ownerKey,
+		},
+	})
+}
+
+// DeleteMyFeatureFlag removes one account-scoped override, making it inherit global config.
+func DeleteMyFeatureFlag(c *fiber.Ctx) error {
+	_, ownerKey, _, _, err := currentAccountOwner(c)
+	if err != nil {
+		return err
+	}
+
+	key := strings.TrimSpace(c.Params("key"))
+	if key == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "feature key is required"})
+	}
+	if !featureflags.IsKnownKey(key) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Unknown feature flag: " + key})
+	}
+
+	if err := database.DB.Unscoped().
+		Where("owner_key = ? AND feature_key = ?", ownerKey, key).
+		Delete(&models.UserFeatureFlagConfig{}).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete feature flag override"})
+	}
+
+	featureflags.InvalidateOwner(ownerKey)
+
+	return c.JSON(fiber.Map{"status": "success", "message": "Feature flag override deleted"})
+}
+
+// -----------------------------
 // LLM provider config (account-scoped)
 // -----------------------------
 
@@ -698,22 +849,24 @@ func DeleteMyLLMProvider(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"status": "success", "message": "LLM provider deleted"})
 }
 
-func currentLLMOwner(c *fiber.Ctx) (models.User, string, string, error) {
+func currentAccountOwner(c *fiber.Ctx) (models.User, string, string, *uint, error) {
 	uid, err := currentUserID(c)
 	if err != nil {
-		return models.User{}, "", "", err
+		return models.User{}, "", "", nil, err
 	}
 
 	var user models.User
 	if err := database.DB.First(&user, uid).Error; err != nil {
-		return models.User{}, "", "", c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
+		return models.User{}, "", "", nil, c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
 	}
 
-	if strings.ToLower(strings.TrimSpace(user.Role)) == "admin" {
-		return user, "admin", "admin-shared", nil
-	}
+	ownerKey, scope, ownerUserID := featureflags.OwnerKeyForUser(user)
+	return user, ownerKey, scope, ownerUserID, nil
+}
 
-	return user, fmt.Sprintf("user:%d", user.ID), "user", nil
+func currentLLMOwner(c *fiber.Ctx) (models.User, string, string, error) {
+	user, ownerKey, scope, _, err := currentAccountOwner(c)
+	return user, ownerKey, scope, err
 }
 
 func normalizeLLMProvider(provider string) string {

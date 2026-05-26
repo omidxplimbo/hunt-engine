@@ -37,7 +37,11 @@ func GetNucleiTemplateDraftStatus(c *fiber.Ctx) error {
 // GenerateNucleiTemplateDraft creates a constrained Nuclei YAML draft.
 // It is intentionally disabled by default and never writes to /data/nuclei/custom.
 func GenerateNucleiTemplateDraft(c *fiber.Ctx) error {
-	if !featureflags.IsEnabled(featureflags.KeyAINucleiTemplateDrafts) {
+	_, ownerKey, _, _, ownerErr := currentAccountOwner(c)
+	if ownerErr != nil {
+		return ownerErr
+	}
+	if !featureflags.IsEnabledForOwner(ownerKey, featureflags.KeyAINucleiTemplateDrafts) {
 		return featureflags.DisabledResponse(c, featureflags.KeyAINucleiTemplateDrafts)
 	}
 

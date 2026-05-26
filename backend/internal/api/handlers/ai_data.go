@@ -98,9 +98,6 @@ func applyAIRecommendationFilters(db *gorm.DB, c *fiber.Ctx) *gorm.DB {
 // GetTargetAIAnalyses lists AI analysis rows for one accessible target.
 // v3.5.0 foundation endpoint: generation is added in later milestones.
 func GetTargetAIAnalyses(c *fiber.Ctx) error {
-	if !featureflags.IsEnabled(featureflags.KeyAIAnalysis) {
-		return featureflags.DisabledResponse(c, featureflags.KeyAIAnalysis)
-	}
 
 	targetID, err := parseTargetIDParam(c)
 	if err != nil {
@@ -110,6 +107,14 @@ func GetTargetAIAnalyses(c *fiber.Ctx) error {
 	target, err := getAccessibleTarget(c, targetID)
 	if err != nil {
 		return err
+	}
+
+	_, featureOwnerKey, _, _, ownerErr := currentAccountOwner(c)
+	if ownerErr != nil {
+		return ownerErr
+	}
+	if !featureflags.IsEnabledForOwner(featureOwnerKey, featureflags.KeyAIAnalysis) {
+		return featureflags.DisabledResponse(c, featureflags.KeyAIAnalysis)
 	}
 
 	limit, offset, page := parseDataLayerPagination(c)
@@ -137,9 +142,6 @@ func GetTargetAIAnalyses(c *fiber.Ctx) error {
 
 // GetTargetAIRecommendations lists AI recommendation rows for one accessible target.
 func GetTargetAIRecommendations(c *fiber.Ctx) error {
-	if !featureflags.IsEnabled(featureflags.KeyAIRecommendations) {
-		return featureflags.DisabledResponse(c, featureflags.KeyAIRecommendations)
-	}
 
 	targetID, err := parseTargetIDParam(c)
 	if err != nil {
@@ -149,6 +151,14 @@ func GetTargetAIRecommendations(c *fiber.Ctx) error {
 	target, err := getAccessibleTarget(c, targetID)
 	if err != nil {
 		return err
+	}
+
+	_, featureOwnerKey, _, _, ownerErr := currentAccountOwner(c)
+	if ownerErr != nil {
+		return ownerErr
+	}
+	if !featureflags.IsEnabledForOwner(featureOwnerKey, featureflags.KeyAIRecommendations) {
+		return featureflags.DisabledResponse(c, featureflags.KeyAIRecommendations)
 	}
 
 	limit, offset, page := parseDataLayerPagination(c)
@@ -218,9 +228,6 @@ func GetTargetAuditLogs(c *fiber.Ctx) error {
 // GenerateTargetAIAnalysis creates a deterministic local target analysis row.
 // This is the v3.5.0 ai_analyses foundation; external LLM providers are wired later.
 func GenerateTargetAIAnalysis(c *fiber.Ctx) error {
-	if !featureflags.IsEnabled(featureflags.KeyAIAnalysis) {
-		return featureflags.DisabledResponse(c, featureflags.KeyAIAnalysis)
-	}
 
 	id := c.Params("id")
 
@@ -233,6 +240,14 @@ func GenerateTargetAIAnalysis(c *fiber.Ctx) error {
 	target, err := getAccessibleTarget(c, targetID)
 	if err != nil {
 		return err
+	}
+
+	_, featureOwnerKey, _, _, ownerErr := currentAccountOwner(c)
+	if ownerErr != nil {
+		return ownerErr
+	}
+	if !featureflags.IsEnabledForOwner(featureOwnerKey, featureflags.KeyAIAnalysis) {
+		return featureflags.DisabledResponse(c, featureflags.KeyAIAnalysis)
 	}
 
 	uid, err := currentUserID(c)
@@ -251,7 +266,7 @@ func GenerateTargetAIAnalysis(c *fiber.Ctx) error {
 	}
 
 	if req.UseLLM {
-		if !featureflags.IsEnabled(featureflags.KeyLLMAssistedAnalysis) {
+		if !featureflags.IsEnabledForOwner(featureOwnerKey, featureflags.KeyLLMAssistedAnalysis) {
 			return featureflags.DisabledResponse(c, featureflags.KeyLLMAssistedAnalysis)
 		}
 	}
@@ -303,9 +318,6 @@ func GenerateTargetAIAnalysis(c *fiber.Ctx) error {
 
 // GenerateTargetAIRecommendations creates deterministic, evidence-based recommendations for one target.
 func GenerateTargetAIRecommendations(c *fiber.Ctx) error {
-	if !featureflags.IsEnabled(featureflags.KeyAIRecommendations) {
-		return featureflags.DisabledResponse(c, featureflags.KeyAIRecommendations)
-	}
 
 	targetID, err := parseTargetIDParam(c)
 	if err != nil {
@@ -315,6 +327,14 @@ func GenerateTargetAIRecommendations(c *fiber.Ctx) error {
 	target, err := getAccessibleTarget(c, targetID)
 	if err != nil {
 		return err
+	}
+
+	_, featureOwnerKey, _, _, ownerErr := currentAccountOwner(c)
+	if ownerErr != nil {
+		return ownerErr
+	}
+	if !featureflags.IsEnabledForOwner(featureOwnerKey, featureflags.KeyAIRecommendations) {
+		return featureflags.DisabledResponse(c, featureflags.KeyAIRecommendations)
 	}
 
 	uid, err := currentUserID(c)

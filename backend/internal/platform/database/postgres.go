@@ -57,6 +57,7 @@ func Connect() {
 		&models.SystemConfig{},
 		&models.UserTelegramConfig{},
 		&models.UserLLMProviderConfig{},
+		&models.UserFeatureFlagConfig{},
 		&models.Finding{},
 		&models.AIAnalysis{},
 		&models.AIRecommendation{},
