@@ -109,3 +109,59 @@ export const putMyTelegramConfig = async (payload: TelegramConfigPayload) => {
   );
   return res.data;
 };
+
+// -----------------------------
+// LLM provider config
+// -----------------------------
+export interface LLMProviderConfig {
+  id?: number;
+  provider: string;
+  display_name: string;
+  api_key_saved: boolean;
+  base_url: string;
+  default_model: string;
+  enabled: boolean;
+  is_default: boolean;
+  scope?: string;
+  owner_key?: string;
+  updated_at?: string;
+}
+
+export interface LLMProviderPayload {
+  provider: string;
+  display_name: string;
+  api_key?: string;
+  base_url?: string;
+  default_model?: string;
+  enabled: boolean;
+  is_default: boolean;
+  clear_key?: boolean;
+}
+
+export const getMyLLMProviders = async () => {
+  const res = await apiClient.get<{
+    status: string;
+    data: { providers: LLMProviderConfig[]; scope: string; owner_key: string };
+  }>("/me/llm-providers");
+
+  return res.data.data;
+};
+
+export const putMyLLMProviders = async (providers: LLMProviderPayload[]) => {
+  const res = await apiClient.put<{ status: string; message: string }>(
+    "/me/llm-providers",
+    {
+      providers,
+    },
+  );
+
+  return res.data;
+};
+
+export const deleteMyLLMProvider = async (provider: string) => {
+  const p = encodeURIComponent(provider);
+  const res = await apiClient.delete<{ status: string; message: string }>(
+    `/me/llm-providers/${p}`,
+  );
+  return res.data;
+};

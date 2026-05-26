@@ -56,6 +56,7 @@ func Connect() {
 		&models.TargetScanState{},
 		&models.SystemConfig{},
 		&models.UserTelegramConfig{},
+		&models.UserLLMProviderConfig{},
 		&models.Finding{},
 		&models.AIAnalysis{},
 		&models.AIRecommendation{},
