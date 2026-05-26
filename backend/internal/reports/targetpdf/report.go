@@ -33,6 +33,7 @@ type ReportData struct {
 	RecentAssets     []models.Asset
 	RecentURLs       []models.FoundURL
 	AssetChanges     []models.AssetHistory
+	LatestAnalysis   *models.AIAnalysis
 }
 
 type ReportCounts struct {
@@ -183,6 +184,15 @@ func Load(targetID uint) (*ReportData, error) {
 		return nil, fmt.Errorf("load asset changes: %w", err)
 	}
 
+	var latestAnalysis models.AIAnalysis
+	if err := database.DB.
+		Where("target_id = ?", targetID).
+		Where("status <> ?", "failed").
+		Order("created_at DESC").
+		First(&latestAnalysis).Error; err == nil {
+		data.LatestAnalysis = &latestAnalysis
+	}
+
 	return data, nil
 }
 
@@ -253,8 +263,9 @@ func Render(data *ReportData) ([]byte, error) {
 	coverPage(pdf, data)
 	pdf.AddPage()
 	sectionTitle(pdf, "Executive Summary")
-	paragraph(pdf, "This report summarizes the current Hunt Engine reconnaissance and security findings for the selected target. It is generated from stored scan data, assets, URLs, findings, and structured evidence. AI-generated analysis will be added in a later v3.5.0 milestone.")
+	paragraph(pdf, "This report summarizes the current Hunt Engine reconnaissance and security findings for the selected target. It is generated from stored scan data, assets, URLs, findings, structured evidence, and the latest deterministic target analysis when available. Risk is evidence-based; coverage gaps are reported separately and do not inflate severity.")
 	metricsGrid(pdf, data)
+	analysisSection(pdf, data)
 	scanStateSection(pdf, data)
 	assetAndURLSection(pdf, data)
 	findingSummarySection(pdf, data)
@@ -299,7 +310,7 @@ func coverPage(pdf *gofpdf.Fpdf, data *ReportData) {
 	pdf.SetY(208)
 	pdf.SetFont("Helvetica", "", 10)
 	pdf.SetTextColor(190, 200, 214)
-	pdf.MultiCell(170, 6, cleanText("Non-AI report foundation for Hunt Engine v3.5.0. The report includes target metadata, scan state, asset and URL inventory, findings, structured evidence summaries, and source-specific security sections."), "", "L", false)
+	pdf.MultiCell(170, 6, cleanText("Hunt Engine v3.5.0 target report. The report includes target metadata, scan state, asset and URL inventory, findings, structured evidence summaries, source-specific security sections, and deterministic commercial-grade target analysis when available."), "", "L", false)
 }
 
 func coverKV(pdf *gofpdf.Fpdf, label string, value string) {
@@ -357,6 +368,195 @@ func metricCard(pdf *gofpdf.Fpdf, x, y, w, h float64, label, value, hint string)
 	pdf.SetFont("Helvetica", "", 7)
 	pdf.SetTextColor(100, 116, 139)
 	pdf.CellFormat(w-8, 5, cleanText(hint), "", 0, "L", false, 0, "")
+}
+
+func analysisSection(pdf *gofpdf.Fpdf, data *ReportData) {
+	ensureSpace(pdf, 50)
+	sectionTitle(pdf, "Target Analysis")
+
+	if data.LatestAnalysis == nil {
+		paragraph(pdf, "No target analysis has been generated yet. The report continues with deterministic inventory, findings, and evidence sections.")
+		return
+	}
+
+	output := analysisOutputMap(data.LatestAnalysis.OutputJSON)
+
+	summary := analysisString(output, "executive_summary")
+	if summary == "" {
+		summary = analysisString(output, "summary")
+	}
+	if summary == "" {
+		summary = data.LatestAnalysis.Summary
+	}
+
+	meta := fmt.Sprintf(
+		"Latest analysis #%d - %s/%s - %s - generated at %s",
+		data.LatestAnalysis.ID,
+		emptyDash(data.LatestAnalysis.Provider),
+		emptyDash(data.LatestAnalysis.Model),
+		emptyDash(data.LatestAnalysis.PromptVersion),
+		data.LatestAnalysis.CreatedAt.UTC().Format(time.RFC3339),
+	)
+	paragraph(pdf, meta)
+	if summary != "" {
+		paragraph(pdf, summary)
+	}
+
+	analysisMetricsGrid(pdf, output)
+
+	paragraph(pdf, "Methodology note: this section is deterministic and evidence-based. Coverage gaps are not vulnerabilities. Reconnaissance-only signals do not become critical solely because they are numerous. Manual validation is required before customer-facing severity claims.")
+
+	analysisRiskDrivers(pdf, output)
+	analysisBulletList(pdf, "Recommended Next Actions", stringListFromAnalysis(output["next_actions"]), 8)
+	analysisBulletList(pdf, "Coverage Gaps", stringListFromAnalysis(output["coverage_gaps"]), 8)
+	analysisBulletList(pdf, "Limitations", stringListFromAnalysis(output["limitations"]), 6)
+}
+
+func analysisMetricsGrid(pdf *gofpdf.Fpdf, output map[string]interface{}) {
+	ensureSpace(pdf, 36)
+
+	y := pdf.GetY() + 1
+	w := 56.5
+	h := 23.0
+	gap := 4.0
+	x := 14.0
+
+	cards := []struct {
+		Label string
+		Value string
+		Hint  string
+	}{
+		{"Risk", analysisValue(output, "risk_score") + "/100", strings.ToUpper(emptyDash(analysisString(output, "risk_level")))},
+		{"Confidence", analysisValue(output, "confidence_score") + "/100", "evidence confidence"},
+		{"Exposure", analysisValue(output, "exposure_score") + "/100", "attack surface"},
+		{"Coverage", analysisValue(output, "coverage_score") + "/100", "scan completeness"},
+		{"Finding Quality", analysisValue(output, "finding_quality_score") + "/100", "signal quality"},
+		{"Methodology", "v2", ellipsize(analysisString(output, "methodology_version"), 28)},
+	}
+
+	for i, c := range cards {
+		cx := x + float64(i%3)*(w+gap)
+		cy := y + float64(i/3)*(h+gap)
+		metricCard(pdf, cx, cy, w, h, c.Label, c.Value, c.Hint)
+	}
+	pdf.SetY(y + 2*h + gap + 7)
+}
+
+func analysisRiskDrivers(pdf *gofpdf.Fpdf, output map[string]interface{}) {
+	drivers := interfaceList(output["risk_drivers"])
+	if len(drivers) == 0 {
+		return
+	}
+
+	ensureSpace(pdf, 28)
+	analysisSubTitle(pdf, "Risk Drivers")
+	tableHeader(pdf, []string{"Driver", "Count", "Impact", "Rationale"}, []float64{48, 18, 24, 88})
+
+	limit := len(drivers)
+	if limit > 8 {
+		limit = 8
+	}
+
+	for _, raw := range drivers[:limit] {
+		driver := interfaceMap(raw)
+		ensureSpace(pdf, 8)
+		tableRow(pdf, []string{
+			ellipsize(fmt.Sprint(driver["name"]), 32),
+			ellipsize(fmt.Sprint(driver["count"]), 10),
+			ellipsize(fmt.Sprint(driver["severity"]), 14),
+			ellipsize(fmt.Sprint(driver["rationale"]), 64),
+		}, []float64{48, 18, 24, 88})
+	}
+	pdf.Ln(2)
+}
+
+func analysisBulletList(pdf *gofpdf.Fpdf, title string, items []string, limit int) {
+	if len(items) == 0 {
+		return
+	}
+
+	if limit <= 0 || limit > len(items) {
+		limit = len(items)
+	}
+
+	ensureSpace(pdf, 12+float64(limit)*7)
+	analysisSubTitle(pdf, title)
+
+	pdf.SetFont("Helvetica", "", 8)
+	pdf.SetTextColor(71, 85, 105)
+
+	for _, item := range items[:limit] {
+		ensureSpace(pdf, 7)
+		pdf.MultiCell(0, 5, cleanText("- "+ellipsize(item, 170)), "", "L", false)
+	}
+	pdf.Ln(1)
+}
+
+func analysisSubTitle(pdf *gofpdf.Fpdf, title string) {
+	pdf.SetFont("Helvetica", "B", 9)
+	pdf.SetTextColor(30, 64, 175)
+	pdf.CellFormat(0, 6, cleanText(title), "", 1, "L", false, 0, "")
+}
+
+func analysisOutputMap(raw []byte) map[string]interface{} {
+	out := map[string]interface{}{}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || !json.Valid(trimmed) {
+		return out
+	}
+	_ = json.Unmarshal(trimmed, &out)
+	return out
+}
+
+func analysisString(m map[string]interface{}, key string) string {
+	if m == nil {
+		return ""
+	}
+	v, ok := m[key]
+	if !ok || v == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(v))
+}
+
+func analysisValue(m map[string]interface{}, key string) string {
+	v := analysisString(m, key)
+	if v == "" {
+		return "0"
+	}
+	return v
+}
+
+func interfaceList(value interface{}) []interface{} {
+	if value == nil {
+		return nil
+	}
+	if out, ok := value.([]interface{}); ok {
+		return out
+	}
+	return nil
+}
+
+func interfaceMap(value interface{}) map[string]interface{} {
+	if value == nil {
+		return map[string]interface{}{}
+	}
+	if out, ok := value.(map[string]interface{}); ok {
+		return out
+	}
+	return map[string]interface{}{}
+}
+
+func stringListFromAnalysis(value interface{}) []string {
+	items := interfaceList(value)
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		text := strings.TrimSpace(fmt.Sprint(item))
+		if text != "" && text != "<nil>" {
+			out = append(out, text)
+		}
+	}
+	return out
 }
 
 func scanStateSection(pdf *gofpdf.Fpdf, data *ReportData) {
