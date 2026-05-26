@@ -8,6 +8,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/api/dto"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/featureflags"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/security/nuclei"
 )
 
@@ -36,6 +37,10 @@ func GetNucleiTemplateDraftStatus(c *fiber.Ctx) error {
 // GenerateNucleiTemplateDraft creates a constrained Nuclei YAML draft.
 // It is intentionally disabled by default and never writes to /data/nuclei/custom.
 func GenerateNucleiTemplateDraft(c *fiber.Ctx) error {
+	if !featureflags.IsEnabled(featureflags.KeyAINucleiTemplateDrafts) {
+		return featureflags.DisabledResponse(c, featureflags.KeyAINucleiTemplateDrafts)
+	}
+
 	cfg := nuclei.LoadConfig()
 	if !cfg.AllowAITemplates {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{

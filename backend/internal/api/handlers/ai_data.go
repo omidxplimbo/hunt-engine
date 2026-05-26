@@ -11,6 +11,7 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/auditlog"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/featureflags"
 	"gorm.io/gorm"
 )
 
@@ -97,6 +98,10 @@ func applyAIRecommendationFilters(db *gorm.DB, c *fiber.Ctx) *gorm.DB {
 // GetTargetAIAnalyses lists AI analysis rows for one accessible target.
 // v3.5.0 foundation endpoint: generation is added in later milestones.
 func GetTargetAIAnalyses(c *fiber.Ctx) error {
+	if !featureflags.IsEnabled(featureflags.KeyAIAnalysis) {
+		return featureflags.DisabledResponse(c, featureflags.KeyAIAnalysis)
+	}
+
 	targetID, err := parseTargetIDParam(c)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
@@ -132,6 +137,10 @@ func GetTargetAIAnalyses(c *fiber.Ctx) error {
 
 // GetTargetAIRecommendations lists AI recommendation rows for one accessible target.
 func GetTargetAIRecommendations(c *fiber.Ctx) error {
+	if !featureflags.IsEnabled(featureflags.KeyAIRecommendations) {
+		return featureflags.DisabledResponse(c, featureflags.KeyAIRecommendations)
+	}
+
 	targetID, err := parseTargetIDParam(c)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
@@ -209,6 +218,10 @@ func GetTargetAuditLogs(c *fiber.Ctx) error {
 // GenerateTargetAIAnalysis creates a deterministic local target analysis row.
 // This is the v3.5.0 ai_analyses foundation; external LLM providers are wired later.
 func GenerateTargetAIAnalysis(c *fiber.Ctx) error {
+	if !featureflags.IsEnabled(featureflags.KeyAIAnalysis) {
+		return featureflags.DisabledResponse(c, featureflags.KeyAIAnalysis)
+	}
+
 	id := c.Params("id")
 
 	var targetID uint
@@ -234,6 +247,12 @@ func GenerateTargetAIAnalysis(c *fiber.Ctx) error {
 	if len(c.Body()) > 0 {
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "Invalid request body"})
+		}
+	}
+
+	if req.UseLLM {
+		if !featureflags.IsEnabled(featureflags.KeyLLMAssistedAnalysis) {
+			return featureflags.DisabledResponse(c, featureflags.KeyLLMAssistedAnalysis)
 		}
 	}
 
@@ -284,6 +303,10 @@ func GenerateTargetAIAnalysis(c *fiber.Ctx) error {
 
 // GenerateTargetAIRecommendations creates deterministic, evidence-based recommendations for one target.
 func GenerateTargetAIRecommendations(c *fiber.Ctx) error {
+	if !featureflags.IsEnabled(featureflags.KeyAIRecommendations) {
+		return featureflags.DisabledResponse(c, featureflags.KeyAIRecommendations)
+	}
+
 	targetID, err := parseTargetIDParam(c)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})

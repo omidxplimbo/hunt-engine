@@ -3,18 +3,38 @@ package handlers
 import (
 	"encoding/json"
 	"strconv"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	configsvc "github.com/omidxplimbo/hunt-engine/backend/internal/platform/config"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/featureflags"
 )
 
 // GetSystemConfig retrieves all system configurations.
+// Feature flag defaults are included even when they have not been persisted yet.
 func GetSystemConfig(c *fiber.Ctx) error {
 	var configs []models.SystemConfig
 	if err := database.DB.Find(&configs).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch configs"})
+	}
+
+	existing := make(map[string]struct{}, len(configs))
+	for _, cfg := range configs {
+		existing[cfg.Key] = struct{}{}
+	}
+
+	for _, def := range featureflags.All() {
+		if _, ok := existing[def.Key]; ok {
+			continue
+		}
+
+		configs = append(configs, models.SystemConfig{
+			Key:       def.Key,
+			Value:     featureflags.BoolString(def.Default),
+			UpdatedAt: time.Now().UTC(),
+		})
 	}
 
 	return c.JSON(configs)
@@ -53,7 +73,9 @@ func UpdateSystemConfig(c *fiber.Ctx) error {
 		}
 	}
 
-	if key == configsvc.KeyTelegramNotificationsEnabled || key == configsvc.KeyTelegramFreshAssetScreenshot {
+	if key == configsvc.KeyTelegramNotificationsEnabled ||
+		key == configsvc.KeyTelegramFreshAssetScreenshot ||
+		featureflags.IsKnownKey(key) {
 		if req.Value != "true" && req.Value != "false" {
 			return c.Status(400).JSON(fiber.Map{"error": "Invalid boolean config value"})
 		}
@@ -79,6 +101,10 @@ func UpdateSystemConfig(c *fiber.Ctx) error {
 
 	if err := database.DB.Save(&systemConfig).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to save config"})
+	}
+
+	if featureflags.IsKnownKey(key) {
+		featureflags.Invalidate(key)
 	}
 
 	return c.JSON(systemConfig)

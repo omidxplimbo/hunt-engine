@@ -5,11 +5,16 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/auditlog"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/featureflags"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/reports/targetpdf"
 )
 
 // DownloadTargetPDFReport returns a professional PDF report for one accessible target.
 func DownloadTargetPDFReport(c *fiber.Ctx) error {
+	if !featureflags.IsEnabled(featureflags.KeyTargetPDFReport) {
+		return featureflags.DisabledResponse(c, featureflags.KeyTargetPDFReport)
+	}
+
 	id := c.Params("id")
 
 	var targetID uint
