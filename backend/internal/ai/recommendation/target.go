@@ -136,6 +136,7 @@ func GenerateTargetRecommendations(input TargetRecommendationInput) ([]models.AI
 		// Regenerate only open deterministic recommendations. Accepted/rejected/implemented
 		// recommendations are preserved as user decisions.
 		if err := tx.
+			Unscoped().
 			Where("target_id = ? AND source = ? AND status = ?", target.ID, SourceSystemDeterministic, models.AIRecommendationStatusOpen).
 			Delete(&models.AIRecommendation{}).Error; err != nil {
 			return err
