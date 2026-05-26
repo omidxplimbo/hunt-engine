@@ -41,6 +41,11 @@ type NucleiTargetTemplateStrategyResponse struct {
 	AITemplateDraftsEnabled bool                                 `json:"ai_template_drafts_enabled"`
 	SaveAutomatically       bool                                 `json:"save_automatically"`
 	ExecuteAutomatically    bool                                 `json:"execute_automatically"`
+	FeatureEnabled          bool                                 `json:"feature_enabled"`
+	EnvironmentEnabled      bool                                 `json:"environment_enabled"`
+	DisabledReason          string                               `json:"disabled_reason,omitempty"`
+	Scope                   string                               `json:"scope,omitempty"`
+	OwnerKey                string                               `json:"owner_key,omitempty"`
 	Target                  NucleiTemplateStrategyTargetSummary  `json:"target"`
 	AllowedActions          NucleiTemplateStrategyAllowedActions `json:"allowed_actions"`
 	RecommendedProfile      string                               `json:"recommended_profile"`

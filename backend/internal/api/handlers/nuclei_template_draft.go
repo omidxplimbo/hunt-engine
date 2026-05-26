@@ -8,6 +8,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/api/dto"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/auditlog"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/featureflags"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/security/nuclei"
 )
@@ -16,20 +17,39 @@ var nucleiDraftTagPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}$
 
 // GetNucleiTemplateDraftStatus reports whether draft generation is enabled.
 func GetNucleiTemplateDraftStatus(c *fiber.Ctx) error {
+	_, ownerKey, scope, _, ownerErr := currentAccountOwner(c)
+	if ownerErr != nil {
+		return ownerErr
+	}
+
 	cfg := nuclei.LoadConfig()
+	featureEnabled := featureflags.IsEnabledForOwner(ownerKey, featureflags.KeyAINucleiTemplateDrafts)
+	enabled := cfg.AllowAITemplates && featureEnabled
+
 	provider := "disabled"
-	if cfg.AllowAITemplates {
+	disabledReason := ""
+	switch {
+	case !featureEnabled:
+		disabledReason = "account feature flag is disabled"
+	case !cfg.AllowAITemplates:
+		disabledReason = "NUCLEI_ALLOW_AI_TEMPLATES is not enabled"
+	default:
 		provider = "local-draft"
 	}
 
 	return c.JSON(fiber.Map{
 		"status": "success",
 		"data": dto.NucleiTemplateDraftStatusResponse{
-			Enabled:             cfg.AllowAITemplates,
+			Enabled:             enabled,
 			Provider:            provider,
 			DraftOnly:           true,
 			RequiresHumanReview: true,
 			SaveAutomatically:   false,
+			FeatureEnabled:      featureEnabled,
+			EnvironmentEnabled:  cfg.AllowAITemplates,
+			DisabledReason:      disabledReason,
+			Scope:               scope,
+			OwnerKey:            ownerKey,
 		},
 	})
 }
@@ -74,6 +94,24 @@ func GenerateNucleiTemplateDraft(c *fiber.Ctx) error {
 	if req.Validate {
 		validation := runNucleiTemplateValidation(name, content)
 		resp.Validation = &validation
+	}
+
+	if uid, uidErr := currentUserID(c); uidErr == nil {
+		_ = auditlog.Record(auditlog.Entry{
+			ActorUserID: &uid,
+			Action:      "nuclei.template_draft.generate",
+			EntityType:  "nuclei_template_draft",
+			IPAddress:   auditlog.ClientIP(c),
+			UserAgent:   auditlog.UserAgent(c),
+			Metadata: map[string]interface{}{
+				"name":                  name,
+				"validate":              req.Validate,
+				"draft_only":            true,
+				"requires_human_review": true,
+				"saved":                 false,
+				"owner_key":             ownerKey,
+			},
+		})
 	}
 
 	return c.JSON(fiber.Map{"status": "success", "data": resp})

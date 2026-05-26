@@ -722,6 +722,28 @@ const NucleiTemplates = () => {
                       Auto-save and auto-execute stay disabled. Drafts require
                       review, validation, and manual save.
                     </p>
+                    {draftStatus?.disabled_reason && (
+                      <p className="mt-2 leading-5 text-hack-warning">
+                        Disabled reason: {draftStatus.disabled_reason}
+                      </p>
+                    )}
+                    {draftStatus?.scope && (
+                      <p className="mt-2 font-mono text-[10px] uppercase tracking-wider text-hack-dim">
+                        Scope: {draftStatus.scope} · Owner:{" "}
+                        {draftStatus.owner_key || "-"}
+                      </p>
+                    )}
+                    {draftStatus?.disabled_reason && (
+                      <p className="mt-2 leading-5 text-hack-warning">
+                        Disabled reason: {draftStatus.disabled_reason}
+                      </p>
+                    )}
+                    {draftStatus?.scope && (
+                      <p className="mt-2 font-mono text-[10px] uppercase tracking-wider text-hack-dim">
+                        Scope: {draftStatus.scope} · Owner:{" "}
+                        {draftStatus.owner_key || "-"}
+                      </p>
+                    )}
                   </div>
 
                   <label className="block space-y-2">
