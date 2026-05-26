@@ -33,6 +33,12 @@ import {
   XCircle,
 } from "lucide-react";
 import clsx from "clsx";
+import {
+  FEATURE_FLAGS,
+  getSystemConfig,
+  isFeatureEnabled,
+  type SystemConfig,
+} from "../api/system";
 
 const KNOWN_SOURCES = [
   { id: "wayback", label: "Wayback" },
@@ -199,6 +205,11 @@ const TargetAssets = () => {
     enabled: Boolean(targetId),
   });
 
+  const systemConfigQuery = useQuery({
+    queryKey: ["system-config"],
+    queryFn: getSystemConfig,
+  });
+
   const assetsQuery = useQuery({
     queryKey: [
       "assets",
@@ -283,6 +294,34 @@ const TargetAssets = () => {
           (urlsQuery.data as any)?.total_count ??
           0)
         : 0;
+
+  const systemConfigs = (systemConfigQuery.data || []) as SystemConfig[];
+  const featureTargetPDFReport = isFeatureEnabled(
+    systemConfigs,
+    FEATURE_FLAGS.targetPDFReport,
+    true,
+  );
+  const featureAIAnalysis = isFeatureEnabled(
+    systemConfigs,
+    FEATURE_FLAGS.aiAnalysis,
+    true,
+  );
+  const featureLLMAssistedAnalysis = isFeatureEnabled(
+    systemConfigs,
+    FEATURE_FLAGS.llmAssistedAnalysis,
+    true,
+  );
+  const featureAIRecommendations = isFeatureEnabled(
+    systemConfigs,
+    FEATURE_FLAGS.aiRecommendations,
+    true,
+  );
+
+  useEffect(() => {
+    if (activeTab === "analysis" && !featureAIAnalysis) {
+      setActiveTab("assets");
+    }
+  }, [activeTab, featureAIAnalysis]);
 
   if (!targetId)
     return (
@@ -385,7 +424,8 @@ const TargetAssets = () => {
   };
 
   const handleDownloadReport = async () => {
-    if (!targetQuery.data || reportDownloading) return;
+    if (!targetQuery.data || reportDownloading || !featureTargetPDFReport)
+      return;
 
     try {
       setReportDownloading(true);
@@ -423,9 +463,13 @@ const TargetAssets = () => {
           {targetQuery.data && (
             <button
               onClick={handleDownloadReport}
-              disabled={reportDownloading}
+              disabled={reportDownloading || !featureTargetPDFReport}
               className="hack-btn-ghost flex items-center gap-2 border border-hack-primary/60 px-3 text-hack-primary disabled:opacity-50"
-              title="Download a professional PDF report for this target"
+              title={
+                featureTargetPDFReport
+                  ? "Download a professional PDF report for this target"
+                  : "PDF reports are disabled by feature flag"
+              }
             >
               {reportDownloading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -471,9 +515,15 @@ const TargetAssets = () => {
           </button>
 
           <button
-            onClick={() => setActiveTab("analysis")}
+            onClick={() => featureAIAnalysis && setActiveTab("analysis")}
+            disabled={!featureAIAnalysis}
+            title={
+              featureAIAnalysis
+                ? "Target analysis"
+                : "Analysis is disabled by feature flag"
+            }
             className={clsx(
-              "hack-btn flex-1 justify-center md:flex-none",
+              "hack-btn flex-1 justify-center md:flex-none disabled:opacity-40",
               activeTab === "analysis"
                 ? "bg-hack-primary text-black"
                 : "bg-transparent text-hack-dim border-hack-dim/30",
@@ -706,7 +756,12 @@ const TargetAssets = () => {
       {activeTab === "findings" ? (
         <FindingsPanel targetId={targetId} />
       ) : activeTab === "analysis" ? (
-        <AIAnalysisPanel targetId={targetId} />
+        <AIAnalysisPanel
+          targetId={targetId}
+          aiAnalysisEnabled={featureAIAnalysis}
+          llmAssistedEnabled={featureLLMAssistedAnalysis}
+          recommendationsEnabled={featureAIRecommendations}
+        />
       ) : (
         <div className="overflow-hidden border border-hack-border bg-black/20">
           <div className="border-b border-hack-border px-3 py-2 font-mono text-xs uppercase tracking-wider text-hack-dim">

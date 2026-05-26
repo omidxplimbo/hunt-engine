@@ -23,6 +23,9 @@ import {
 
 type Props = {
   targetId: number;
+  aiAnalysisEnabled?: boolean;
+  llmAssistedEnabled?: boolean;
+  recommendationsEnabled?: boolean;
 };
 
 const parseJSONValue = (value: any) => {
@@ -558,13 +561,19 @@ const RecommendationCard = ({
   );
 };
 
-const RecommendationsSection = ({ targetId }: Props) => {
+const RecommendationsSection = ({
+  targetId,
+  enabled = true,
+}: {
+  targetId: number;
+  enabled?: boolean;
+}) => {
   const queryClient = useQueryClient();
 
   const recommendationsQuery = useQuery({
     queryKey: ["target-ai-recommendations", targetId],
     queryFn: () => getTargetAIRecommendations(targetId, 20),
-    enabled: Boolean(targetId),
+    enabled: Boolean(targetId) && enabled,
   });
 
   const generateRecommendationsMutation = useMutation({
@@ -577,6 +586,19 @@ const RecommendationsSection = ({ targetId }: Props) => {
   });
 
   const recommendations = recommendationsQuery.data?.data || [];
+
+  if (!enabled) {
+    return (
+      <div className="border border-hack-border bg-black/30 p-4 opacity-75">
+        <h3 className="flex items-center gap-2 font-mono text-base uppercase tracking-wider text-hack-dim">
+          <ClipboardList className="h-4 w-4" /> Recommendations
+        </h3>
+        <p className="mt-2 text-sm text-hack-dim">
+          Target recommendations are disabled by feature flag.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="border border-hack-border bg-black/30 p-4">
@@ -640,13 +662,18 @@ const RecommendationsSection = ({ targetId }: Props) => {
   );
 };
 
-const AIAnalysisPanel = ({ targetId }: Props) => {
+const AIAnalysisPanel = ({
+  targetId,
+  aiAnalysisEnabled = true,
+  llmAssistedEnabled = true,
+  recommendationsEnabled = true,
+}: Props) => {
   const queryClient = useQueryClient();
 
   const query = useQuery({
     queryKey: ["target-ai-analyses", targetId],
     queryFn: () => getTargetAIAnalyses(targetId, 5),
-    enabled: Boolean(targetId),
+    enabled: Boolean(targetId) && aiAnalysisEnabled,
   });
 
   const generateMutation = useMutation({
@@ -663,6 +690,19 @@ const AIAnalysisPanel = ({ targetId }: Props) => {
   const latestOutput = latest ? parseJSONValue(latest.output_json) : {};
   const latestLLMAssisted = asBool(latestOutput?.llm_assisted);
   const latestLLMFallback = asBool(latestOutput?.llm_fallback);
+
+  if (!aiAnalysisEnabled) {
+    return (
+      <div className="border border-hack-border bg-black/30 p-6">
+        <h2 className="flex items-center gap-2 font-mono text-lg uppercase tracking-wider text-hack-dim">
+          <Sparkles className="h-5 w-5" /> Analysis Disabled
+        </h2>
+        <p className="mt-2 text-sm text-hack-dim">
+          Target analysis is disabled by feature flag.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -699,7 +739,12 @@ const AIAnalysisPanel = ({ targetId }: Props) => {
             <button
               type="button"
               onClick={() => generateMutation.mutate(true)}
-              disabled={generateMutation.isPending}
+              disabled={generateMutation.isPending || !llmAssistedEnabled}
+              title={
+                llmAssistedEnabled
+                  ? "Generate LLM-assisted narrative"
+                  : "LLM-assisted analysis is disabled by feature flag"
+              }
               className="hack-btn flex items-center justify-center gap-2 px-4 py-2 disabled:opacity-50"
             >
               {generateMutation.isPending &&
@@ -708,7 +753,7 @@ const AIAnalysisPanel = ({ targetId }: Props) => {
               ) : (
                 <Brain className="h-4 w-4" />
               )}
-              Generate LLM-Assisted
+              {llmAssistedEnabled ? "Generate LLM-Assisted" : "LLM Disabled"}
             </button>
           </div>
         </div>
@@ -782,7 +827,10 @@ const AIAnalysisPanel = ({ targetId }: Props) => {
         </div>
       )}
 
-      <RecommendationsSection targetId={targetId} />
+      <RecommendationsSection
+        targetId={targetId}
+        enabled={recommendationsEnabled}
+      />
 
       {analyses.length > 1 && (
         <div className="border border-hack-border bg-black/20 p-4">
