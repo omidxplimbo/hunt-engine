@@ -7,6 +7,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/ai/analysis"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/ai/recommendation"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/auditlog"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
@@ -278,5 +279,53 @@ func GenerateTargetAIAnalysis(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"status": "success",
 		"data":   row,
+	})
+}
+
+// GenerateTargetAIRecommendations creates deterministic, evidence-based recommendations for one target.
+func GenerateTargetAIRecommendations(c *fiber.Ctx) error {
+	targetID, err := parseTargetIDParam(c)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+
+	rows, err := recommendation.GenerateTargetRecommendations(recommendation.TargetRecommendationInput{
+		TargetID:        target.ID,
+		CreatedByUserID: &uid,
+	})
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	_ = auditlog.Record(auditlog.Entry{
+		ActorUserID: &uid,
+		Action:      "target.ai_recommendations.generate",
+		EntityType:  "target",
+		EntityID:    &target.ID,
+		TargetID:    &target.ID,
+		IPAddress:   auditlog.ClientIP(c),
+		UserAgent:   auditlog.UserAgent(c),
+		Metadata: map[string]interface{}{
+			"target_id":             target.ID,
+			"root_domain":           target.RootDomain,
+			"recommendations_count": len(rows),
+			"source":                recommendation.SourceSystemDeterministic,
+		},
+	})
+
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"status": "success",
+		"data":   rows,
+		"count":  len(rows),
 	})
 }

@@ -143,6 +143,7 @@ func main() {
 	api.Get("/targets/:id/ai/analyses", handlers.GetTargetAIAnalyses)
 	api.Post("/targets/:id/ai/analyses/generate", handlers.GenerateTargetAIAnalysis)
 	api.Get("/targets/:id/ai/recommendations", handlers.GetTargetAIRecommendations)
+	api.Post("/targets/:id/ai/recommendations/generate", handlers.GenerateTargetAIRecommendations)
 	api.Get("/targets/:id/audit-logs", handlers.GetTargetAuditLogs)
 
 	api.Get("/dashboard/stats", handlers.GetDashboardStats)
