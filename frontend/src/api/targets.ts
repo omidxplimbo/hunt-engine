@@ -509,10 +509,14 @@ export const getTargetAIAnalyses = async (targetId: number, limit = 5) => {
   return response.data;
 };
 
-export const generateTargetAIAnalysis = async (targetId: number) => {
+export const generateTargetAIAnalysis = async (
+  targetId: number,
+  useLLM = false,
+) => {
   const response = await apiClient.post<{
     status: string;
     data: TargetAIAnalysis;
-  }>(`/targets/${targetId}/ai/analyses/generate`);
-  return response.data;
+  }>(`/targets/${targetId}/ai/analyses/generate`, { use_llm: useLLM });
+
+  return response.data.data;
 };

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { type ReactNode, useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
@@ -35,6 +35,13 @@ const parseJSONValue = (value: any) => {
 };
 
 const asArray = (value: any): any[] => (Array.isArray(value) ? value : []);
+
+const asBool = (value: any) => value === true || String(value) === "true";
+
+const cleanText = (value: any) => {
+  const text = String(value ?? "").trim();
+  return text === "<nil>" ? "" : text;
+};
 
 const riskClass = (level: string) => {
   switch (String(level || "").toLowerCase()) {
@@ -75,22 +82,106 @@ const MetricCard = ({
   </div>
 );
 
+const StatusPill = ({
+  children,
+  tone = "neutral",
+}: {
+  children: ReactNode;
+  tone?: "neutral" | "primary" | "warning" | "danger";
+}) => {
+  const classes = {
+    neutral: "border-hack-border text-hack-dim bg-black/30",
+    primary: "border-hack-primary text-hack-primary bg-hack-primary/10",
+    warning: "border-hack-warning text-hack-warning bg-hack-warning/10",
+    danger: "border-hack-danger text-hack-danger bg-hack-danger/10",
+  };
+
+  return (
+    <span
+      className={clsx(
+        "border px-2 py-1 font-mono text-[10px] uppercase tracking-wider",
+        classes[tone],
+      )}
+    >
+      {children}
+    </span>
+  );
+};
+
+const NarrativeList = ({
+  title,
+  items,
+  icon,
+}: {
+  title: string;
+  items: any[];
+  icon: "check" | "dot";
+}) => {
+  if (items.length === 0) return null;
+
+  return (
+    <div className="border border-hack-border bg-black/20 p-4">
+      <div className="mb-3 font-mono text-sm uppercase tracking-wider text-hack-primary">
+        {title}
+      </div>
+      <ul className="space-y-2 text-sm text-hack-dim">
+        {items.map((item, idx) => (
+          <li key={idx} className="flex gap-2">
+            {icon === "check" ? (
+              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-hack-primary" />
+            ) : (
+              <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-hack-primary" />
+            )}
+            <span>{String(item)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+};
+
 const AnalysisDetails = ({ analysis }: { analysis: TargetAIAnalysis }) => {
   const output = useMemo(
     () => parseJSONValue(analysis.output_json),
     [analysis.output_json],
   );
 
-  const riskScore = output?.risk_score ?? 0;
-  const riskLevel = String(output?.risk_level || "informational");
+  const riskScore = output?.risk_score ?? output?.risk?.score ?? 0;
+  const riskLevel = String(
+    output?.risk_level || output?.risk?.level || "informational",
+  );
+  const confidenceScore =
+    output?.confidence_score ?? output?.risk?.confidence_score ?? 0;
+  const coverageScore =
+    output?.coverage_score ?? output?.risk?.coverage_score ?? 0;
+  const exposureScore =
+    output?.exposure_score ?? output?.risk?.exposure_score ?? 0;
+
   const exposureBuckets = asArray(output?.exposure_buckets);
   const coverageGaps = asArray(output?.coverage_gaps);
   const nextActions = asArray(output?.next_actions);
   const topFindings = asArray(output?.top_findings);
+  const remediationPlan = asArray(output?.remediation_plan);
+  const reportNotes = asArray(output?.report_notes);
+  const validationNotes = asArray(output?.validation_notes);
+
   const counts = output?.counts || {};
   const assetCounts = counts?.assets || {};
   const urlCounts = counts?.urls || {};
   const findingCounts = counts?.findings || {};
+
+  const llmAssisted = asBool(output?.llm_assisted);
+  const llmFallback = asBool(output?.llm_fallback);
+  const llmError = cleanText(output?.llm_error);
+  const llmProvider = cleanText(output?.llm_provider || analysis.provider);
+  const llmModel = cleanText(output?.llm_model || analysis.model);
+  const methodologyVersion = cleanText(
+    output?.methodology_version || output?.methodology?.version,
+  );
+  const executiveSummary = cleanText(
+    output?.executive_summary || analysis.summary || output?.summary,
+  );
+  const customerSummary = cleanText(output?.customer_summary);
 
   return (
     <div className="space-y-4">
@@ -100,6 +191,24 @@ const AnalysisDetails = ({ analysis }: { analysis: TargetAIAnalysis }) => {
           value={`${riskScore}/100`}
           hint={riskLevel.toUpperCase()}
         />
+        <MetricCard
+          label="Confidence"
+          value={`${confidenceScore}/100`}
+          hint="evidence confidence"
+        />
+        <MetricCard
+          label="Coverage"
+          value={`${coverageScore}/100`}
+          hint="scan completeness"
+        />
+        <MetricCard
+          label="Exposure"
+          value={`${exposureScore}/100`}
+          hint="technical attack surface"
+        />
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-4">
         <MetricCard
           label="Assets"
           value={assetCounts?.total ?? 0}
@@ -115,15 +224,56 @@ const AnalysisDetails = ({ analysis }: { analysis: TargetAIAnalysis }) => {
           value={findingCounts?.active_total ?? 0}
           hint="excluding fixed/false-positive"
         />
+        <MetricCard
+          label="LLM Mode"
+          value={llmAssisted ? "ON" : "OFF"}
+          hint={
+            llmFallback
+              ? "safe deterministic fallback"
+              : llmProvider
+                ? `${llmProvider}/${llmModel}`
+                : "local deterministic"
+          }
+        />
       </div>
+
+      <div className="flex flex-wrap gap-2">
+        <StatusPill tone="primary">deterministic scoring</StatusPill>
+        {llmAssisted ? (
+          <StatusPill tone="primary">llm narrative</StatusPill>
+        ) : llmFallback ? (
+          <StatusPill tone="warning">llm fallback</StatusPill>
+        ) : (
+          <StatusPill>local narrative</StatusPill>
+        )}
+        {methodologyVersion && <StatusPill>{methodologyVersion}</StatusPill>}
+      </div>
+
+      {llmFallback && (
+        <div className="border border-hack-warning/60 bg-hack-warning/10 p-3 text-sm text-hack-warning">
+          LLM-assisted generation was requested, but Hunt Engine safely fell
+          back to deterministic analysis. Reason:{" "}
+          {llmError || "provider unavailable"}
+        </div>
+      )}
 
       <div className="border border-hack-border bg-black/20 p-4">
         <div className="mb-2 flex items-center gap-2 font-mono text-sm uppercase tracking-wider text-hack-primary">
-          <Brain className="h-4 w-4" /> Summary
+          <Brain className="h-4 w-4" /> Executive Summary
         </div>
         <p className="text-sm leading-6 text-hack-dim">
-          {analysis.summary || output?.summary || "-"}
+          {executiveSummary || "-"}
         </p>
+
+        {customerSummary && customerSummary !== executiveSummary && (
+          <>
+            <div className="my-3 border-t border-hack-border" />
+            <div className="mb-2 font-mono text-xs uppercase tracking-wider text-hack-dim">
+              Customer Summary
+            </div>
+            <p className="text-sm leading-6 text-hack-dim">{customerSummary}</p>
+          </>
+        )}
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
@@ -165,6 +315,24 @@ const AnalysisDetails = ({ analysis }: { analysis: TargetAIAnalysis }) => {
           )}
         </div>
       </div>
+
+      {(remediationPlan.length > 0 ||
+        reportNotes.length > 0 ||
+        validationNotes.length > 0) && (
+        <div className="grid gap-4 xl:grid-cols-3">
+          <NarrativeList
+            title="LLM Remediation Plan"
+            items={remediationPlan}
+            icon="check"
+          />
+          <NarrativeList title="Report Notes" items={reportNotes} icon="dot" />
+          <NarrativeList
+            title="Validation Notes"
+            items={validationNotes}
+            icon="dot"
+          />
+        </div>
+      )}
 
       <div className="border border-hack-border bg-black/20 p-4">
         <div className="mb-3 flex items-center gap-2 font-mono text-sm uppercase tracking-wider text-hack-primary">
@@ -271,7 +439,7 @@ const AIAnalysisPanel = ({ targetId }: Props) => {
   });
 
   const generateMutation = useMutation({
-    mutationFn: () => generateTargetAIAnalysis(targetId),
+    mutationFn: (useLLM: boolean) => generateTargetAIAnalysis(targetId, useLLM),
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ["target-ai-analyses", targetId],
@@ -281,34 +449,57 @@ const AIAnalysisPanel = ({ targetId }: Props) => {
 
   const analyses = query.data?.data || [];
   const latest = analyses[0];
+  const latestOutput = latest ? parseJSONValue(latest.output_json) : {};
+  const latestLLMAssisted = asBool(latestOutput?.llm_assisted);
+  const latestLLMFallback = asBool(latestOutput?.llm_fallback);
 
   return (
     <div className="space-y-4">
       <div className="border border-hack-border bg-black/30 p-4">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div>
             <h2 className="flex items-center gap-2 font-mono text-lg uppercase tracking-wider text-hack-primary">
               <Sparkles className="h-5 w-5" /> AI Analysis
             </h2>
-            <p className="mt-1 text-sm text-hack-dim">
-              Deterministic local target analysis. External LLM providers will
-              be wired in a later milestone.
+            <p className="mt-1 max-w-4xl text-sm text-hack-dim">
+              Commercial-grade deterministic target analysis. LLM-assisted mode
+              only adds report narrative; scoring, risk level, and finding
+              priority remain controlled by deterministic guardrails. Invalid or
+              missing provider config falls back safely.
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={() => generateMutation.mutate()}
-            disabled={generateMutation.isPending}
-            className="hack-btn flex items-center justify-center gap-2 px-4 py-2 disabled:opacity-50"
-          >
-            {generateMutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="h-4 w-4" />
-            )}
-            {generateMutation.isPending ? "Generating..." : "Generate Analysis"}
-          </button>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <button
+              type="button"
+              onClick={() => generateMutation.mutate(false)}
+              disabled={generateMutation.isPending}
+              className="hack-btn-ghost flex items-center justify-center gap-2 border border-hack-border px-4 py-2 disabled:opacity-50"
+            >
+              {generateMutation.isPending &&
+              generateMutation.variables === false ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              Generate Local
+            </button>
+
+            <button
+              type="button"
+              onClick={() => generateMutation.mutate(true)}
+              disabled={generateMutation.isPending}
+              className="hack-btn flex items-center justify-center gap-2 px-4 py-2 disabled:opacity-50"
+            >
+              {generateMutation.isPending &&
+              generateMutation.variables === true ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Brain className="h-4 w-4" />
+              )}
+              Generate LLM-Assisted
+            </button>
+          </div>
         </div>
 
         {generateMutation.isError && (
@@ -321,7 +512,7 @@ const AIAnalysisPanel = ({ targetId }: Props) => {
 
       {query.isLoading && (
         <div className="border border-hack-border bg-black/20 p-6 text-center font-mono text-hack-dim">
-          Loading AI analysis...
+          Loading target analysis...
         </div>
       )}
 
@@ -331,8 +522,9 @@ const AIAnalysisPanel = ({ targetId }: Props) => {
             No target analysis exists for this target yet.
           </div>
           <div className="mt-2 text-sm text-hack-dim">
-            Click Generate Analysis to create the first deterministic analysis
-            row.
+            Generate a local deterministic analysis first, then optionally run
+            LLM-assisted narrative generation after configuring a provider in
+            Account.
           </div>
         </div>
       )}
@@ -348,14 +540,30 @@ const AIAnalysisPanel = ({ targetId }: Props) => {
                 {latest.provider}/{latest.model} · {latest.prompt_version} ·{" "}
                 {formatDate(latest.created_at)}
               </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {latestLLMAssisted ? (
+                  <StatusPill tone="primary">llm-assisted</StatusPill>
+                ) : latestLLMFallback ? (
+                  <StatusPill tone="warning">llm fallback</StatusPill>
+                ) : (
+                  <StatusPill>local deterministic</StatusPill>
+                )}
+                <StatusPill tone="primary">guardrails active</StatusPill>
+                {latestOutput?.llm_provider && (
+                  <StatusPill>
+                    {String(latestOutput.llm_provider)}/
+                    {String(latestOutput.llm_model || latest.model)}
+                  </StatusPill>
+                )}
+              </div>
             </div>
             <span
               className={clsx(
                 "border px-2 py-1 font-mono text-[10px] uppercase tracking-wider",
-                riskClass(parseJSONValue(latest.output_json)?.risk_level),
+                riskClass(latestOutput?.risk_level),
               )}
             >
-              {parseJSONValue(latest.output_json)?.risk_level || latest.status}
+              {latestOutput?.risk_level || latest.status}
             </span>
           </div>
 
@@ -369,19 +577,28 @@ const AIAnalysisPanel = ({ targetId }: Props) => {
             Recent Analysis History
           </div>
           <div className="space-y-2">
-            {analyses.slice(1).map((item) => (
-              <div
-                key={item.id}
-                className="flex flex-wrap items-center justify-between gap-3 border border-hack-border bg-black/20 p-2 text-xs"
-              >
-                <span className="font-mono text-white">
-                  #{item.id} · {item.title}
-                </span>
-                <span className="text-hack-dim">
-                  {formatDate(item.created_at)}
-                </span>
-              </div>
-            ))}
+            {analyses.slice(1).map((item) => {
+              const output = parseJSONValue(item.output_json);
+              const mode = asBool(output?.llm_assisted)
+                ? "LLM"
+                : asBool(output?.llm_fallback)
+                  ? "Fallback"
+                  : "Local";
+
+              return (
+                <div
+                  key={item.id}
+                  className="flex flex-wrap items-center justify-between gap-3 border border-hack-border bg-black/20 p-2 text-xs"
+                >
+                  <span className="font-mono text-white">
+                    #{item.id} · {mode} · {item.title}
+                  </span>
+                  <span className="text-hack-dim">
+                    {formatDate(item.created_at)}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
