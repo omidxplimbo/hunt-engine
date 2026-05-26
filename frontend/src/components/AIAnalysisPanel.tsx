@@ -14,8 +14,11 @@ import {
 import clsx from "clsx";
 import {
   generateTargetAIAnalysis,
+  generateTargetAIRecommendations,
   getTargetAIAnalyses,
+  getTargetAIRecommendations,
   type TargetAIAnalysis,
+  type TargetAIRecommendation,
 } from "../api/targets";
 
 type Props = {
@@ -429,6 +432,214 @@ const AnalysisDetails = ({ analysis }: { analysis: TargetAIAnalysis }) => {
   );
 };
 
+const recommendationTypeLabel = (value: string) =>
+  String(value || "recommendation").replace(/_/g, " ");
+
+const RecommendationCard = ({
+  recommendation,
+}: {
+  recommendation: TargetAIRecommendation;
+}) => {
+  const evidence = parseJSONValue(recommendation.evidence_json);
+  const action = parseJSONValue(recommendation.action_json);
+  const steps = asArray(action?.steps);
+  const samples = asArray(evidence?.samples);
+  const findingIds = asArray(evidence?.finding_ids);
+
+  return (
+    <div className="border border-hack-border bg-black/20 p-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0">
+          <div className="font-mono text-sm font-bold text-white">
+            {recommendation.title || "Recommendation"}
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <StatusPill
+              tone={
+                recommendation.priority === "critical" ||
+                recommendation.priority === "high"
+                  ? "danger"
+                  : recommendation.priority === "medium"
+                    ? "warning"
+                    : "neutral"
+              }
+            >
+              priority: {recommendation.priority || "medium"}
+            </StatusPill>
+            <StatusPill>
+              confidence: {recommendation.confidence || "medium"}
+            </StatusPill>
+            <StatusPill>{recommendation.status || "open"}</StatusPill>
+            <StatusPill>
+              {recommendationTypeLabel(recommendation.recommendation_type)}
+            </StatusPill>
+          </div>
+        </div>
+
+        <div className="text-xs text-hack-dim">
+          {formatDate(recommendation.created_at)}
+        </div>
+      </div>
+
+      <div className="mt-3 text-sm leading-6 text-hack-dim">
+        {recommendation.description || "-"}
+      </div>
+
+      {recommendation.rationale && (
+        <div className="mt-3 border-l-2 border-hack-primary/50 pl-3 text-xs leading-5 text-hack-dim">
+          <span className="font-mono uppercase tracking-wider text-hack-primary">
+            Rationale:
+          </span>{" "}
+          {recommendation.rationale}
+        </div>
+      )}
+
+      {steps.length > 0 && (
+        <div className="mt-4">
+          <div className="mb-2 font-mono text-xs uppercase tracking-wider text-hack-primary">
+            Recommended Steps
+          </div>
+          <ul className="space-y-2 text-sm text-hack-dim">
+            {steps.map((step, idx) => (
+              <li key={idx} className="flex gap-2">
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-hack-primary" />
+                <span>{String(step)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {(recommendation.finding_id ||
+        findingIds.length > 0 ||
+        samples.length > 0) && (
+        <details className="mt-4 border border-hack-border bg-black/20 p-3">
+          <summary className="cursor-pointer font-mono text-xs uppercase tracking-wider text-hack-dim hover:text-white">
+            Evidence Summary
+          </summary>
+
+          <div className="mt-3 space-y-2 text-xs text-hack-dim">
+            {recommendation.finding_id && (
+              <div>
+                linked finding:{" "}
+                <span className="font-mono text-white">
+                  #{recommendation.finding_id}
+                </span>
+              </div>
+            )}
+
+            {findingIds.length > 0 && (
+              <div>
+                finding ids:{" "}
+                <span className="font-mono text-white">
+                  {findingIds.map(String).join(", ")}
+                </span>
+              </div>
+            )}
+
+            {samples.length > 0 && (
+              <div>
+                <div className="mb-1 font-mono uppercase tracking-wider text-hack-dim">
+                  samples
+                </div>
+                <ul className="space-y-1">
+                  {samples.map((sample, idx) => (
+                    <li key={idx} className="break-words">
+                      - {String(sample)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+};
+
+const RecommendationsSection = ({ targetId }: Props) => {
+  const queryClient = useQueryClient();
+
+  const recommendationsQuery = useQuery({
+    queryKey: ["target-ai-recommendations", targetId],
+    queryFn: () => getTargetAIRecommendations(targetId, 20),
+    enabled: Boolean(targetId),
+  });
+
+  const generateRecommendationsMutation = useMutation({
+    mutationFn: () => generateTargetAIRecommendations(targetId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["target-ai-recommendations", targetId],
+      });
+    },
+  });
+
+  const recommendations = recommendationsQuery.data?.data || [];
+
+  return (
+    <div className="border border-hack-border bg-black/30 p-4">
+      <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h3 className="flex items-center gap-2 font-mono text-base uppercase tracking-wider text-hack-primary">
+            <ClipboardList className="h-4 w-4" /> Recommendations
+          </h3>
+          <p className="mt-1 text-sm text-hack-dim">
+            Deterministic, evidence-based operational recommendations. Coverage
+            gaps are treated as scan-improvement tasks, not vulnerabilities.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => generateRecommendationsMutation.mutate()}
+          disabled={generateRecommendationsMutation.isPending}
+          className="hack-btn-ghost flex items-center justify-center gap-2 border border-hack-primary/60 px-4 py-2 text-hack-primary disabled:opacity-50"
+        >
+          {generateRecommendationsMutation.isPending ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <RefreshCw className="h-4 w-4" />
+          )}
+          Generate Recommendations
+        </button>
+      </div>
+
+      {generateRecommendationsMutation.isError && (
+        <div className="mb-3 border border-hack-danger/60 bg-hack-danger/10 p-3 text-sm text-hack-danger">
+          {(generateRecommendationsMutation.error as any)?.response?.data
+            ?.message || "Failed to generate recommendations"}
+        </div>
+      )}
+
+      {recommendationsQuery.isLoading ? (
+        <div className="border border-hack-border bg-black/20 p-5 text-center font-mono text-hack-dim">
+          Loading recommendations...
+        </div>
+      ) : recommendations.length === 0 ? (
+        <div className="border border-hack-border bg-black/20 p-5 text-center">
+          <div className="font-mono text-hack-dim">
+            No recommendations generated yet.
+          </div>
+          <div className="mt-2 text-sm text-hack-dim">
+            Generate recommendations after target analysis is available.
+          </div>
+        </div>
+      ) : (
+        <div className="grid gap-3">
+          {recommendations.map((recommendation) => (
+            <RecommendationCard
+              key={recommendation.id}
+              recommendation={recommendation}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const AIAnalysisPanel = ({ targetId }: Props) => {
   const queryClient = useQueryClient();
 
@@ -570,6 +781,8 @@ const AIAnalysisPanel = ({ targetId }: Props) => {
           <AnalysisDetails analysis={latest} />
         </div>
       )}
+
+      <RecommendationsSection targetId={targetId} />
 
       {analyses.length > 1 && (
         <div className="border border-hack-border bg-black/20 p-4">

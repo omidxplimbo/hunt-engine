@@ -520,3 +520,58 @@ export const generateTargetAIAnalysis = async (
 
   return response.data.data;
 };
+
+// --- AI Recommendations ---
+
+export interface TargetAIRecommendation {
+  id: number;
+  target_id: number;
+  finding_id?: number | null;
+  analysis_id?: number | null;
+  created_by_user_id?: number | null;
+  source: string;
+  recommendation_type: string;
+  priority: string;
+  confidence: string;
+  status: string;
+  title: string;
+  description: string;
+  rationale: string;
+  evidence_json?: any;
+  action_json?: any;
+  accepted_at?: string | null;
+  accepted_by_user_id?: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TargetAIRecommendationsResponse {
+  status: string;
+  data: TargetAIRecommendation[];
+  count: number;
+  total_count: number;
+  page: number;
+}
+
+export const getTargetAIRecommendations = async (
+  targetId: number,
+  limit = 20,
+) => {
+  const response = await apiClient.get<TargetAIRecommendationsResponse>(
+    `/targets/${targetId}/ai/recommendations`,
+    {
+      params: { limit },
+    },
+  );
+  return response.data;
+};
+
+export const generateTargetAIRecommendations = async (targetId: number) => {
+  const response = await apiClient.post<{
+    status: string;
+    data: TargetAIRecommendation[];
+    count: number;
+  }>(`/targets/${targetId}/ai/recommendations/generate`);
+
+  return response.data;
+};
