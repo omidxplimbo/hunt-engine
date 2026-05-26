@@ -165,3 +165,69 @@ export const deleteMyLLMProvider = async (provider: string) => {
   );
   return res.data;
 };
+
+// -----------------------------
+// Account-scoped feature flags
+// -----------------------------
+export const FEATURE_FLAGS = {
+  targetPDFReport: "feature.target_pdf_report",
+  aiAnalysis: "feature.ai_analysis",
+  llmAssistedAnalysis: "feature.llm_assisted_analysis",
+  aiRecommendations: "feature.ai_recommendations",
+  aiNucleiTemplateDrafts: "feature.ai_nuclei_template_drafts",
+} as const;
+
+export type FeatureFlagKey = (typeof FEATURE_FLAGS)[keyof typeof FEATURE_FLAGS];
+export type FeatureFlagState = "inherit" | "enabled" | "disabled";
+
+export interface AccountFeatureFlag {
+  key: FeatureFlagKey | string;
+  description: string;
+  default: boolean;
+  global_value: boolean;
+  state: FeatureFlagState;
+  effective: boolean;
+  source: "global" | "account" | string;
+  scope: string;
+  owner_key: string;
+}
+
+export interface MyFeatureFlagsData {
+  flags: AccountFeatureFlag[];
+  scope: string;
+  owner_key: string;
+}
+
+export interface PutMyFeatureFlagItem {
+  key: string;
+  state: FeatureFlagState;
+}
+
+export const getMyFeatureFlags = async () => {
+  const res = await apiClient.get<{
+    status: string;
+    data: MyFeatureFlagsData;
+  }>("/me/feature-flags");
+
+  return res.data.data;
+};
+
+export const putMyFeatureFlags = async (flags: PutMyFeatureFlagItem[]) => {
+  const res = await apiClient.put<{
+    status: string;
+    message: string;
+    data: MyFeatureFlagsData;
+  }>("/me/feature-flags", { flags });
+
+  return res.data;
+};
+
+export const isAccountFeatureEnabled = (
+  flags: AccountFeatureFlag[] | undefined,
+  key: FeatureFlagKey,
+  defaultValue: boolean,
+): boolean => {
+  const flag = flags?.find((item) => item.key === key);
+  if (!flag) return defaultValue;
+  return Boolean(flag.effective);
+};

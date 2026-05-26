@@ -21,6 +21,7 @@ import { QueueManager } from "../components/QueueManager";
 import TelegramConfigPanel from "../components/TelegramConfigPanel";
 
 import { LLMProviderConfig } from "../components/LLMProviderConfig";
+import FeatureFlagsConfig from "../components/FeatureFlagsConfig";
 const Account = () => {
   const {
     data: me,
@@ -216,6 +217,8 @@ const Account = () => {
       />
 
       <LLMProviderConfig />
+
+      <FeatureFlagsConfig />
 
       <TelegramConfigPanel role={me.role} />
 

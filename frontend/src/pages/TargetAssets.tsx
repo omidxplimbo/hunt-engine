@@ -35,10 +35,9 @@ import {
 import clsx from "clsx";
 import {
   FEATURE_FLAGS,
-  getSystemConfig,
-  isFeatureEnabled,
-  type SystemConfig,
-} from "../api/system";
+  getMyFeatureFlags,
+  isAccountFeatureEnabled,
+} from "../api/me";
 
 const KNOWN_SOURCES = [
   { id: "wayback", label: "Wayback" },
@@ -205,9 +204,10 @@ const TargetAssets = () => {
     enabled: Boolean(targetId),
   });
 
-  const systemConfigQuery = useQuery({
-    queryKey: ["system-config"],
-    queryFn: getSystemConfig,
+  const featureFlagsQuery = useQuery({
+    queryKey: ["me", "feature-flags"],
+    queryFn: getMyFeatureFlags,
+    staleTime: 30_000,
   });
 
   const assetsQuery = useQuery({
@@ -295,24 +295,24 @@ const TargetAssets = () => {
           0)
         : 0;
 
-  const systemConfigs = (systemConfigQuery.data || []) as SystemConfig[];
-  const featureTargetPDFReport = isFeatureEnabled(
-    systemConfigs,
+  const accountFeatureFlags = featureFlagsQuery.data?.flags;
+  const featureTargetPDFReport = isAccountFeatureEnabled(
+    accountFeatureFlags,
     FEATURE_FLAGS.targetPDFReport,
     true,
   );
-  const featureAIAnalysis = isFeatureEnabled(
-    systemConfigs,
+  const featureAIAnalysis = isAccountFeatureEnabled(
+    accountFeatureFlags,
     FEATURE_FLAGS.aiAnalysis,
     true,
   );
-  const featureLLMAssistedAnalysis = isFeatureEnabled(
-    systemConfigs,
+  const featureLLMAssistedAnalysis = isAccountFeatureEnabled(
+    accountFeatureFlags,
     FEATURE_FLAGS.llmAssistedAnalysis,
     true,
   );
-  const featureAIRecommendations = isFeatureEnabled(
-    systemConfigs,
+  const featureAIRecommendations = isAccountFeatureEnabled(
+    accountFeatureFlags,
     FEATURE_FLAGS.aiRecommendations,
     true,
   );
