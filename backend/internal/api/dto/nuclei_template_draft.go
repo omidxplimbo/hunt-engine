@@ -7,6 +7,12 @@ type NucleiTemplateDraftStatusResponse struct {
 	DraftOnly           bool   `json:"draft_only"`
 	RequiresHumanReview bool   `json:"requires_human_review"`
 	SaveAutomatically   bool   `json:"save_automatically"`
+
+	FeatureEnabled     bool   `json:"feature_enabled"`
+	EnvironmentEnabled bool   `json:"environment_enabled"`
+	DisabledReason     string `json:"disabled_reason"`
+	Scope              string `json:"scope"`
+	OwnerKey           string `json:"owner_key"`
 }
 
 // GenerateNucleiTemplateDraftRequest asks Hunt Engine to draft a Nuclei template.

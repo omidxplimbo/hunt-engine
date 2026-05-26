@@ -109,6 +109,7 @@ func main() {
 	api.Get("/targets/:id/urls/download", handlers.DownloadTargetURLs) // 👈 Download filtered URLs
 	api.Get("/targets/:id/ips", handlers.ExportTargetIPs)              // Export IPs به صورت txt
 	api.Get("/targets/:id/scan-state", handlers.GetTargetScanState)
+	api.Get("/targets/:id/report.pdf", handlers.DownloadTargetPDFReport)
 
 	// 👇 Self-service (کاربر روی اکانت خودش)
 	api.Get("/me", handlers.GetMe)
@@ -117,6 +118,12 @@ func main() {
 	api.Delete("/me", handlers.DeleteMe)
 	api.Get("/me/telegram-config", handlers.GetMyTelegramConfig)
 	api.Put("/me/telegram-config", handlers.PutMyTelegramConfig)
+	api.Get("/me/llm-providers", handlers.GetMyLLMProviders)
+	api.Put("/me/llm-providers", handlers.PutMyLLMProviders)
+	api.Delete("/me/llm-providers/:provider", handlers.DeleteMyLLMProvider)
+	api.Get("/me/feature-flags", handlers.GetMyFeatureFlags)
+	api.Put("/me/feature-flags", handlers.PutMyFeatureFlags)
+	api.Delete("/me/feature-flags/:key", handlers.DeleteMyFeatureFlag)
 	// 👇 Subfinder API keys/config (per-user)
 	api.Get("/me/subfinder/providers", handlers.GetMySubfinderProviders)
 	api.Put("/me/subfinder/providers", handlers.PutMySubfinderProviders)
@@ -135,6 +142,12 @@ func main() {
 	api.Get("/targets/:id/findings/stats", handlers.GetTargetFindingsStats)
 	api.Get("/targets/:id/findings", handlers.GetTargetFindings)
 	api.Patch("/findings/:id/status", handlers.UpdateFindingStatus)
+
+	api.Get("/targets/:id/ai/analyses", handlers.GetTargetAIAnalyses)
+	api.Post("/targets/:id/ai/analyses/generate", handlers.GenerateTargetAIAnalysis)
+	api.Get("/targets/:id/ai/recommendations", handlers.GetTargetAIRecommendations)
+	api.Post("/targets/:id/ai/recommendations/generate", handlers.GenerateTargetAIRecommendations)
+	api.Get("/targets/:id/audit-logs", handlers.GetTargetAuditLogs)
 
 	api.Get("/dashboard/stats", handlers.GetDashboardStats)
 	api.Get("/monitor/stats", handlers.GetMonitorData)
@@ -163,7 +176,6 @@ func main() {
 	nucleiTemplateDrafts := api.Group("/nuclei/template-drafts", middleware.AdminOnly())
 	nucleiTemplateDrafts.Get("/status", handlers.GetNucleiTemplateDraftStatus)
 	nucleiTemplateDrafts.Post("/", handlers.GenerateNucleiTemplateDraft)
-	nucleiTemplateDrafts.Get("/targets/:id/strategy", handlers.GetNucleiTargetTemplateStrategy)
 	nucleiTemplateDrafts.Get("/targets/:id/strategy", handlers.GetNucleiTargetTemplateStrategy)
 
 	port := os.Getenv("PORT")

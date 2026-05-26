@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
-import { Navigate } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import toast from 'react-hot-toast';
+import { useMemo, useState } from "react";
+import { Navigate } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import toast from "react-hot-toast";
 import {
   AlertCircle,
   CheckCircle2,
@@ -13,7 +13,7 @@ import {
   ShieldCheck,
   Trash2,
   Wand2,
-} from 'lucide-react';
+} from "lucide-react";
 import {
   deleteNucleiTemplate,
   generateNucleiTemplateDraft,
@@ -29,8 +29,8 @@ import {
   type NucleiTemplatePlacement,
   type NucleiTemplateStrategy,
   type NucleiTemplateValidation,
-} from '../api/nucleiTemplates';
-import { useAuth } from '../context/AuthContext';
+} from "../api/nucleiTemplates";
+import { useAuth } from "../context/AuthContext";
 
 const defaultTemplate = `id: hunt-custom-marker
 
@@ -61,88 +61,89 @@ type PlacementOption = {
 
 const placementOptions: PlacementOption[] = [
   {
-    value: 'root',
-    label: 'Root',
-    description: 'Legacy location under /data/nuclei/custom.',
-    runsIn: 'all profiles',
+    value: "root",
+    label: "Root",
+    description: "Legacy location under /data/nuclei/custom.",
+    runsIn: "all profiles",
   },
   {
-    value: 'shared',
-    label: 'Shared',
-    description: 'Reusable checks that should always run.',
-    runsIn: 'all profiles',
+    value: "shared",
+    label: "Shared",
+    description: "Reusable checks that should always run.",
+    runsIn: "all profiles",
   },
   {
-    value: 'safe',
-    label: 'Safe',
-    description: 'Low-risk checks accepted in every scan mode.',
-    runsIn: 'all profiles',
+    value: "safe",
+    label: "Safe",
+    description: "Low-risk checks accepted in every scan mode.",
+    runsIn: "all profiles",
   },
   {
-    value: 'fast',
-    label: 'Fast',
-    description: 'Quick exposure and panel checks.',
-    runsIn: 'fast, balanced, full, custom',
+    value: "fast",
+    label: "Fast",
+    description: "Quick exposure and panel checks.",
+    runsIn: "fast, balanced, full, custom",
   },
   {
-    value: 'exposure',
-    label: 'Exposure',
-    description: 'Exposure checks grouped with fast scans.',
-    runsIn: 'fast, balanced, full, custom',
+    value: "exposure",
+    label: "Exposure",
+    description: "Exposure checks grouped with fast scans.",
+    runsIn: "fast, balanced, full, custom",
   },
   {
-    value: 'balanced',
-    label: 'Balanced',
-    description: 'Broader regular-scan checks.',
-    runsIn: 'balanced, full, custom',
+    value: "balanced",
+    label: "Balanced",
+    description: "Broader regular-scan checks.",
+    runsIn: "balanced, full, custom",
   },
   {
-    value: 'misconfig',
-    label: 'Misconfig',
-    description: 'Configuration checks that should not run in the fastest mode.',
-    runsIn: 'balanced, full, custom',
+    value: "misconfig",
+    label: "Misconfig",
+    description:
+      "Configuration checks that should not run in the fastest mode.",
+    runsIn: "balanced, full, custom",
   },
   {
-    value: 'cves',
-    label: 'CVEs',
-    description: 'CVE-oriented checks.',
-    runsIn: 'cves-light, full, custom',
+    value: "cves",
+    label: "CVEs",
+    description: "CVE-oriented checks.",
+    runsIn: "cves-light, full, custom",
   },
   {
-    value: 'cves-light',
-    label: 'CVEs Light',
-    description: 'Focused CVE checks for the cves-light profile.',
-    runsIn: 'cves-light, full, custom',
+    value: "cves-light",
+    label: "CVEs Light",
+    description: "Focused CVE checks for the cves-light profile.",
+    runsIn: "cves-light, full, custom",
   },
   {
-    value: 'full',
-    label: 'Full',
-    description: 'Heavier templates reserved for full scans.',
-    runsIn: 'full, custom',
+    value: "full",
+    label: "Full",
+    description: "Heavier templates reserved for full scans.",
+    runsIn: "full, custom",
   },
   {
-    value: 'custom',
-    label: 'Custom',
-    description: 'Special-purpose templates for explicit custom scans.',
-    runsIn: 'custom, full',
+    value: "custom",
+    label: "Custom",
+    description: "Special-purpose templates for explicit custom scans.",
+    runsIn: "custom, full",
   },
 ];
 
 const placementMap = new Map(
-  placementOptions.map((option) => [option.value, option])
+  placementOptions.map((option) => [option.value, option]),
 );
 
 const formatBytes = (value: number) => {
-  if (!Number.isFinite(value) || value <= 0) return '0 B';
+  if (!Number.isFinite(value) || value <= 0) return "0 B";
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
   return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
 };
 
 const formatDate = (value: string) => {
-  if (!value) return '-';
+  if (!value) return "-";
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return '-';
+  if (Number.isNaN(parsed.getTime())) return "-";
   return parsed.toLocaleString();
 };
 
@@ -156,125 +157,136 @@ const getErrorMessage = (error: unknown) => {
     maybeError.response?.data?.message ||
     maybeError.response?.data?.error ||
     maybeError.message ||
-    'Operation failed'
+    "Operation failed"
   );
 };
 
-const inferPlacement = (template: Partial<NucleiTemplate>): NucleiTemplatePlacement => {
+const inferPlacement = (
+  template: Partial<NucleiTemplate>,
+): NucleiTemplatePlacement => {
   if (template.placement) return template.placement;
 
-  const source = `${template.path || ''}/${template.name || ''}`;
+  const source = `${template.path || ""}/${template.name || ""}`;
   const found = placementOptions.find(
     (option) =>
-      option.value !== 'root' &&
+      option.value !== "root" &&
       (source.includes(`/custom/${option.value}/`) ||
-        source.startsWith(`${option.value}/`))
+        source.startsWith(`${option.value}/`)),
   );
 
-  return found?.value || 'root';
+  return found?.value || "root";
 };
 
 const templateFileName = (template: Partial<NucleiTemplate>) => {
-  const raw = template.name || '';
-  return raw.split('/').filter(Boolean).pop() || raw || 'hunt-custom-marker.yaml';
+  const raw = template.name || "";
+  return (
+    raw.split("/").filter(Boolean).pop() || raw || "hunt-custom-marker.yaml"
+  );
 };
 
 const makeSavingPath = (placement: NucleiTemplatePlacement, name: string) => {
-  const cleanName = name.trim() || 'template.yaml';
-  if (placement === 'root') return `/data/nuclei/custom/${cleanName}`;
+  const cleanName = name.trim() || "template.yaml";
+  if (placement === "root") return `/data/nuclei/custom/${cleanName}`;
   return `/data/nuclei/custom/${placement}/${cleanName}`;
 };
 
 const validationState = (validation: NucleiTemplateValidation | null) => {
   if (!validation) {
     return {
-      title: 'Not validated',
+      title: "Not validated",
       icon: ShieldCheck,
-      className: 'border-hack-border bg-black/20 text-hack-dim',
+      className: "border-hack-border bg-black/20 text-hack-dim",
     };
   }
 
   if (validation.valid) {
     return {
-      title: 'Valid template',
+      title: "Valid template",
       icon: CheckCircle2,
-      className: 'border-hack-primary/40 bg-hack-primary/[0.06] text-hack-primary',
+      className:
+        "border-hack-primary/40 bg-hack-primary/[0.06] text-hack-primary",
     };
   }
 
   return {
-    title: 'Validation failed',
+    title: "Validation failed",
     icon: AlertCircle,
-    className: 'border-hack-danger/50 bg-hack-danger/[0.06] text-hack-danger',
+    className: "border-hack-danger/50 bg-hack-danger/[0.06] text-hack-danger",
   };
 };
 
 const buildDraftPayload = (
   templateName: string,
-  strategy?: NucleiTemplateStrategy | null
+  strategy?: NucleiTemplateStrategy | null,
 ): GenerateNucleiTemplateDraftPayload => ({
-  name: templateName || 'hunt-ai-draft.yaml',
-  title: 'Hunt AI Draft Template',
-  description: 'Draft-only Nuclei template candidate. Review and validate before saving.',
-  severity: 'info',
+  name: templateName || "hunt-ai-draft.yaml",
+  title: "Hunt AI Draft Template",
+  description:
+    "Draft-only Nuclei template candidate. Review and validate before saving.",
+  severity: "info",
   tags: strategy?.recommended_tags?.length
     ? strategy.recommended_tags.slice(0, 6)
-    : ['exposure', 'panel'],
-  method: 'GET',
-  path: '/',
-  matcher_type: 'word',
-  matcher_part: 'body',
-  matcher_value: 'HUNT_TARGET_MARKER',
+    : ["exposure", "panel"],
+  method: "GET",
+  path: "/",
+  matcher_type: "word",
+  matcher_part: "body",
+  matcher_value: "HUNT_TARGET_MARKER",
   validate: true,
 });
 
 const compactList = (values?: string[] | number[]) => {
-  if (!values?.length) return '-';
-  return values.join(', ');
+  if (!values?.length) return "-";
+  return values.join(", ");
 };
 
 const NucleiTemplates = () => {
   const { role } = useAuth();
   const queryClient = useQueryClient();
 
-  const [selectedName, setSelectedName] = useState('');
-  const [templateName, setTemplateName] = useState('hunt-custom-marker.yaml');
-  const [placement, setPlacement] = useState<NucleiTemplatePlacement>('fast');
+  const [selectedName, setSelectedName] = useState("");
+  const [templateName, setTemplateName] = useState("hunt-custom-marker.yaml");
+  const [placement, setPlacement] = useState<NucleiTemplatePlacement>("fast");
   const [content, setContent] = useState(defaultTemplate);
-  const [validation, setValidation] = useState<NucleiTemplateValidation | null>(null);
-  const [search, setSearch] = useState('');
-  const [placementFilter, setPlacementFilter] = useState<'all' | NucleiTemplatePlacement>(
-    'all'
+  const [validation, setValidation] = useState<NucleiTemplateValidation | null>(
+    null,
   );
-  const [targetId, setTargetId] = useState('');
+  const [search, setSearch] = useState("");
+  const [placementFilter, setPlacementFilter] = useState<
+    "all" | NucleiTemplatePlacement
+  >("all");
+  const [targetId, setTargetId] = useState("");
   const [strategy, setStrategy] = useState<NucleiTemplateStrategy | null>(null);
   const [draft, setDraft] = useState<NucleiTemplateDraftResponse | null>(null);
 
   const templatesQuery = useQuery({
-    queryKey: ['nuclei-templates'],
+    queryKey: ["nuclei-templates"],
     queryFn: listNucleiTemplates,
   });
 
   const draftStatusQuery = useQuery({
-    queryKey: ['nuclei-template-draft-status'],
+    queryKey: ["nuclei-template-draft-status"],
     queryFn: getNucleiTemplateDraftStatus,
     retry: false,
   });
 
-  const templates = useMemo(() => templatesQuery.data || [], [templatesQuery.data]);
+  const templates = useMemo(
+    () => templatesQuery.data || [],
+    [templatesQuery.data],
+  );
 
   const filteredTemplates = useMemo(() => {
     const query = search.trim().toLowerCase();
 
     return templates.filter((template) => {
       const templatePlacement = inferPlacement(template);
-      if (placementFilter !== 'all' && templatePlacement !== placementFilter) {
+      if (placementFilter !== "all" && templatePlacement !== placementFilter) {
         return false;
       }
       if (!query) return true;
       return [template.name, template.path, templatePlacement]
         .filter(Boolean)
-        .join(' ')
+        .join(" ")
         .toLowerCase()
         .includes(query);
     });
@@ -282,10 +294,11 @@ const NucleiTemplates = () => {
 
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.name === selectedName),
-    [selectedName, templates]
+    [selectedName, templates],
   );
 
-  const currentPlacement = placementMap.get(placement) || placementMap.get('root')!;
+  const currentPlacement =
+    placementMap.get(placement) || placementMap.get("root")!;
   const currentValidation = validationState(validation);
   const ValidationIcon = currentValidation.icon;
   const draftStatus = draftStatusQuery.data;
@@ -297,20 +310,21 @@ const NucleiTemplates = () => {
       setSelectedName(template.name);
       setTemplateName(templateFileName(template));
       setPlacement(nextPlacement);
-      setContent(template.content || '');
+      setContent(template.content || "");
       setValidation(null);
     },
     onError: (error) => toast.error(getErrorMessage(error)),
   });
 
   const validateMutation = useMutation({
-    mutationFn: () => validateNucleiTemplate({ name: templateName, content, placement }),
+    mutationFn: () =>
+      validateNucleiTemplate({ name: templateName, content, placement }),
     onSuccess: (result) => {
       setValidation(result);
       if (result.valid) {
-        toast.success('Template validation passed');
+        toast.success("Template validation passed");
       } else {
-        toast.error(result.error || 'Template validation failed');
+        toast.error(result.error || "Template validation failed");
       }
     },
     onError: (error) => toast.error(getErrorMessage(error)),
@@ -326,13 +340,13 @@ const NucleiTemplates = () => {
       }),
     onSuccess: (template) => {
       const nextPlacement = inferPlacement(template);
-      toast.success('Template saved');
+      toast.success("Template saved");
       setSelectedName(template.name);
       setTemplateName(templateFileName(template));
       setPlacement(nextPlacement);
       setContent(template.content || content);
       setValidation({ valid: true, name: template.name });
-      queryClient.invalidateQueries({ queryKey: ['nuclei-templates'] });
+      queryClient.invalidateQueries({ queryKey: ["nuclei-templates"] });
     },
     onError: (error) => toast.error(getErrorMessage(error)),
   });
@@ -340,9 +354,9 @@ const NucleiTemplates = () => {
   const deleteMutation = useMutation({
     mutationFn: deleteNucleiTemplate,
     onSuccess: () => {
-      toast.success('Template deleted');
+      toast.success("Template deleted");
       startNewTemplate();
-      queryClient.invalidateQueries({ queryKey: ['nuclei-templates'] });
+      queryClient.invalidateQueries({ queryKey: ["nuclei-templates"] });
     },
     onError: (error) => toast.error(getErrorMessage(error)),
   });
@@ -352,7 +366,7 @@ const NucleiTemplates = () => {
     onSuccess: (result) => {
       setStrategy(result);
       setDraft(null);
-      toast.success('Strategy loaded');
+      toast.success("Strategy loaded");
     },
     onError: (error) => toast.error(getErrorMessage(error)),
   });
@@ -360,19 +374,24 @@ const NucleiTemplates = () => {
   const draftMutation = useMutation({
     mutationFn: () =>
       strategy?.suggested_draft_request
-        ? generateNucleiTemplateDraft({ ...strategy.suggested_draft_request, validate: true })
-        : generateNucleiTemplateDraft(buildDraftPayload(templateName, strategy)),
+        ? generateNucleiTemplateDraft({
+            ...strategy.suggested_draft_request,
+            validate: true,
+          })
+        : generateNucleiTemplateDraft(
+            buildDraftPayload(templateName, strategy),
+          ),
     onSuccess: (result) => {
       setDraft(result);
-      toast.success('Draft generated');
+      toast.success("Draft generated");
     },
     onError: (error) => toast.error(getErrorMessage(error)),
   });
 
   const startNewTemplate = () => {
-    setSelectedName('');
-    setTemplateName('hunt-custom-marker.yaml');
-    setPlacement('fast');
+    setSelectedName("");
+    setTemplateName("hunt-custom-marker.yaml");
+    setPlacement("fast");
     setContent(defaultTemplate);
     setValidation(null);
   };
@@ -385,17 +404,18 @@ const NucleiTemplates = () => {
 
   const loadDraftInEditor = () => {
     if (!draft) return;
-    setSelectedName('');
+    setSelectedName("");
     setTemplateName(templateFileName({ name: draft.name }));
     setPlacement(
-      (strategy?.recommended_placements?.[0] as NucleiTemplatePlacement | undefined) ||
-        'fast'
+      (strategy?.recommended_placements?.[0] as
+        | NucleiTemplatePlacement
+        | undefined) || "fast",
     );
     setContent(draft.content);
     setValidation(draft.validation || null);
   };
 
-  if (role !== 'admin') return <Navigate to="/" replace />;
+  if (role !== "admin") return <Navigate to="/" replace />;
 
   const isBusy =
     templatesQuery.isLoading ||
@@ -406,7 +426,7 @@ const NucleiTemplates = () => {
 
   const editorStatus = selectedTemplate
     ? `${formatBytes(selectedTemplate.size_bytes)} | ${formatDate(selectedTemplate.updated_at)}`
-    : 'New unsaved template';
+    : "New unsaved template";
 
   return (
     <div className="space-y-6 pb-8">
@@ -417,7 +437,8 @@ const NucleiTemplates = () => {
           </p>
           <h1 className="hack-title text-3xl">Nuclei Templates</h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-hack-dim">
-            Manage custom YAML templates, choose their scan profile placement, and keep AI drafts behind manual approval.
+            Manage custom YAML templates, choose their scan profile placement,
+            and keep AI drafts behind manual approval.
           </p>
         </div>
 
@@ -462,7 +483,9 @@ const NucleiTemplates = () => {
             <select
               value={placementFilter}
               onChange={(event) =>
-                setPlacementFilter(event.target.value as 'all' | NucleiTemplatePlacement)
+                setPlacementFilter(
+                  event.target.value as "all" | NucleiTemplatePlacement,
+                )
               }
               className="hack-input w-full rounded-md text-hack-text"
             >
@@ -478,7 +501,8 @@ const NucleiTemplates = () => {
           <div className="mt-4 max-h-[600px] space-y-2 overflow-y-auto pr-1">
             {templatesQuery.isLoading ? (
               <div className="flex items-center gap-2 rounded-md border border-hack-border/60 p-4 text-sm text-hack-dim">
-                <Loader2 className="h-4 w-4 animate-spin" /> Loading templates...
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading
+                templates...
               </div>
             ) : filteredTemplates.length === 0 ? (
               <div className="rounded-md border border-dashed border-hack-border/70 p-6 text-center text-sm text-hack-dim">
@@ -496,8 +520,8 @@ const NucleiTemplates = () => {
                     onClick={() => loadMutation.mutate(template.name)}
                     className={`w-full rounded-md border p-3 text-left transition-all ${
                       active
-                        ? 'border-hack-primary/60 bg-hack-primary/[0.08]'
-                        : 'border-hack-border/60 bg-black/20 hover:border-hack-primary/40 hover:bg-white/[0.03]'
+                        ? "border-hack-primary/60 bg-hack-primary/[0.08]"
+                        : "border-hack-border/60 bg-black/20 hover:border-hack-primary/40 hover:bg-white/[0.03]"
                     }`}
                   >
                     <div className="flex items-start justify-between gap-3">
@@ -514,7 +538,8 @@ const NucleiTemplates = () => {
                       </span>
                     </div>
                     <p className="mt-2 text-xs text-hack-dim">
-                      {formatBytes(template.size_bytes)} | {formatDate(template.updated_at)}
+                      {formatBytes(template.size_bytes)} |{" "}
+                      {formatDate(template.updated_at)}
                     </p>
                   </button>
                 );
@@ -592,7 +617,9 @@ const NucleiTemplates = () => {
                   <select
                     value={placement}
                     onChange={(event) => {
-                      setPlacement(event.target.value as NucleiTemplatePlacement);
+                      setPlacement(
+                        event.target.value as NucleiTemplatePlacement,
+                      );
                       setValidation(null);
                     }}
                     className="hack-input h-11 w-full rounded-md text-hack-text"
@@ -606,9 +633,12 @@ const NucleiTemplates = () => {
                 </label>
               </div>
 
-              <div className={`rounded-md border p-3 text-sm ${currentValidation.className}`}>
+              <div
+                className={`rounded-md border p-3 text-sm ${currentValidation.className}`}
+              >
                 <div className="flex items-center gap-2 font-bold uppercase tracking-[0.14em]">
-                  <ValidationIcon className="h-4 w-4" /> {currentValidation.title}
+                  <ValidationIcon className="h-4 w-4" />{" "}
+                  {currentValidation.title}
                 </div>
                 {(validation?.error || validation?.output) && (
                   <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap text-xs leading-5">
@@ -622,7 +652,9 @@ const NucleiTemplates = () => {
                   <span className="text-xs font-bold uppercase tracking-[0.16em] text-hack-dim">
                     YAML content
                   </span>
-                  <span className="text-xs text-hack-dim">{content.split('\\n').length} lines</span>
+                  <span className="text-xs text-hack-dim">
+                    {content.split("\\n").length} lines
+                  </span>
                 </div>
                 <textarea
                   value={content}
@@ -645,17 +677,25 @@ const NucleiTemplates = () => {
                   {makeSavingPath(placement, templateName)}
                 </p>
                 <div className="mt-4 border-t border-hack-border/50 pt-4">
-                  <p className="text-sm font-bold text-hack-text">{currentPlacement.label}</p>
+                  <p className="text-sm font-bold text-hack-text">
+                    {currentPlacement.label}
+                  </p>
                   <p className="mt-1 text-xs leading-5 text-hack-dim">
                     {currentPlacement.description}
                   </p>
                   <p className="mt-3 text-xs text-hack-dim">
-                    Runs in <span className="text-hack-primary">{currentPlacement.runsIn}</span>
+                    Runs in{" "}
+                    <span className="text-hack-primary">
+                      {currentPlacement.runsIn}
+                    </span>
                   </p>
                 </div>
               </div>
 
-              <details className="rounded-md border border-hack-border/70 bg-black/20 p-4" open={false}>
+              <details
+                className="rounded-md border border-hack-border/70 bg-black/20 p-4"
+                open={false}
+              >
                 <summary className="cursor-pointer list-none text-xs font-bold uppercase tracking-[0.16em] text-hack-text">
                   AI draft and strategy
                 </summary>
@@ -664,17 +704,46 @@ const NucleiTemplates = () => {
                   <div className="rounded-md border border-hack-border/60 p-3 text-xs text-hack-dim">
                     <div className="flex items-center justify-between gap-3">
                       <span>Draft foundation</span>
-                      <span className={draftStatus?.enabled ? 'text-hack-primary' : 'text-hack-dim'}>
+                      <span
+                        className={
+                          draftStatus?.enabled
+                            ? "text-hack-primary"
+                            : "text-hack-dim"
+                        }
+                      >
                         {draftStatusQuery.isLoading
-                          ? 'checking'
+                          ? "checking"
                           : draftStatus?.enabled
-                            ? 'enabled'
-                            : 'disabled'}
+                            ? "enabled"
+                            : "disabled"}
                       </span>
                     </div>
                     <p className="mt-2 leading-5">
-                      Auto-save and auto-execute stay disabled. Drafts require review, validation, and manual save.
+                      Auto-save and auto-execute stay disabled. Drafts require
+                      review, validation, and manual save.
                     </p>
+                    {draftStatus?.disabled_reason && (
+                      <p className="mt-2 leading-5 text-hack-warning">
+                        Disabled reason: {draftStatus.disabled_reason}
+                      </p>
+                    )}
+                    {draftStatus?.scope && (
+                      <p className="mt-2 font-mono text-[10px] uppercase tracking-wider text-hack-dim">
+                        Scope: {draftStatus.scope} · Owner:{" "}
+                        {draftStatus.owner_key || "-"}
+                      </p>
+                    )}
+                    {draftStatus?.disabled_reason && (
+                      <p className="mt-2 leading-5 text-hack-warning">
+                        Disabled reason: {draftStatus.disabled_reason}
+                      </p>
+                    )}
+                    {draftStatus?.scope && (
+                      <p className="mt-2 font-mono text-[10px] uppercase tracking-wider text-hack-dim">
+                        Scope: {draftStatus.scope} · Owner:{" "}
+                        {draftStatus.owner_key || "-"}
+                      </p>
+                    )}
                   </div>
 
                   <label className="block space-y-2">
@@ -693,7 +762,16 @@ const NucleiTemplates = () => {
                     <button
                       onClick={() => strategyMutation.mutate()}
                       className="hack-btn-ghost border border-hack-border/70 bg-black/20"
-                      disabled={!targetId.trim() || strategyMutation.isPending}
+                      disabled={
+                        !draftStatus?.enabled ||
+                        !targetId.trim() ||
+                        strategyMutation.isPending
+                      }
+                      title={
+                        draftStatus?.enabled
+                          ? "Generate target strategy"
+                          : "AI template drafts are disabled by feature flag"
+                      }
                     >
                       {strategyMutation.isPending ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
@@ -705,7 +783,14 @@ const NucleiTemplates = () => {
                     <button
                       onClick={() => draftMutation.mutate()}
                       className="hack-btn-ghost border border-hack-border/70 bg-black/20"
-                      disabled={!draftStatus?.enabled || draftMutation.isPending}
+                      disabled={
+                        !draftStatus?.enabled || draftMutation.isPending
+                      }
+                      title={
+                        draftStatus?.enabled
+                          ? "Generate draft"
+                          : "AI template drafts are disabled by feature flag"
+                      }
                     >
                       {draftMutation.isPending ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
@@ -724,7 +809,9 @@ const NucleiTemplates = () => {
                       <dl className="mt-3 space-y-2">
                         <div>
                           <dt className="text-hack-dim">Profile</dt>
-                          <dd className="text-hack-primary">{strategy.recommended_profile}</dd>
+                          <dd className="text-hack-primary">
+                            {strategy.recommended_profile}
+                          </dd>
                         </div>
                         <div>
                           <dt className="text-hack-dim">Placements</dt>
@@ -753,7 +840,10 @@ const NucleiTemplates = () => {
                         Draft ready
                       </p>
                       <p className="mt-2 break-all font-mono">{draft.name}</p>
-                      <button onClick={loadDraftInEditor} className="hack-btn mt-3 w-full">
+                      <button
+                        onClick={loadDraftInEditor}
+                        className="hack-btn mt-3 w-full"
+                      >
                         Load in editor
                       </button>
                     </div>

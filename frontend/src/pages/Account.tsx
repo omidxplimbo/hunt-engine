@@ -20,6 +20,8 @@ import {
 import { QueueManager } from "../components/QueueManager";
 import TelegramConfigPanel from "../components/TelegramConfigPanel";
 
+import { LLMProviderConfig } from "../components/LLMProviderConfig";
+import FeatureFlagsConfig from "../components/FeatureFlagsConfig";
 const Account = () => {
   const {
     data: me,
@@ -213,6 +215,10 @@ const Account = () => {
         title="My Scan Queue"
         description="Only your queued scan jobs are shown here. Reordering is applied to your own queue. Admins manage their own queue here, not other users' queues."
       />
+
+      <LLMProviderConfig />
+
+      <FeatureFlagsConfig />
 
       <TelegramConfigPanel role={me.role} />
 

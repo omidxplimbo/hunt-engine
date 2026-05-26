@@ -10,6 +10,8 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/api/dto"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/featureflags"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/llmconfig"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/telegram"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/utils"
 )
@@ -491,4 +493,403 @@ func parseTelegramEventList(raw string) []string {
 	}
 
 	return defaultTelegramEvents()
+}
+
+// -----------------------------
+// Feature flag config (account-scoped)
+// -----------------------------
+
+type featureFlagRequest struct {
+	Key   string `json:"key"`
+	State string `json:"state"`
+}
+
+type putMyFeatureFlagsRequest struct {
+	Flags []featureFlagRequest `json:"flags"`
+}
+
+// GetMyFeatureFlags returns effective feature flags for the current account scope.
+func GetMyFeatureFlags(c *fiber.Ctx) error {
+	_, ownerKey, scope, _, err := currentAccountOwner(c)
+	if err != nil {
+		return err
+	}
+
+	flags, err := featureflags.FlagsForOwner(ownerKey, scope)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to load feature flags"})
+	}
+
+	return c.JSON(fiber.Map{
+		"status": "success",
+		"data": fiber.Map{
+			"flags":     flags,
+			"scope":     scope,
+			"owner_key": ownerKey,
+		},
+	})
+}
+
+// PutMyFeatureFlags replaces account-scoped feature flag overrides.
+// state can be: inherit, enabled, disabled.
+func PutMyFeatureFlags(c *fiber.Ctx) error {
+	_, ownerKey, scope, ownerUserID, err := currentAccountOwner(c)
+	if err != nil {
+		return err
+	}
+
+	req := new(putMyFeatureFlagsRequest)
+	if err := c.BodyParser(req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	states := make(map[string]string)
+	seen := make(map[string]bool)
+
+	for _, item := range req.Flags {
+		key := strings.TrimSpace(item.Key)
+		if key == "" {
+			continue
+		}
+		if !featureflags.IsKnownKey(key) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Unknown feature flag: " + key})
+		}
+		if seen[key] {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Duplicate feature flag: " + key})
+		}
+		seen[key] = true
+
+		state := featureflags.NormalizeState(item.State)
+		if state == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid state for feature flag: " + key})
+		}
+
+		states[key] = state
+	}
+
+	tx := database.DB.Begin()
+	if tx.Error != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to start transaction"})
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := tx.Unscoped().
+		Where("owner_key = ?", ownerKey).
+		Delete(&models.UserFeatureFlagConfig{}).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update feature flags"})
+	}
+
+	for _, def := range featureflags.All() {
+		state := states[def.Key]
+		if state == "" || state == featureflags.StateInherit {
+			continue
+		}
+
+		row := models.UserFeatureFlagConfig{
+			UserID:     ownerUserID,
+			OwnerKey:   ownerKey,
+			FeatureKey: def.Key,
+			State:      state,
+		}
+
+		if err := tx.Create(&row).Error; err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save feature flag"})
+		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update feature flags"})
+	}
+
+	featureflags.InvalidateOwner(ownerKey)
+
+	flags, err := featureflags.FlagsForOwner(ownerKey, scope)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Feature flags saved but reload failed"})
+	}
+
+	return c.JSON(fiber.Map{
+		"status":  "success",
+		"message": "Feature flags updated",
+		"data": fiber.Map{
+			"flags":     flags,
+			"scope":     scope,
+			"owner_key": ownerKey,
+		},
+	})
+}
+
+// DeleteMyFeatureFlag removes one account-scoped override, making it inherit global config.
+func DeleteMyFeatureFlag(c *fiber.Ctx) error {
+	_, ownerKey, _, _, err := currentAccountOwner(c)
+	if err != nil {
+		return err
+	}
+
+	key := strings.TrimSpace(c.Params("key"))
+	if key == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "feature key is required"})
+	}
+	if !featureflags.IsKnownKey(key) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Unknown feature flag: " + key})
+	}
+
+	if err := database.DB.Unscoped().
+		Where("owner_key = ? AND feature_key = ?", ownerKey, key).
+		Delete(&models.UserFeatureFlagConfig{}).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete feature flag override"})
+	}
+
+	featureflags.InvalidateOwner(ownerKey)
+
+	return c.JSON(fiber.Map{"status": "success", "message": "Feature flag override deleted"})
+}
+
+// -----------------------------
+// LLM provider config (account-scoped)
+// -----------------------------
+
+type llmProviderResponse struct {
+	ID           uint   `json:"id"`
+	Provider     string `json:"provider"`
+	DisplayName  string `json:"display_name"`
+	APIKeySaved  bool   `json:"api_key_saved"`
+	BaseURL      string `json:"base_url"`
+	DefaultModel string `json:"default_model"`
+	Enabled      bool   `json:"enabled"`
+	IsDefault    bool   `json:"is_default"`
+	Scope        string `json:"scope"`
+	OwnerKey     string `json:"owner_key"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+type llmProviderRequest struct {
+	Provider     string `json:"provider"`
+	DisplayName  string `json:"display_name"`
+	APIKey       string `json:"api_key"`
+	BaseURL      string `json:"base_url"`
+	DefaultModel string `json:"default_model"`
+	Enabled      bool   `json:"enabled"`
+	IsDefault    bool   `json:"is_default"`
+	ClearKey     bool   `json:"clear_key"`
+}
+
+type putMyLLMProvidersRequest struct {
+	Providers []llmProviderRequest `json:"providers"`
+}
+
+// GetMyLLMProviders returns current user's account-scoped LLM provider settings.
+// API keys are never returned.
+func GetMyLLMProviders(c *fiber.Ctx) error {
+	user, ownerKey, scope, err := currentLLMOwner(c)
+	if err != nil {
+		return err
+	}
+	_ = user
+
+	rows, err := llmconfig.GetProvidersForOwner(ownerKey)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to load LLM providers"})
+	}
+
+	out := make([]llmProviderResponse, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, llmProviderResponse{
+			ID:           row.ID,
+			Provider:     row.Provider,
+			DisplayName:  row.DisplayName,
+			APIKeySaved:  strings.TrimSpace(row.APIKey) != "",
+			BaseURL:      row.BaseURL,
+			DefaultModel: row.DefaultModel,
+			Enabled:      row.Enabled,
+			IsDefault:    row.IsDefault,
+			Scope:        scope,
+			OwnerKey:     ownerKey,
+			UpdatedAt:    row.UpdatedAt.UTC().Format(time.RFC3339),
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"status": "success",
+		"data": fiber.Map{
+			"providers": out,
+			"scope":     scope,
+			"owner_key": ownerKey,
+		},
+	})
+}
+
+// PutMyLLMProviders replaces/upserts the current account-scoped provider list.
+// Blank api_key preserves the existing key for the same provider. clear_key=true clears it.
+func PutMyLLMProviders(c *fiber.Ctx) error {
+	_, ownerKey, _, err := currentLLMOwner(c)
+	if err != nil {
+		return err
+	}
+
+	req := new(putMyLLMProvidersRequest)
+	if err := c.BodyParser(req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	var existing []models.UserLLMProviderConfig
+	if err := database.DB.Where("owner_key = ?", ownerKey).Find(&existing).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to load existing LLM providers"})
+	}
+
+	existingByProvider := make(map[string]models.UserLLMProviderConfig, len(existing))
+	for _, row := range existing {
+		existingByProvider[row.Provider] = row
+	}
+
+	seen := make(map[string]bool)
+	defaultCount := 0
+	finalRows := make([]models.UserLLMProviderConfig, 0, len(req.Providers))
+
+	for _, item := range req.Providers {
+		provider := normalizeLLMProvider(item.Provider)
+		if provider == "" {
+			continue
+		}
+		if !isValidLLMProviderName(provider) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid provider name: " + provider})
+		}
+		if seen[provider] {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Duplicate provider: " + provider})
+		}
+		seen[provider] = true
+
+		if item.IsDefault {
+			defaultCount++
+		}
+
+		displayName := strings.TrimSpace(item.DisplayName)
+		if displayName == "" {
+			displayName = provider
+		}
+
+		apiKey := strings.TrimSpace(item.APIKey)
+		if item.ClearKey {
+			apiKey = ""
+		} else if apiKey == "" {
+			if old, ok := existingByProvider[provider]; ok {
+				apiKey = old.APIKey
+			}
+		}
+
+		finalRows = append(finalRows, models.UserLLMProviderConfig{
+			OwnerKey:     ownerKey,
+			Provider:     provider,
+			DisplayName:  displayName,
+			APIKey:       apiKey,
+			BaseURL:      strings.TrimSpace(item.BaseURL),
+			DefaultModel: strings.TrimSpace(item.DefaultModel),
+			Enabled:      item.Enabled,
+			IsDefault:    item.IsDefault,
+		})
+	}
+
+	if defaultCount > 1 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Only one LLM provider can be default"})
+	}
+
+	tx := database.DB.Begin()
+	if tx.Error != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to start transaction"})
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := tx.Unscoped().
+		Where("owner_key = ?", ownerKey).
+		Delete(&models.UserLLMProviderConfig{}).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update LLM providers"})
+	}
+
+	for _, row := range finalRows {
+		if err := tx.Create(&row).Error; err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save LLM provider"})
+		}
+	}
+
+	llmconfig.InvalidateOwner(ownerKey)
+
+	if err := tx.Commit().Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update LLM providers"})
+	}
+
+	llmconfig.InvalidateOwner(ownerKey)
+
+	return c.JSON(fiber.Map{
+		"status":      "success",
+		"message":     "LLM providers updated",
+		"saved_count": len(finalRows),
+	})
+}
+
+// DeleteMyLLMProvider removes one provider from current account scope.
+func DeleteMyLLMProvider(c *fiber.Ctx) error {
+	_, ownerKey, _, err := currentLLMOwner(c)
+	if err != nil {
+		return err
+	}
+
+	provider := normalizeLLMProvider(c.Params("provider"))
+	if provider == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "provider is required"})
+	}
+
+	if err := database.DB.Unscoped().
+		Where("owner_key = ? AND provider = ?", ownerKey, provider).
+		Delete(&models.UserLLMProviderConfig{}).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete LLM provider"})
+	}
+
+	llmconfig.InvalidateOwner(ownerKey)
+
+	return c.JSON(fiber.Map{"status": "success", "message": "LLM provider deleted"})
+}
+
+func currentAccountOwner(c *fiber.Ctx) (models.User, string, string, *uint, error) {
+	uid, err := currentUserID(c)
+	if err != nil {
+		return models.User{}, "", "", nil, err
+	}
+
+	var user models.User
+	if err := database.DB.First(&user, uid).Error; err != nil {
+		return models.User{}, "", "", nil, c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
+	}
+
+	ownerKey, scope, ownerUserID := featureflags.OwnerKeyForUser(user)
+	return user, ownerKey, scope, ownerUserID, nil
+}
+
+func currentLLMOwner(c *fiber.Ctx) (models.User, string, string, error) {
+	user, ownerKey, scope, _, err := currentAccountOwner(c)
+	return user, ownerKey, scope, err
+}
+
+func normalizeLLMProvider(provider string) string {
+	return strings.ToLower(strings.TrimSpace(provider))
+}
+
+func isValidLLMProviderName(provider string) bool {
+	if len(provider) < 2 || len(provider) > 50 {
+		return false
+	}
+
+	for _, ch := range provider {
+		if ch >= 'a' && ch <= 'z' {
+			continue
+		}
+		if ch >= '0' && ch <= '9' {
+			continue
+		}
+		if ch == '-' || ch == '_' {
+			continue
+		}
+		return false
+	}
+
+	return true
 }

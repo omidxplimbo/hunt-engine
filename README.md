@@ -2,7 +2,7 @@
 
 Continuous reconnaissance, asset monitoring, crawling, and security-finding platform for bug bounty hunters, security researchers, and red teams.
 
-Current release branch: **v3.4.0**
+Current release branch: **v3.5.0**
 
 ---
 
@@ -24,6 +24,122 @@ Core capabilities:
 - Per-user queues and scan limits
 - Per-account Telegram notifications
 - Fresh asset screenshot upload and cleanup
+
+- Target PDF reporting
+- AI-ready analysis and recommendation data layer
+- Commercial-grade deterministic target analysis
+- Optional LLM-assisted report narrative
+- Evidence-based target recommendations
+- Audit logs for report, AI, recommendation, and Nuclei draft actions
+- Global and account-scoped feature flags
+- AI-generated Nuclei template draft workflow with human approval guardrails
+
+---
+
+## v3.5.0 Highlights
+
+### Target PDF Reporting
+
+Target-level PDF reporting is now available.
+
+- Generates a professional downloadable PDF report per target.
+- Includes target metadata, scan state, assets, URLs, findings, evidence summaries, severity/source breakdowns, and analysis output.
+- Uses existing stored data and does not require an LLM token.
+- PDF report downloads are audit logged.
+- Controlled by feature flag `feature.target_pdf_report`.
+
+### AI-Ready Data Layer
+
+v3.5.0 adds the storage foundation for AI-assisted security workflows.
+
+New data entities include:
+
+- `ai_analyses`
+- `ai_recommendations`
+- `audit_logs`
+
+These tables provide normalized storage for target analysis, recommendations, and operator/security-relevant actions.
+
+### Commercial-Grade Target Analysis
+
+Target analysis now uses deterministic commercial guardrails.
+
+- Generates target-scoped analysis rows with `provider = local`.
+- Uses `model = deterministic-target-v1`.
+- Produces evidence-based `risk_score`, `risk_level`, `confidence_score`, `coverage_score`, `exposure_score`, and `finding_quality_score`.
+- Separates true security risk from coverage gaps.
+- Prevents reconnaissance-only or coverage-gap signals from inflating critical risk.
+- Keeps deterministic logic authoritative for scoring, severity, prioritization, and finding validity.
+
+### Optional LLM-Assisted Narrative
+
+LLM-assisted target analysis can add narrative content when a valid account-scoped provider is configured.
+
+- Deterministic risk scoring remains authoritative.
+- LLM output is limited to narrative fields such as executive summary, customer summary, remediation plan, report notes, and validation notes.
+- Missing, invalid, or unsupported provider settings safely fall back to deterministic output.
+- Supports account-scoped LLM provider configuration.
+- API keys are stored in the database and never returned to the frontend.
+- Provider config is cached in Redis and invalidated on update/delete.
+
+### Evidence-Based Recommendations
+
+Target recommendations are generated from stored findings, evidence, latest target analysis, and coverage gaps.
+
+- Generates deterministic, actionable recommendations.
+- Preserves deterministic guardrails.
+- Does not treat coverage gaps as vulnerabilities.
+- Aggregates repetitive signals such as exposed login/admin interface indicators.
+- Preserves user-decided recommendations during regeneration.
+- Hard-deletes regenerated open system recommendations to avoid soft-deleted duplicates.
+- Controlled by feature flag `feature.ai_recommendations`.
+
+### Audit Logs
+
+Audit logging now records important operator and system actions.
+
+Covered v3.5.0 actions include:
+
+- `target.report_pdf.download`
+- `target.ai_analysis.generate`
+- `target.ai_recommendations.generate`
+- `nuclei.template_strategy.generate`
+- `nuclei.template_draft.generate`
+
+### Feature Flags
+
+Feature flags are available globally and per account.
+
+Global flags are managed through system configuration. Account-level feature access supports:
+
+- `inherit`
+- `enabled`
+- `disabled`
+
+Supported feature flags:
+
+- `feature.target_pdf_report`
+- `feature.ai_analysis`
+- `feature.llm_assisted_analysis`
+- `feature.ai_recommendations`
+- `feature.ai_nuclei_template_drafts`
+
+Admins share the `admin` owner scope. Non-admin users use their own `user:{id}` owner scope.
+
+### AI-Generated Nuclei Template Draft Workflow
+
+The Nuclei AI draft workflow is hardened for production safety.
+
+- Disabled by default.
+- Requires account feature flag `feature.ai_nuclei_template_drafts`.
+- Requires environment kill switch `NUCLEI_ALLOW_AI_TEMPLATES=true`.
+- Draft-only behavior.
+- No auto-save.
+- No auto-execute.
+- Requires human review, validation, and manual save.
+- Strategy and draft actions are audit logged.
+- API and UI expose disabled reasons.
+- Strategy output remains agent-ready while respecting deterministic safety guardrails.
 
 ---
 
@@ -472,40 +588,109 @@ Worker temporary workspace:
 
 ---
 
-## Roadmap
+## Release Status
 
 ### v3.5.0
 
-- AI-ready data layer
+v3.5.0 is complete and ready for release.
+
+Completed scope:
+
+- Target PDF Reporting
+- AI-ready Data Layer
 - `ai_analyses`
 - `ai_recommendations`
 - `audit_logs`
-- feature flags
-- AI-generated Nuclei template drafts with human approval
+- Account-scoped LLM provider configuration
+- LLM-assisted target analysis narrative
+- Commercial-grade deterministic target risk methodology
+- Global and account-scoped feature flags
+- Account Feature Access UI
+- AI-generated Nuclei template draft workflow with human approval guardrails
+
+Production safety notes:
+
+- Deterministic product logic remains authoritative for risk score, risk level, severity, priority, and finding validity.
+- LLM output is limited to narrative, interpretation, validation notes, remediation reasoning, and report text.
+- Coverage gaps are reported separately and do not inflate vulnerability severity.
+- Nuclei AI template drafts are disabled by default.
+- Nuclei AI template drafts require both account feature access and `NUCLEI_ALLOW_AI_TEMPLATES=true`.
+- Nuclei AI template drafts never auto-save or auto-execute.
+
+### v3.4.0
+
+v3.4.0 completed the structured-evidence security engine foundation:
+
+- Takeover Detection
+- JavaScript Intelligence
+- `evidence_json`
+- Better Finding Evidence UI
+- Custom Nuclei execution and ingestion fixes
+- Per-account Telegram notifications
+- Fresh asset screenshot notification support
+
+---
+
+## Roadmap
 
 ### v3.6.0
+
+Potential next milestones:
+
+- Business context and asset criticality model
+- Per-target risk policy configuration
+- Finding validation workflow and analyst review states
+- Recommendation lifecycle actions in UI
+- Report branding and customer-ready report templates
+- Scheduled report generation
+- Organization/workspace model
+- External LLM provider hardening and provider-specific validation
+- AI-assisted finding clustering and deduplication
+- AI-assisted remediation playbooks
+- Extended audit log UI and export
+- Billing/plan-aware feature entitlements
+
+### Future AI Agent Layer
+
+Planned AI agent capabilities should remain downstream of deterministic guardrails.
+
+Possible agents:
 
 - AI Triage Agent
 - AI Summary Agent
 - AI Report Agent
+- AI Remediation Agent
+- AI Nuclei Draft Assistant
+- AI-assisted recon recommendation agent
 
-### v3.7.0
+Guardrails:
 
-- AI-assisted recon recommendations
-- human-approved agent workflows
-- out-of-scope strategy and planning through target policies and recommendations
+- AI may add interpretation, correlation, explanation, validation hypotheses, remediation reasoning, and customer-facing narrative.
+- AI must not override deterministic source-of-truth fields such as risk score, risk level, severity, finding validity, or priority without explicit human approval and deterministic validation support.
 
 ---
 
-## Release Status
+## Current Release Summary
+
+v3.5.0 includes:
+
+- professional target PDF reports
+- deterministic commercial target analysis
+- optional LLM-assisted narrative
+- account-scoped LLM provider settings
+- deterministic target recommendations
+- AI-ready data layer
+- audit logging
+- global and account-scoped feature flags
+- Account Feature Access UI
+- hardened Nuclei AI draft workflow
 
 v3.4.0 includes:
 
 - takeover detection
 - JavaScript intelligence
-- structured finding evidence
-- better finding evidence UI
+- structured `evidence_json`
+- improved finding evidence UI
 - custom Nuclei execution and ingestion fixes
-- per-account Telegram notification settings
+- per-account Telegram notifications
 - fresh asset screenshot notifications
-- Redis-cached Telegram config resolution

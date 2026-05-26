@@ -56,7 +56,13 @@ func Connect() {
 		&models.TargetScanState{},
 		&models.SystemConfig{},
 		&models.UserTelegramConfig{},
-		&models.Finding{}, &models.NucleiTemplate{},
+		&models.UserLLMProviderConfig{},
+		&models.UserFeatureFlagConfig{},
+		&models.Finding{},
+		&models.AIAnalysis{},
+		&models.AIRecommendation{},
+		&models.AuditLog{},
+		&models.NucleiTemplate{},
 	)
 
 	if err != nil {

@@ -10,7 +10,9 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/api/dto"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/auditlog"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/featureflags"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/security/nuclei"
 )
 
@@ -24,9 +26,15 @@ func GetNucleiTargetTemplateStrategy(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "Invalid target id"})
 	}
 
-	var target models.Target
-	if err := database.DB.First(&target, uint(targetID)).Error; err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "Target not found"})
+	targetPtr, err := getAccessibleTarget(c, uint(targetID))
+	if err != nil {
+		return err
+	}
+	target := *targetPtr
+
+	_, ownerKey, scope, _, ownerErr := currentAccountOwner(c)
+	if ownerErr != nil {
+		return ownerErr
 	}
 
 	var assets []models.Asset
@@ -38,28 +46,76 @@ func GetNucleiTargetTemplateStrategy(c *fiber.Ctx) error {
 	}
 
 	cfg := nuclei.LoadConfig()
-	strategy := buildNucleiTargetTemplateStrategy(target, assets, cfg.AllowAITemplates)
+	featureEnabled := featureflags.IsEnabledForOwner(ownerKey, featureflags.KeyAINucleiTemplateDrafts)
+	aiDraftsEnabled := cfg.AllowAITemplates && featureEnabled
+	disabledReason := ""
+	if !featureEnabled {
+		disabledReason = "account feature flag is disabled"
+	} else if !cfg.AllowAITemplates {
+		disabledReason = "NUCLEI_ALLOW_AI_TEMPLATES is not enabled"
+	}
+
+	strategy := buildNucleiTargetTemplateStrategy(target, assets, aiDraftsEnabled)
+	strategy.FeatureEnabled = featureEnabled
+	strategy.EnvironmentEnabled = cfg.AllowAITemplates
+	strategy.DisabledReason = disabledReason
+	strategy.Scope = scope
+	strategy.OwnerKey = ownerKey
 
 	includeDraft := parseBoolQuery(c.Query("include_draft"))
 	validateDraft := parseBoolQuery(c.Query("validate"))
-	if includeDraft && cfg.AllowAITemplates && strategy.SuggestedDraftRequest != nil {
-		content, name, err := buildNucleiTemplateDraft(strategy.SuggestedDraftRequest)
-		if err != nil {
-			strategy.DraftError = err.Error()
-		} else {
-			generated := dto.NucleiTemplateDraftResponse{
-				Name:                name,
-				Content:             content,
-				DraftOnly:           true,
-				RequiresHumanReview: true,
-				Saved:               false,
+	if includeDraft {
+		switch {
+		case !aiDraftsEnabled:
+			strategy.DraftError = disabledReason
+		case strategy.SuggestedDraftRequest == nil:
+			strategy.DraftError = "no draft candidate was suggested for this target"
+		default:
+			content, name, err := buildNucleiTemplateDraft(strategy.SuggestedDraftRequest)
+			if err != nil {
+				strategy.DraftError = err.Error()
+			} else {
+				generated := dto.NucleiTemplateDraftResponse{
+					Name:                name,
+					Content:             content,
+					DraftOnly:           true,
+					RequiresHumanReview: true,
+					Saved:               false,
+				}
+				if validateDraft {
+					validation := runNucleiTemplateValidation(name, content)
+					generated.Validation = &validation
+				}
+				strategy.GeneratedDraft = &generated
 			}
-			if validateDraft {
-				validation := runNucleiTemplateValidation(name, content)
-				generated.Validation = &validation
-			}
-			strategy.GeneratedDraft = &generated
 		}
+	}
+
+	if uid, uidErr := currentUserID(c); uidErr == nil {
+		entityID := target.ID
+		_ = auditlog.Record(auditlog.Entry{
+			ActorUserID: &uid,
+			Action:      "nuclei.template_strategy.generate",
+			EntityType:  "target",
+			EntityID:    &entityID,
+			TargetID:    &target.ID,
+			IPAddress:   auditlog.ClientIP(c),
+			UserAgent:   auditlog.UserAgent(c),
+			Metadata: map[string]interface{}{
+				"target_id":              target.ID,
+				"root_domain":            target.RootDomain,
+				"include_draft":          includeDraft,
+				"validate_draft":         validateDraft,
+				"generated_draft":        strategy.GeneratedDraft != nil,
+				"feature_enabled":        featureEnabled,
+				"environment_enabled":    cfg.AllowAITemplates,
+				"ai_template_drafts":     aiDraftsEnabled,
+				"disabled_reason":        disabledReason,
+				"recommended_profile":    strategy.RecommendedProfile,
+				"recommended_tags":       strategy.RecommendedTags,
+				"recommended_placements": strategy.RecommendedPlacements,
+			},
+		})
 	}
 
 	return c.JSON(fiber.Map{"status": "success", "data": strategy})

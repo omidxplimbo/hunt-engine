@@ -109,3 +109,125 @@ export const putMyTelegramConfig = async (payload: TelegramConfigPayload) => {
   );
   return res.data;
 };
+
+// -----------------------------
+// LLM provider config
+// -----------------------------
+export interface LLMProviderConfig {
+  id?: number;
+  provider: string;
+  display_name: string;
+  api_key_saved: boolean;
+  base_url: string;
+  default_model: string;
+  enabled: boolean;
+  is_default: boolean;
+  scope?: string;
+  owner_key?: string;
+  updated_at?: string;
+}
+
+export interface LLMProviderPayload {
+  provider: string;
+  display_name: string;
+  api_key?: string;
+  base_url?: string;
+  default_model?: string;
+  enabled: boolean;
+  is_default: boolean;
+  clear_key?: boolean;
+}
+
+export const getMyLLMProviders = async () => {
+  const res = await apiClient.get<{
+    status: string;
+    data: { providers: LLMProviderConfig[]; scope: string; owner_key: string };
+  }>("/me/llm-providers");
+
+  return res.data.data;
+};
+
+export const putMyLLMProviders = async (providers: LLMProviderPayload[]) => {
+  const res = await apiClient.put<{ status: string; message: string }>(
+    "/me/llm-providers",
+    {
+      providers,
+    },
+  );
+
+  return res.data;
+};
+
+export const deleteMyLLMProvider = async (provider: string) => {
+  const p = encodeURIComponent(provider);
+  const res = await apiClient.delete<{ status: string; message: string }>(
+    `/me/llm-providers/${p}`,
+  );
+  return res.data;
+};
+
+// -----------------------------
+// Account-scoped feature flags
+// -----------------------------
+export const FEATURE_FLAGS = {
+  targetPDFReport: "feature.target_pdf_report",
+  aiAnalysis: "feature.ai_analysis",
+  llmAssistedAnalysis: "feature.llm_assisted_analysis",
+  aiRecommendations: "feature.ai_recommendations",
+  aiNucleiTemplateDrafts: "feature.ai_nuclei_template_drafts",
+} as const;
+
+export type FeatureFlagKey = (typeof FEATURE_FLAGS)[keyof typeof FEATURE_FLAGS];
+export type FeatureFlagState = "inherit" | "enabled" | "disabled";
+
+export interface AccountFeatureFlag {
+  key: FeatureFlagKey | string;
+  description: string;
+  default: boolean;
+  global_value: boolean;
+  state: FeatureFlagState;
+  effective: boolean;
+  source: "global" | "account" | string;
+  scope: string;
+  owner_key: string;
+}
+
+export interface MyFeatureFlagsData {
+  flags: AccountFeatureFlag[];
+  scope: string;
+  owner_key: string;
+}
+
+export interface PutMyFeatureFlagItem {
+  key: string;
+  state: FeatureFlagState;
+}
+
+export const getMyFeatureFlags = async () => {
+  const res = await apiClient.get<{
+    status: string;
+    data: MyFeatureFlagsData;
+  }>("/me/feature-flags");
+
+  return res.data.data;
+};
+
+export const putMyFeatureFlags = async (flags: PutMyFeatureFlagItem[]) => {
+  const res = await apiClient.put<{
+    status: string;
+    message: string;
+    data: MyFeatureFlagsData;
+  }>("/me/feature-flags", { flags });
+
+  return res.data;
+};
+
+export const isAccountFeatureEnabled = (
+  flags: AccountFeatureFlag[] | undefined,
+  key: FeatureFlagKey,
+  defaultValue: boolean,
+): boolean => {
+  const flag = flags?.find((item) => item.key === key);
+  if (!flag) return defaultValue;
+  return Boolean(flag.effective);
+};
