@@ -1,6 +1,7 @@
 package analysis
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/llmclient"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -18,11 +20,14 @@ const (
 	ProviderLocalDeterministic = "local"
 	ModelTargetDeterministicV1 = "deterministic-target-v1"
 	PromptTargetV1             = "target-analysis-v1"
+	PromptTargetLLMNarrativeV1 = "target-analysis-v1+llm-narrative-v1"
 )
 
 type TargetAnalysisInput struct {
 	TargetID        uint
 	CreatedByUserID *uint
+	UseLLM          bool
+	LLMOwnerKey     string
 }
 
 type countRow struct {
@@ -62,19 +67,49 @@ func GenerateTargetAnalysis(input TargetAnalysisInput) (*models.AIAnalysis, erro
 	inputDigest := hex.EncodeToString(sum[:])
 
 	output := buildTargetAnalysisOutput(snapshot)
+
+	provider := ProviderLocalDeterministic
+	model := ModelTargetDeterministicV1
+	promptVersion := PromptTargetV1
+
+	if input.UseLLM {
+		cfg, cfgErr := llmclient.ResolveDefault(input.LLMOwnerKey)
+		if cfgErr != nil {
+			output["llm_assisted"] = false
+			output["llm_fallback"] = true
+			output["llm_error"] = cfgErr.Error()
+		} else {
+			narrative, llmErr := llmclient.GenerateTargetNarrative(context.Background(), cfg, snapshot, output)
+			if llmErr != nil {
+				output["llm_assisted"] = false
+				output["llm_fallback"] = true
+				output["llm_provider"] = cfg.Provider
+				output["llm_model"] = cfg.Model
+				output["llm_error"] = llmErr.Error()
+			} else {
+				for key, value := range narrative {
+					output[key] = value
+				}
+				provider = cfg.Provider
+				model = cfg.Model
+				promptVersion = PromptTargetLLMNarrativeV1
+			}
+		}
+	}
+
 	outputJSON, _ := json.Marshal(output)
 
 	title := fmt.Sprintf("Target analysis: %s", target.RootDomain)
-	summary, _ := output["summary"].(string)
+	summary := analysisSummary(output)
 
 	row := models.AIAnalysis{
 		TargetID:        target.ID,
 		CreatedByUserID: input.CreatedByUserID,
 		Scope:           models.AIAnalysisScopeTarget,
 		Source:          "system",
-		Provider:        ProviderLocalDeterministic,
-		Model:           ModelTargetDeterministicV1,
-		PromptVersion:   PromptTargetV1,
+		Provider:        provider,
+		Model:           model,
+		PromptVersion:   promptVersion,
 		Status:          models.AIAnalysisStatusCompleted,
 		Title:           title,
 		Summary:         summary,
@@ -90,6 +125,18 @@ func GenerateTargetAnalysis(input TargetAnalysisInput) (*models.AIAnalysis, erro
 	}
 
 	return &row, nil
+}
+
+func analysisSummary(output map[string]interface{}) string {
+	for _, key := range []string{"executive_summary", "summary", "customer_summary"} {
+		if value, ok := output[key]; ok {
+			text := strings.TrimSpace(fmt.Sprint(value))
+			if text != "" && text != "<nil>" {
+				return text
+			}
+		}
+	}
+	return ""
 }
 
 func buildTargetSnapshot(target models.Target) (map[string]interface{}, error) {

@@ -208,9 +208,12 @@ func GetTargetAuditLogs(c *fiber.Ctx) error {
 // GenerateTargetAIAnalysis creates a deterministic local target analysis row.
 // This is the v3.5.0 ai_analyses foundation; external LLM providers are wired later.
 func GenerateTargetAIAnalysis(c *fiber.Ctx) error {
-	targetID, err := parseTargetIDParam(c)
-	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	id := c.Params("id")
+
+	var targetID uint
+	_, _ = fmt.Sscanf(id, "%d", &targetID)
+	if targetID == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "Invalid target id"})
 	}
 
 	target, err := getAccessibleTarget(c, targetID)
@@ -223,9 +226,30 @@ func GenerateTargetAIAnalysis(c *fiber.Ctx) error {
 		return err
 	}
 
+	req := struct {
+		UseLLM bool `json:"use_llm"`
+	}{}
+
+	if len(c.Body()) > 0 {
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "Invalid request body"})
+		}
+	}
+
+	llmOwnerKey := ""
+	if req.UseLLM {
+		_, ownerKey, _, ownerErr := currentLLMOwner(c)
+		if ownerErr != nil {
+			return ownerErr
+		}
+		llmOwnerKey = ownerKey
+	}
+
 	row, err := analysis.GenerateTargetAnalysis(analysis.TargetAnalysisInput{
 		TargetID:        target.ID,
 		CreatedByUserID: &uid,
+		UseLLM:          req.UseLLM,
+		LLMOwnerKey:     llmOwnerKey,
 	})
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
@@ -241,14 +265,18 @@ func GenerateTargetAIAnalysis(c *fiber.Ctx) error {
 		IPAddress:   auditlog.ClientIP(c),
 		UserAgent:   auditlog.UserAgent(c),
 		Metadata: map[string]interface{}{
-			"target_id":    target.ID,
-			"root_domain":  target.RootDomain,
-			"analysis_id":  row.ID,
-			"provider":     row.Provider,
-			"model":        row.Model,
-			"input_digest": row.InputDigest,
+			"target_id":      target.ID,
+			"root_domain":    target.RootDomain,
+			"use_llm":        req.UseLLM,
+			"llm_owner_key":  llmOwnerKey,
+			"provider":       row.Provider,
+			"model":          row.Model,
+			"prompt_version": row.PromptVersion,
 		},
 	})
 
-	return c.JSON(fiber.Map{"status": "success", "data": row})
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"status": "success",
+		"data":   row,
+	})
 }
