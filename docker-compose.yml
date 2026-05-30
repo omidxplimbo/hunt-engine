@@ -11,6 +11,7 @@ services:
     expose:
       - "8080"
     environment:
+      - USER_WORDLISTS_DIR=${USER_WORDLISTS_DIR:-/data/wordlists/users}
       - DB_HOST=postgres
       - DB_USER=${DB_USER:-hunter}
       - DB_PASSWORD=${DB_PASSWORD:?DB_PASSWORD is required}
@@ -67,7 +68,7 @@ services:
     ports:
       - "8888:80"
       - "4443:443"
-      - "4000:80"
+      - "${NGINX_PORT:-4000}:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/templates/default.conf.template:ro
       - ./nginx/nginx-init.conf:/etc/nginx/templates/init.conf.template:ro

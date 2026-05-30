@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # ================================================
 # Stage 1: Golang Builder (کامپایل ابزارهای Go و برنامه اصلی)
 # ================================================
@@ -26,7 +27,8 @@ RUN git clone --depth 1 https://github.com/blechschmidt/massdns.git /tmp/massdns
 # فاز ۲: پروبینگ
 RUN go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
 RUN go install -v github.com/projectdiscovery/cdncheck/cmd/cdncheck@latest
-RUN go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+ARG NUCLEI_VERSION=v3.8.0
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@${NUCLEI_VERSION}
 
 # فاز ۳: خزش و کشف محتوا
 RUN go install github.com/tomnomnom/waybackurls@latest

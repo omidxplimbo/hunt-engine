@@ -132,6 +132,11 @@ func main() {
 	api.Put("/me/subfinder/providers", handlers.PutMySubfinderProviders)
 	api.Delete("/me/subfinder/providers/:provider", handlers.DeleteMySubfinderProvider)
 
+	api.Get("/me/wordlists", handlers.GetMyWordlists)
+	api.Post("/me/wordlists/upload", handlers.UploadMyWordlistFile)
+	api.Post("/me/wordlists/upload-url", handlers.UploadMyWordlistURL)
+	api.Get("/me/wordlists/:id/download", handlers.DownloadMyWordlist)
+	api.Delete("/me/wordlists/:id", handlers.DeleteMyWordlist)
 	// 👇👇👇 روت‌های مدیریت کاربران (فقط ادمین)
 	adminUsers := api.Group("/users", middleware.AdminOnly())
 	adminUsers.Get("/", handlers.GetUsers)
@@ -151,8 +156,8 @@ func main() {
 	api.Get("/targets/:id/ai/recommendations", handlers.GetTargetAIRecommendations)
 	api.Post("/targets/:id/ai/recommendations/generate", handlers.GenerateTargetAIRecommendations)
 	api.Get("/targets/:id/agents/runs", handlers.GetTargetAgentRuns)
-		api.Post("/targets/:id/agents/triage/run", handlers.RunTargetTriageAgent)
-		api.Get("/targets/:id/audit-logs", handlers.GetTargetAuditLogs)
+	api.Post("/targets/:id/agents/triage/run", handlers.RunTargetTriageAgent)
+	api.Get("/targets/:id/audit-logs", handlers.GetTargetAuditLogs)
 
 	api.Get("/dashboard/stats", handlers.GetDashboardStats)
 	api.Get("/monitor/stats", handlers.GetMonitorData)

@@ -72,3 +72,9 @@ custom_wordlists/
 /custom_nuclei_templates/**
 !/custom_nuclei_templates/
 !/custom_nuclei_templates/.gitkeep
+
+# Local Hunt v3.5/v3.6 dev override and uploaded runtime data
+docker-compose.hunt35.override.yml
+docker-compose.hunt35.override.yml.bak
+docker-compose.yml.bak
+hunt35-wordlists/

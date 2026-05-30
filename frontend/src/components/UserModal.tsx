@@ -15,6 +15,8 @@ const defaultForm = {
   role: 'viewer',
   is_active: true,
   max_concurrent_scans: 1,
+  wordlist_max_file_size_mb: 10,
+  wordlist_max_total_size_mb: 100,
 };
 
 export const UserModal = ({ isOpen, onClose, user }: Props) => {
@@ -30,6 +32,8 @@ export const UserModal = ({ isOpen, onClose, user }: Props) => {
         role: user.role || 'viewer',
         is_active: user.is_active ?? true,
         max_concurrent_scans: Number(user.max_concurrent_scans || 1),
+        wordlist_max_file_size_mb: Math.round(Number(user.wordlist_max_file_size_bytes || 0) / 1048576),
+        wordlist_max_total_size_mb: Math.round(Number(user.wordlist_max_total_size_bytes || 0) / 1048576),
       });
     } else {
       setFormData(defaultForm);
@@ -165,6 +169,51 @@ export const UserModal = ({ isOpen, onClose, user }: Props) => {
               <option value="deactive">DEACTIVE</option>
             </select>
           </label>
+
+            <div>
+              <span className="mb-2 block text-xs uppercase tracking-widest text-hack-dim">
+                WORDLIST FILE LIMIT / MB
+              </span>
+              <input
+                type="number"
+                min="0"
+                value={formData.wordlist_max_file_size_mb}
+                onChange={(e) =>
+                  setFormData({
+                    ...formData,
+                    wordlist_max_file_size_mb: Math.max(0, Number(e.target.value || 0)),
+                  })
+                }
+                className="w-full border border-hack-border bg-black/60 px-4 py-3 font-mono text-hack-primary outline-none focus:border-hack-primary"
+                placeholder="0 = unlimited"
+              />
+              <p className="mt-2 text-xs leading-relaxed text-hack-dim">
+                Maximum size for each uploaded custom PureDNS wordlist. Use 0 for unlimited.
+              </p>
+            </div>
+
+            <div>
+              <span className="mb-2 block text-xs uppercase tracking-widest text-hack-dim">
+                TOTAL WORDLIST STORAGE / MB
+              </span>
+              <input
+                type="number"
+                min="0"
+                value={formData.wordlist_max_total_size_mb}
+                onChange={(e) =>
+                  setFormData({
+                    ...formData,
+                    wordlist_max_total_size_mb: Math.max(0, Number(e.target.value || 0)),
+                  })
+                }
+                className="w-full border border-hack-border bg-black/60 px-4 py-3 font-mono text-hack-primary outline-none focus:border-hack-primary"
+                placeholder="0 = unlimited"
+              />
+              <p className="mt-2 text-xs leading-relaxed text-hack-dim">
+                Maximum total storage for all custom wordlists owned by this user. Use 0 for unlimited.
+              </p>
+            </div>
+
 
           <div className="flex gap-3 pt-4">
             <button type="button" onClick={onClose} className="hack-btn-ghost flex-1 border border-hack-border py-3">
