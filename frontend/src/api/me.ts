@@ -176,6 +176,10 @@ export const FEATURE_FLAGS = {
   llmAssistedAnalysis: "feature.llm_assisted_analysis",
   aiRecommendations: "feature.ai_recommendations",
   aiNucleiTemplateDrafts: "feature.ai_nuclei_template_drafts",
+  agentRuns: "feature.agent_runs",
+  aiTriageAgent: "feature.ai_triage_agent",
+  aiSummaryAgent: "feature.ai_summary_agent",
+  aiReportAgent: "feature.ai_report_agent",
 } as const;
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[keyof typeof FEATURE_FLAGS];

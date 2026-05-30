@@ -645,3 +645,44 @@ export const deleteTargetPolicy = async (targetId: number) => {
 
   return response.data;
 };
+
+// --- Agent Runs ---
+
+export interface TargetAgentRun {
+  id: number;
+  target_id: number;
+  created_by_user_id?: number | null;
+  agent_type: string;
+  provider: string;
+  model: string;
+  status: string;
+  source: string;
+  policy_status: string;
+  input_digest: string;
+  input_json?: any;
+  output_json?: any;
+  error_message?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TargetAgentRunsResponse {
+  status: string;
+  data: TargetAgentRun[];
+  count: number;
+  total_count: number;
+  page: number;
+}
+
+export const getTargetAgentRuns = async (targetId: number, limit = 20) => {
+  const response = await apiClient.get<TargetAgentRunsResponse>(
+    `/targets/${targetId}/agents/runs`,
+    {
+      params: { limit },
+    },
+  );
+
+  return response.data;
+};
