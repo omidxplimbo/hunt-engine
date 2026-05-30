@@ -575,3 +575,123 @@ export const generateTargetAIRecommendations = async (targetId: number) => {
 
   return response.data;
 };
+
+
+// --- Target Policy ---
+
+export interface TargetPolicy {
+  id: number;
+  target_id: number;
+  created_by_user_id?: number | null;
+  platform_name: string;
+  program_url: string;
+  in_scope_patterns: string[] | string;
+  out_of_scope_patterns: string[] | string;
+  allowed_test_types: string[] | string;
+  disallowed_test_types: string[] | string;
+  max_test_intensity: string;
+  rate_limit_notes: string;
+  auth_required: boolean;
+  safe_testing_notes: string;
+  reporting_preferences: string;
+  business_context: string;
+  asset_criticality_default: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TargetPolicyPayload {
+  platform_name: string;
+  program_url: string;
+  in_scope_patterns: string[];
+  out_of_scope_patterns: string[];
+  allowed_test_types: string[];
+  disallowed_test_types: string[];
+  max_test_intensity: string;
+  rate_limit_notes: string;
+  auth_required: boolean;
+  safe_testing_notes: string;
+  reporting_preferences: string;
+  business_context: string;
+  asset_criticality_default: string;
+}
+
+export const getTargetPolicy = async (targetId: number) => {
+  const response = await apiClient.get<{
+    status: string;
+    data: TargetPolicy | null;
+  }>(`/targets/${targetId}/policy`);
+
+  return response.data.data;
+};
+
+export const putTargetPolicy = async (
+  targetId: number,
+  payload: TargetPolicyPayload,
+) => {
+  const response = await apiClient.put<{
+    status: string;
+    data: TargetPolicy;
+  }>(`/targets/${targetId}/policy`, payload);
+
+  return response.data.data;
+};
+
+export const deleteTargetPolicy = async (targetId: number) => {
+  const response = await apiClient.delete<{
+    status: string;
+    message: string;
+  }>(`/targets/${targetId}/policy`);
+
+  return response.data;
+};
+
+// --- Agent Runs ---
+
+export interface TargetAgentRun {
+  id: number;
+  target_id: number;
+  created_by_user_id?: number | null;
+  agent_type: string;
+  provider: string;
+  model: string;
+  status: string;
+  source: string;
+  policy_status: string;
+  input_digest: string;
+  input_json?: any;
+  output_json?: any;
+  error_message?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TargetAgentRunsResponse {
+  status: string;
+  data: TargetAgentRun[];
+  count: number;
+  total_count: number;
+  page: number;
+}
+
+export const getTargetAgentRuns = async (targetId: number, limit = 20) => {
+  const response = await apiClient.get<TargetAgentRunsResponse>(
+    `/targets/${targetId}/agents/runs`,
+    {
+      params: { limit },
+    },
+  );
+
+  return response.data;
+};
+
+export const runTargetTriageAgent = async (targetId: number) => {
+  const response = await apiClient.post<{
+    status: string;
+    data: TargetAgentRun;
+  }>(`/targets/${targetId}/agents/triage/run`);
+
+  return response.data.data;
+};

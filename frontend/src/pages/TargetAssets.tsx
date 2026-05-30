@@ -1,17 +1,6 @@
 import { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import {
-  getTargetAssets,
-  getTargetDetails,
-  getTargetURLs,
-  exportTargetIPs,
-  downloadAssets,
-  downloadURLs,
-  downloadTargetPDFReport,
-} from "../api/targets";
-import FindingsPanel from "../components/FindingsPanel";
-import AIAnalysisPanel from "../components/AIAnalysisPanel";
 import {
   ArrowDown,
   ArrowLeft,
@@ -29,23 +18,30 @@ import {
   Network,
   Search,
   Shield,
+  ShieldCheck,
   Terminal,
   XCircle,
 } from "lucide-react";
 import clsx from "clsx";
 import {
+  downloadAssets,
+  downloadTargetPDFReport,
+  downloadURLs,
+  exportTargetIPs,
+  getTargetAssets,
+  getTargetDetails,
+  getTargetURLs,
+} from "../api/targets";
+import {
   FEATURE_FLAGS,
   getMyFeatureFlags,
   isAccountFeatureEnabled,
 } from "../api/me";
+import FindingsPanel from "../components/FindingsPanel";
+import AIAnalysisPanel from "../components/AIAnalysisPanel";
+import TargetPolicyPanel from "../components/TargetPolicyPanel";
 
-const KNOWN_SOURCES = [
-  { id: "wayback", label: "Wayback" },
-  { id: "gau", label: "GAU" },
-  { id: "katana", label: "Katana" },
-  { id: "waymore", label: "Waymore" },
-  { id: "virustotal", label: "VirusTotal" },
-];
+type ActiveTab = "assets" | "urls" | "findings" | "analysis" | "policy";
 
 const KNOWN_ASSET_PROVIDERS = [
   { id: "subfinder", label: "Subfinder" },
@@ -58,7 +54,14 @@ const KNOWN_ASSET_PROVIDERS = [
   { id: "amass", label: "Amass" },
 ];
 
-type ActiveTab = "assets" | "urls" | "findings" | "analysis";
+const KNOWN_SOURCES = [
+  { id: "wayback", label: "Wayback" },
+  { id: "gau", label: "GAU" },
+  { id: "katana", label: "Katana" },
+  { id: "waymore", label: "Waymore" },
+  { id: "virustotal", label: "VirusTotal" },
+];
+
 
 const parseJSONList = (value: unknown): string[] => {
   if (Array.isArray(value)) return value.map(String);
@@ -301,6 +304,12 @@ const TargetAssets = () => {
     FEATURE_FLAGS.targetPDFReport,
     true,
   );
+
+  const featureTargetPolicy = isAccountFeatureEnabled(
+    accountFeatureFlags,
+    FEATURE_FLAGS.targetPolicy,
+    true,
+  );
   const featureAIAnalysis = isAccountFeatureEnabled(
     accountFeatureFlags,
     FEATURE_FLAGS.aiAnalysis,
@@ -322,6 +331,12 @@ const TargetAssets = () => {
       setActiveTab("assets");
     }
   }, [activeTab, featureAIAnalysis]);
+
+  useEffect(() => {
+    if (activeTab === "policy" && !featureTargetPolicy) {
+      setActiveTab("assets");
+    }
+  }, [activeTab, featureTargetPolicy]);
 
   if (!targetId)
     return (
@@ -502,7 +517,25 @@ const TargetAssets = () => {
           >
             <Link2 className="mr-1 h-4 w-4" /> Intel / URLs
           </button>
-          <button
+                      <button
+              onClick={() => featureTargetPolicy && setActiveTab("policy")}
+              disabled={!featureTargetPolicy}
+              title={
+                featureTargetPolicy
+                  ? "Target policy"
+                  : "Target policy is disabled by feature flag"
+              }
+              className={clsx(
+                "hack-btn flex-1 justify-center md:flex-none disabled:opacity-40",
+                activeTab === "policy"
+                  ? "bg-hack-primary text-black"
+                  : "bg-transparent text-hack-dim border-hack-dim/30",
+              )}
+            >
+              <ShieldCheck className="mr-1 h-4 w-4" /> Policy
+            </button>
+
+<button
             onClick={() => setActiveTab("findings")}
             className={clsx(
               "hack-btn flex-1 justify-center md:flex-none",
@@ -755,6 +788,8 @@ const TargetAssets = () => {
 
       {activeTab === "findings" ? (
         <FindingsPanel targetId={targetId} />
+      ) : activeTab === "policy" ? (
+        <TargetPolicyPanel targetId={targetId} enabled={featureTargetPolicy} />
       ) : activeTab === "analysis" ? (
         <AIAnalysisPanel
           targetId={targetId}

@@ -170,11 +170,16 @@ export const deleteMyLLMProvider = async (provider: string) => {
 // Account-scoped feature flags
 // -----------------------------
 export const FEATURE_FLAGS = {
+  targetPolicy: "feature.target_policy",
   targetPDFReport: "feature.target_pdf_report",
   aiAnalysis: "feature.ai_analysis",
   llmAssistedAnalysis: "feature.llm_assisted_analysis",
   aiRecommendations: "feature.ai_recommendations",
   aiNucleiTemplateDrafts: "feature.ai_nuclei_template_drafts",
+  agentRuns: "feature.agent_runs",
+  aiTriageAgent: "feature.ai_triage_agent",
+  aiSummaryAgent: "feature.ai_summary_agent",
+  aiReportAgent: "feature.ai_report_agent",
 } as const;
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[keyof typeof FEATURE_FLAGS];
@@ -231,3 +236,88 @@ export const isAccountFeatureEnabled = (
   if (!flag) return defaultValue;
   return Boolean(flag.effective);
 };
+
+// -----------------------------
+// Account custom wordlists
+// -----------------------------
+export interface MyWordlist {
+  id: number;
+  user_id: number;
+  name: string;
+  size_bytes: number;
+  sha256: string;
+  lines: number;
+  source: "file" | "url" | string;
+  created_at: string;
+  updated_at: string;
+  puredns_path: string;
+}
+
+export interface MyWordlistsData {
+  wordlists: MyWordlist[];
+  current_total_size_bytes: number;
+  max_file_size_bytes: number;
+  max_total_size_bytes: number;
+  unlimited: boolean;
+}
+
+export const getMyWordlists = async () => {
+  const res = await apiClient.get<{
+    status: string;
+    data: MyWordlistsData;
+  }>("/me/wordlists");
+
+  return res.data.data;
+};
+
+export const uploadMyWordlistFile = async (file: File) => {
+  const form = new FormData();
+  form.append("file", file);
+
+  const res = await apiClient.post<{
+    status: string;
+    data: MyWordlist;
+  }>("/me/wordlists/upload", form, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+
+  return res.data.data;
+};
+
+export const uploadMyWordlistURL = async (url: string) => {
+  const res = await apiClient.post<{
+    status: string;
+    data: MyWordlist;
+  }>("/me/wordlists/upload-url", { url });
+
+  return res.data.data;
+};
+
+export const downloadMyWordlist = async (id: number, name = "wordlist.txt") => {
+  const res = await apiClient.get(`/me/wordlists/${id}/download`, {
+    responseType: "blob",
+  });
+
+  const blob = new Blob([res.data], { type: "text/plain" });
+  const objectUrl = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = objectUrl;
+  link.download = name || "wordlist.txt";
+
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+
+  window.URL.revokeObjectURL(objectUrl);
+};
+
+export const deleteMyWordlist = async (id: number) => {
+  const res = await apiClient.delete<{
+    status: string;
+    message: string;
+  }>(`/me/wordlists/${id}`);
+
+  return res.data;
+};
+

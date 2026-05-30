@@ -22,6 +22,7 @@ import TelegramConfigPanel from "../components/TelegramConfigPanel";
 
 import { LLMProviderConfig } from "../components/LLMProviderConfig";
 import FeatureFlagsConfig from "../components/FeatureFlagsConfig";
+import WordlistsConfig from "../components/WordlistsConfig";
 const Account = () => {
   const {
     data: me,
@@ -219,6 +220,7 @@ const Account = () => {
       <LLMProviderConfig />
 
       <FeatureFlagsConfig />
+        <WordlistsConfig />
 
       <TelegramConfigPanel role={me.role} />
 

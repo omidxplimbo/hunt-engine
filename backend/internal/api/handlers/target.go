@@ -1310,36 +1310,80 @@ func ExportTargetIPs(c *fiber.Ctx) error {
 
 // GetWordlists لیست وردلیست‌های موجود را برمی‌گرداند
 func GetWordlists(c *fiber.Ctx) error {
-	wordlists := []map[string]string{}
+	type wordlistItem struct {
+		Name   string `json:"name"`
+		Path   string `json:"path"`
+		Type   string `json:"type"`
+		Size   int64  `json:"size_bytes,omitempty"`
+		Lines  int    `json:"line_count,omitempty"`
+		Source string `json:"source,omitempty"`
+	}
 
-	// وردلیست‌های پیش‌فرض در /wordlists
-	defaultWordlists := []string{
-		"/wordlists/common.txt", "/wordlists/params.txt"}
+	items := make([]wordlistItem, 0)
 
-	// وردلیست‌های سفارشی در /wordlists/custom
-	customWordlistsDir := "/wordlists/custom"
+	defaultDir := strings.TrimSpace(os.Getenv("WORDLISTS_DIR"))
+	if defaultDir == "" {
+		defaultDir = "/wordlists"
+	}
 
-	// بررسی وردلیست‌های پیش‌فرض
-	for _, wl := range defaultWordlists {
-		if _, err := os.Stat(wl); err == nil {
-			wordlists = append(wordlists, map[string]string{
-				"path": wl, "name": filepath.Base(wl), "type": "default"})
+	if entries, err := os.ReadDir(defaultDir); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+
+			name := entry.Name()
+			if !strings.EqualFold(filepath.Ext(name), ".txt") {
+				continue
+			}
+
+			items = append(items, wordlistItem{
+				Name:   name,
+				Path:   filepath.ToSlash(filepath.Join(defaultDir, name)),
+				Type:   "default",
+				Source: "system",
+			})
 		}
 	}
 
-	// بررسی وردلیست‌های سفارشی
-	if entries, err := os.ReadDir(customWordlistsDir); err == nil {
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				fullPath := filepath.Join(customWordlistsDir, entry.Name())
-				wordlists = append(wordlists, map[string]string{
-					"path": fullPath, "name": entry.Name(), "type": "custom"})
+	uid, err := currentUserID(c)
+	if err == nil && uid > 0 {
+		var rows []models.UserWordlist
+		if dbErr := database.DB.
+			Where("user_id = ?", uid).
+			Order("created_at desc, id desc").
+			Find(&rows).Error; dbErr != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"status":  "error",
+				"message": dbErr.Error(),
+			})
+		}
+
+		for _, row := range rows {
+			path := strings.TrimSpace(row.StoragePath)
+			if path == "" {
+				continue
 			}
+
+			name := filepath.Base(path)
+			if strings.TrimSpace(name) == "" || name == "." || name == "/" {
+				name = "custom-wordlist.txt"
+			}
+
+			items = append(items, wordlistItem{
+				Name:   name,
+				Path:   filepath.ToSlash(path),
+				Type:   "custom",
+				Size:   row.SizeBytes,
+				Source: "user",
+			})
 		}
 	}
 
 	return c.JSON(fiber.Map{
-		"status": "success", "data": wordlists})
+		"status": "success",
+		"data":   items,
+	})
 }
 
 // DownloadTargetAssets downloads the filtered assets as a text file

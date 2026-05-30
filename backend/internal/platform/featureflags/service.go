@@ -13,11 +13,16 @@ import (
 )
 
 const (
+	KeyTargetPolicy           = "feature.target_policy"
 	KeyTargetPDFReport        = "feature.target_pdf_report"
 	KeyAIAnalysis             = "feature.ai_analysis"
 	KeyLLMAssistedAnalysis    = "feature.llm_assisted_analysis"
 	KeyAIRecommendations      = "feature.ai_recommendations"
 	KeyAINucleiTemplateDrafts = "feature.ai_nuclei_template_drafts"
+	KeyAgentRuns              = "feature.agent_runs"
+	KeyAITriageAgent          = "feature.ai_triage_agent"
+	KeyAISummaryAgent         = "feature.ai_summary_agent"
+	KeyAIReportAgent          = "feature.ai_report_agent"
 
 	StateInherit  = "inherit"
 	StateEnabled  = "enabled"
@@ -48,6 +53,11 @@ type AccountFeatureFlag struct {
 
 var definitions = []Definition{
 	{
+		Key:         KeyTargetPolicy,
+		Default:     true,
+		Description: "Enable target policy configuration used by AI agents, reporting, and future policy-aware workflows.",
+	},
+	{
 		Key:         KeyTargetPDFReport,
 		Default:     true,
 		Description: "Enable target-level downloadable PDF reports.",
@@ -71,6 +81,26 @@ var definitions = []Definition{
 		Key:         KeyAINucleiTemplateDrafts,
 		Default:     false,
 		Description: "Enable AI-generated Nuclei template draft workflows. Disabled by default.",
+	},
+	{
+		Key:         KeyAgentRuns,
+		Default:     true,
+		Description: "Enable target-scoped AI/manual agent run history.",
+	},
+	{
+		Key:         KeyAITriageAgent,
+		Default:     true,
+		Description: "Enable AI triage agent workflows. Agent output is advisory and policy-aware.",
+	},
+	{
+		Key:         KeyAISummaryAgent,
+		Default:     true,
+		Description: "Enable AI summary agent workflows. Agent output is advisory and policy-aware.",
+	},
+	{
+		Key:         KeyAIReportAgent,
+		Default:     true,
+		Description: "Enable AI report agent workflows. Report drafts require human validation.",
 	},
 }
 

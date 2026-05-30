@@ -54,14 +54,17 @@ func Connect() {
 		&models.FoundURL{},
 		&models.SubfinderProviderConfig{},
 		&models.TargetScanState{},
+		&models.TargetPolicy{},
 		&models.SystemConfig{},
 		&models.UserTelegramConfig{},
 		&models.UserLLMProviderConfig{},
 		&models.UserFeatureFlagConfig{},
+		&models.UserWordlist{},
 		&models.Finding{},
 		&models.AIAnalysis{},
 		&models.AIRecommendation{},
 		&models.AuditLog{},
+		&models.AgentRun{},
 		&models.NucleiTemplate{},
 	)
 
@@ -76,6 +79,12 @@ func Connect() {
 	_ = DB.Exec("UPDATE users SET is_active = true WHERE is_active IS NULL").Error
 	_ = DB.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS max_concurrent_scans integer DEFAULT 1").Error
 	_ = DB.Exec("UPDATE users SET max_concurrent_scans = 1 WHERE max_concurrent_scans IS NULL OR max_concurrent_scans < 1").Error
+
+	// Per-user PureDNS wordlist quota columns.
+	_ = DB.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS wordlist_max_file_size_bytes bigint DEFAULT 10485760").Error
+	_ = DB.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS wordlist_max_total_size_bytes bigint DEFAULT 104857600").Error
+	_ = DB.Exec("UPDATE users SET wordlist_max_file_size_bytes = 10485760 WHERE wordlist_max_file_size_bytes IS NULL").Error
+	_ = DB.Exec("UPDATE users SET wordlist_max_total_size_bytes = 104857600 WHERE wordlist_max_total_size_bytes IS NULL").Error
 
 	if err := migrateTenantScopedUniqueIndexes(DB); err != nil {
 		log.Fatal("❌ Tenant-scoped index migration failed! \n", err)
