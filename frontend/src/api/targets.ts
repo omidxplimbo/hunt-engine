@@ -686,3 +686,12 @@ export const getTargetAgentRuns = async (targetId: number, limit = 20) => {
 
   return response.data;
 };
+
+export const runTargetTriageAgent = async (targetId: number) => {
+  const response = await apiClient.post<{
+    status: string;
+    data: TargetAgentRun;
+  }>(`/targets/${targetId}/agents/triage/run`);
+
+  return response.data.data;
+};
