@@ -54,6 +54,7 @@ func Connect() {
 		&models.FoundURL{},
 		&models.SubfinderProviderConfig{},
 		&models.TargetScanState{},
+		&models.TargetPolicy{},
 		&models.SystemConfig{},
 		&models.UserTelegramConfig{},
 		&models.UserLLMProviderConfig{},

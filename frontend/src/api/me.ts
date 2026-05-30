@@ -170,6 +170,7 @@ export const deleteMyLLMProvider = async (provider: string) => {
 // Account-scoped feature flags
 // -----------------------------
 export const FEATURE_FLAGS = {
+  targetPolicy: "feature.target_policy",
   targetPDFReport: "feature.target_pdf_report",
   aiAnalysis: "feature.ai_analysis",
   llmAssistedAnalysis: "feature.llm_assisted_analysis",

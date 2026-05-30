@@ -13,6 +13,7 @@ import (
 )
 
 const (
+	KeyTargetPolicy           = "feature.target_policy"
 	KeyTargetPDFReport        = "feature.target_pdf_report"
 	KeyAIAnalysis             = "feature.ai_analysis"
 	KeyLLMAssistedAnalysis    = "feature.llm_assisted_analysis"
@@ -47,6 +48,11 @@ type AccountFeatureFlag struct {
 }
 
 var definitions = []Definition{
+	{
+		Key:         KeyTargetPolicy,
+		Default:     true,
+		Description: "Enable target policy configuration used by AI agents, reporting, and future policy-aware workflows.",
+	},
 	{
 		Key:         KeyTargetPDFReport,
 		Default:     true,

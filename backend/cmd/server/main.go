@@ -109,6 +109,9 @@ func main() {
 	api.Get("/targets/:id/urls/download", handlers.DownloadTargetURLs) // 👈 Download filtered URLs
 	api.Get("/targets/:id/ips", handlers.ExportTargetIPs)              // Export IPs به صورت txt
 	api.Get("/targets/:id/scan-state", handlers.GetTargetScanState)
+	api.Get("/targets/:id/policy", handlers.GetTargetPolicy)
+	api.Put("/targets/:id/policy", handlers.PutTargetPolicy)
+	api.Delete("/targets/:id/policy", handlers.DeleteTargetPolicy)
 	api.Get("/targets/:id/report.pdf", handlers.DownloadTargetPDFReport)
 
 	// 👇 Self-service (کاربر روی اکانت خودش)
