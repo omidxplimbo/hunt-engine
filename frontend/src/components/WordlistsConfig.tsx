@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Download,
@@ -127,7 +127,10 @@ const WordlistRow = ({
 
 const WordlistsConfig = () => {
   const queryClient = useQueryClient();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadProgressTimerRef = useRef<number | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const [url, setUrl] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -161,15 +164,61 @@ const WordlistsConfig = () => {
     queryClient.invalidateQueries({ queryKey: ["wordlists"] });
   };
 
+
+  const clearUploadProgressTimer = () => {
+    if (uploadProgressTimerRef.current !== null) {
+      window.clearInterval(uploadProgressTimerRef.current);
+      uploadProgressTimerRef.current = null;
+    }
+  };
+
+  const resetUploadProgress = () => {
+    clearUploadProgressTimer();
+    setUploadProgress(null);
+    setUploadLoadedBytes(0);
+    setUploadTotalBytes(0);
+  };
+
+  const selectUploadFile = (file: File | null) => {
+    setSelectedFile(file);
+    resetUploadProgress();
+    setMessage(null);
+    setErrorMsg(null);
+  };
+
+  const startUploadProgress = (file: File) => {
+    clearUploadProgressTimer();
+    setUploadProgress(1);
+    setUploadLoadedBytes(0);
+    setUploadTotalBytes(file.size || 0);
+
+    // Fallback UI progress. Real Axios progress events override this.
+    uploadProgressTimerRef.current = window.setInterval(() => {
+      setUploadProgress((prev) => {
+        if (prev === null) return 1;
+        if (prev >= 95) return prev;
+        return Math.min(95, prev + 1);
+      });
+    }, 700);
+  };
+
+  const handleFileDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDragging(false);
+
+    const file = event.dataTransfer.files?.[0] || null;
+    if (file) selectUploadFile(file);
+  };
+
+
   const fileMutation = useMutation({
     mutationFn: async () => {
       if (!selectedFile) throw new Error("Select a .txt wordlist first");
       if (!selectedFile.name.toLowerCase().endsWith(".txt")) {
         throw new Error("Only .txt wordlists are allowed");
       }
-      setUploadProgress(0);
-      setUploadLoadedBytes(0);
-      setUploadTotalBytes(selectedFile.size || 0);
+      startUploadProgress(selectedFile);
       return uploadMyWordlistFile(selectedFile, (percent, loaded, total) => {
         setUploadProgress(percent);
         setUploadLoadedBytes(loaded);
@@ -177,16 +226,17 @@ const WordlistsConfig = () => {
       });
     },
     onSuccess: (row) => {
+      clearUploadProgressTimer();
       setSelectedFile(null);
       setUploadProgress(100);
+      setUploadLoadedBytes(uploadTotalBytes || selectedFile?.size || 0);
       setErrorMsg(null);
       setMessage(`Wordlist uploaded: ${row.name}`);
+      window.setTimeout(() => resetUploadProgress(), 1500);
       refreshAllWordlistQueries();
     },
     onError: (err: any) => {
-      setUploadProgress(null);
-      setUploadLoadedBytes(0);
-      setUploadTotalBytes(0);
+      resetUploadProgress();
       setMessage(null);
       setErrorMsg(
         err?.response?.data?.message ||
@@ -363,16 +413,59 @@ const WordlistsConfig = () => {
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
             <input
-              type="file"
-              accept=".txt,text/plain"
-              onChange={(event) => {
-                  setSelectedFile(event.target.files?.[0] || null);
-                  setUploadProgress(null);
-                  setUploadLoadedBytes(0);
-                  setUploadTotalBytes(0);
+                ref={fileInputRef}
+                type="file"
+                accept=".txt,text/plain"
+                className="hidden"
+                onChange={(event) => {
+                  selectUploadFile(event.target.files?.[0] || null);
                 }}
-              className="w-full border border-hack-border bg-black px-3 py-2 text-sm text-hack-dim file:mr-3 file:border-0 file:bg-hack-primary file:px-3 file:py-1 file:font-mono file:text-xs file:uppercase file:text-black"
-            />
+              />
+
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => fileInputRef.current?.click()}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    fileInputRef.current?.click();
+                  }
+                }}
+                onDragEnter={(event) => {
+                  event.preventDefault();
+                  setIsDragging(true);
+                }}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  setIsDragging(true);
+                }}
+                onDragLeave={(event) => {
+                  event.preventDefault();
+                  setIsDragging(false);
+                }}
+                onDrop={handleFileDrop}
+                className={clsx(
+                  "group flex min-h-[150px] cursor-pointer flex-col items-center justify-center border border-dashed p-5 text-center transition-colors",
+                  isDragging
+                    ? "border-hack-primary bg-hack-primary/10"
+                    : "border-hack-border bg-black/30 hover:border-hack-primary/70 hover:bg-hack-primary/5",
+                )}
+              >
+                <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full border border-hack-border bg-black/50 text-hack-primary group-hover:border-hack-primary/70">
+                  <Upload className="h-6 w-6" />
+                </div>
+                <div className="font-mono text-sm uppercase tracking-wider text-white">
+                  Drag & drop .txt wordlist here
+                </div>
+                <div className="mt-1 text-xs text-hack-dim">
+                  or click to browse from your computer
+                </div>
+                {selectedFile ? (
+                  <div className="mt-3 max-w-full break-all border border-hack-primary/50 bg-hack-primary/10 px-3 py-2 font-mono text-xs text-hack-primary">
+                    {selectedFile.name} · {formatBytes(selectedFile.size)}
+                  </div>
+                ) : null}
+              </div>
             <button
               type="button"
               disabled={busy || !selectedFile}
