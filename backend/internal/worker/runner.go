@@ -318,7 +318,9 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 	if !mergeDone {
 		scanMarkRunning(targetID, "DISCOVERY", "MERGE")
 		discoverymerge.MergeSources(allSources, passiveSources)
-		discoverymerge.MergeSources(allSources, mutatedSources)
+		// Do not merge full AlterX candidate sources here. Large AlterX runs can
+		// produce millions of unresolved candidates. AlterX source attribution is
+		// applied later only for hosts that actually resolve via DNSX.
 		discoverymerge.MergeSources(allSources, purednsSources)
 
 		var err error
@@ -381,6 +383,15 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 
 		_ = utils.WriteJSONToFile(dnsxResultsFile, dnsxResults)
 		scanMarkStepDone(targetID, "DISCOVERY", "DNSX")
+	}
+
+	if targetConf.UseAlterx {
+		updateTargetPhase(targetID, "PHASE 1: ALTERX LIVE SOURCE ATTRIBUTION")
+		if err := discoverymerge.MergeFileSourcesForLive(allSources, alterxResultsFile, dnsxResults, "alterx"); err != nil {
+			log.Printf("⚠️ Failed to apply live-only AlterX sources: %v\n", err)
+		} else {
+			_ = utils.WriteJSONToFile(allSourcesFile, allSources)
+		}
 	}
 
 	log.Printf("✅ [Stage 3] Confirmed %d LIVE subdomains with IPs (including %d from puredns).\n", len(dnsxResults), len(purednsResults))
