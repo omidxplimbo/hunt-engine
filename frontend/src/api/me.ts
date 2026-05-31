@@ -287,14 +287,12 @@ export const uploadMyWordlistFile = async (
       "Content-Type": "multipart/form-data",
     },
     onUploadProgress: (event: any) => {
-      if (!onProgress) return;
-
       const loaded = Number(event.loaded || 0);
       const total = Number(event.total || file.size || 0);
       const percent =
         total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
 
-      onProgress(percent, loaded, total || undefined);
+      onProgress?.(percent, loaded, total || undefined);
     },
   });
 
