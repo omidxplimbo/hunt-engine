@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -22,6 +23,23 @@ import (
 
 	"github.com/gofiber/contrib/websocket"
 )
+
+
+func requestBodyLimitBytes() int {
+	defaultMB := 5120 // 5GB transport ceiling; app/user quota still applies after auth.
+
+	raw := os.Getenv("HUNT_MAX_REQUEST_BODY_MB")
+	if raw == "" {
+		return defaultMB * 1024 * 1024
+	}
+
+	mb, err := strconv.Atoi(raw)
+	if err != nil || mb <= 0 {
+		return defaultMB * 1024 * 1024
+	}
+
+	return mb * 1024 * 1024
+}
 
 func main() {
 	database.Connect()
@@ -47,7 +65,8 @@ func main() {
 	go worker.Start()
 
 	app := fiber.New(fiber.Config{
-		AppName: "Hunt Engine API v2.1.0 (Secured)",
+		AppName:   "Hunt Engine API v2.1.0 (Secured)",
+		BodyLimit: requestBodyLimitBytes(),
 	})
 
 	app.Use(cors.New(cors.Config{
