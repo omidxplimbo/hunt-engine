@@ -15,8 +15,9 @@ func RunPureDNS(ctx Context, rootDomain string, wordlists []string) (map[string]
 		return nil, err
 	}
 
+	results := make(map[string][]string)
 	if len(wordlists) == 0 {
-		return map[string][]string{}, nil
+		return results, nil
 	}
 
 	tempDir := ctx.TempDir
@@ -33,54 +34,97 @@ func RunPureDNS(ctx Context, rootDomain string, wordlists []string) (map[string]
 	if err := utils.WriteSliceToFile(resolversFile, resolvers); err != nil {
 		return nil, fmt.Errorf("failed to write resolvers file: %v", err)
 	}
+	defer os.Remove(resolversFile)
 
-	combinedWordlistFile := filepath.Join(tempDir, "puredns_combined_wordlist.txt")
-	ctx.updatePhase("PHASE 1: PUREDNS PREPARING WORDLIST")
-	ctx.heartbeat()
-	allWords := readPureDNSWordlists(wordlists)
-	if len(allWords) == 0 {
-		log.Printf("⚠️ No words found in wordlists, skipping puredns\n")
-		return map[string][]string{}, nil
-	}
-
-	if err := utils.WriteSliceToFile(combinedWordlistFile, allWords); err != nil {
-		return nil, fmt.Errorf("failed to write combined wordlist: %v", err)
-	}
-
-	ctx.updatePhase("PHASE 1: PUREDNS BRUTEFORCE")
-	ctx.heartbeat()
-	log.Printf(" Running puredns bruteforce with %d words for %s...\n", len(allWords), rootDomain)
-
-	output, err := ctx.RunCommand(
-		ctx.TargetID,
-		"puredns",
-		"bruteforce",
-		combinedWordlistFile,
-		rootDomain,
-		"-r", resolversFile,
-		"--trusted-only",
-		"--quiet",
-	)
-	if err != nil {
-		if err.Error() == "process killed by user request" {
-			return nil, err
+	validWordlists := make([]string, 0, len(wordlists))
+	for _, wlPath := range wordlists {
+		wlPath = strings.TrimSpace(wlPath)
+		if wlPath == "" {
+			continue
 		}
-		log.Printf("⚠️ Puredns error: %v\n", err)
-		return map[string][]string{}, nil
+
+		info, err := os.Stat(wlPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				log.Printf("⚠️ PureDNS wordlist not found: %s, skipping...\n", wlPath)
+				continue
+			}
+			log.Printf("⚠️ Failed to stat PureDNS wordlist %s: %v, skipping...\n", wlPath, err)
+			continue
+		}
+
+		if info.IsDir() {
+			log.Printf("⚠️ PureDNS wordlist is a directory: %s, skipping...\n", wlPath)
+			continue
+		}
+
+		validWordlists = append(validWordlists, wlPath)
 	}
 
-	ctx.updatePhase("PHASE 1: PUREDNS PARSING RESULTS")
+	if len(validWordlists) == 0 {
+		log.Printf("⚠️ No valid PureDNS wordlists found for %s, skipping puredns\n", rootDomain)
+		return results, nil
+	}
+
+	log.Printf("🔍 PureDNS will run %d wordlist(s) sequentially for %s\n", len(validWordlists), rootDomain)
+
+	for idx, wlPath := range validWordlists {
+		if ctx.stopped() {
+			return nil, fmt.Errorf("process killed by user request")
+		}
+
+		baseName := filepath.Base(wlPath)
+		ctx.updatePhase(fmt.Sprintf("PHASE 1: PUREDNS BRUTEFORCE WORDLIST %d/%d: %s", idx+1, len(validWordlists), baseName))
+		ctx.heartbeat()
+
+		log.Printf("🔍 Running PureDNS wordlist %d/%d for %s: %s\n", idx+1, len(validWordlists), rootDomain, wlPath)
+
+		output, err := ctx.RunCommand(
+			ctx.TargetID,
+			"puredns",
+			"bruteforce",
+			wlPath,
+			rootDomain,
+			"-r", resolversFile,
+			"--trusted-only",
+			"--quiet",
+		)
+		if err != nil {
+			if err.Error() == "process killed by user request" {
+				return nil, err
+			}
+			log.Printf("⚠️ PureDNS failed for wordlist %s: %v\n", wlPath, err)
+			continue
+		}
+
+		ctx.updatePhase(fmt.Sprintf("PHASE 1: PUREDNS PARSING WORDLIST %d/%d: %s", idx+1, len(validWordlists), baseName))
+		ctx.heartbeat()
+
+		subdomains := parsePureDNSSubdomains(ctx, string(output), rootDomain)
+		if len(subdomains) == 0 {
+			log.Printf("ℹ️ PureDNS wordlist %s produced no candidates for %s\n", wlPath, rootDomain)
+			continue
+		}
+
+		ctx.updatePhase(fmt.Sprintf("PHASE 1: PUREDNS DNSX VALIDATION WORDLIST %d/%d: %s", idx+1, len(validWordlists), baseName))
+		ctx.heartbeat()
+
+		wordlistResults := resolvePureDNSSubdomains(ctx, tempDir, subdomains, idx+1)
+		mergePureDNSLiveResults(results, wordlistResults)
+
+		log.Printf(
+			"✅ PureDNS wordlist %d/%d completed for %s: candidates=%d resolved_total=%d\n",
+			idx+1,
+			len(validWordlists),
+			rootDomain,
+			len(subdomains),
+			len(results),
+		)
+	}
+
+	ctx.updatePhase(fmt.Sprintf("PHASE 1: PUREDNS DONE (%d RESOLVED)", len(results)))
 	ctx.heartbeat()
-	subdomains := parsePureDNSSubdomains(ctx, string(output), rootDomain)
-
-	ctx.updatePhase("PHASE 1: PUREDNS DNSX VALIDATION")
-	ctx.heartbeat()
-	results := resolvePureDNSSubdomains(ctx, tempDir, subdomains)
-
-	log.Printf("✅ Puredns found %d live subdomains for %s\n", len(results), rootDomain)
-
-	_ = os.Remove(combinedWordlistFile)
-	_ = os.Remove(resolversFile)
+	log.Printf("✅ PureDNS found %d live subdomains for %s across %d wordlist(s)\n", len(results), rootDomain, len(validWordlists))
 
 	return results, nil
 }
@@ -102,32 +146,34 @@ func trustedResolvers() []string {
 	return out
 }
 
-func readPureDNSWordlists(wordlists []string) []string {
-	wordSet := make(map[string]bool)
-	var allWords []string
-
-	for _, wlPath := range wordlists {
-		if _, err := os.Stat(wlPath); os.IsNotExist(err) {
-			log.Printf("⚠️ Wordlist not found: %s, skipping...\n", wlPath)
+func mergePureDNSLiveResults(dst map[string][]string, src map[string][]string) {
+	for host, ips := range src {
+		host = strings.TrimSpace(host)
+		if host == "" || len(ips) == 0 {
 			continue
 		}
 
-		content, err := os.ReadFile(wlPath)
-		if err != nil {
-			log.Printf("⚠️ Failed to read wordlist %s: %v, skipping...\n", wlPath, err)
-			continue
-		}
-
-		for _, line := range strings.Split(string(content), "\n") {
-			word := strings.TrimSpace(line)
-			if word != "" && !strings.HasPrefix(word, "#") && !wordSet[word] {
-				wordSet[word] = true
-				allWords = append(allWords, word)
+		seen := make(map[string]bool)
+		for _, ip := range dst[host] {
+			ip = strings.TrimSpace(ip)
+			if ip != "" {
+				seen[ip] = true
 			}
 		}
-	}
+		for _, ip := range ips {
+			ip = strings.TrimSpace(ip)
+			if ip != "" {
+				seen[ip] = true
+			}
+		}
 
-	return allWords
+		merged := make([]string, 0, len(seen))
+		for ip := range seen {
+			merged = append(merged, ip)
+		}
+
+		dst[host] = merged
+	}
 }
 
 func parsePureDNSSubdomains(ctx Context, output, rootDomain string) []string {
@@ -143,13 +189,13 @@ func parsePureDNSSubdomains(ctx Context, output, rootDomain string) []string {
 	return subdomains
 }
 
-func resolvePureDNSSubdomains(ctx Context, tempDir string, subdomains []string) map[string][]string {
+func resolvePureDNSSubdomains(ctx Context, tempDir string, subdomains []string, batchNo int) map[string][]string {
 	results := make(map[string][]string)
 	if len(subdomains) == 0 {
 		return results
 	}
 
-	purednsInputFile := filepath.Join(tempDir, "puredns_dnsx_input.txt")
+	purednsInputFile := filepath.Join(tempDir, fmt.Sprintf("puredns_dnsx_%06d_input.txt", batchNo))
 	if err := utils.WriteSliceToFile(purednsInputFile, subdomains); err != nil {
 		log.Printf("⚠️ Failed to write puredns input for dnsx: %v\n", err)
 		for _, subdomain := range subdomains {
@@ -158,7 +204,7 @@ func resolvePureDNSSubdomains(ctx Context, tempDir string, subdomains []string) 
 		return results
 	}
 
-	purednsDNSXOutputFile := filepath.Join(tempDir, "puredns_dnsx_output.json")
+	purednsDNSXOutputFile := filepath.Join(tempDir, fmt.Sprintf("puredns_dnsx_%06d_output.json", batchNo))
 	dnsxResults, dnsxErr := RunDNSX(ctx, purednsInputFile, purednsDNSXOutputFile)
 	if dnsxErr == nil {
 		results = dnsxResults

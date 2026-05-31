@@ -169,6 +169,59 @@ func MergeSources(dst map[string][]string, src map[string][]string) {
 	}
 }
 
+// MergeFileSourcesForLive streams a huge candidate file and adds source labels
+// only for hosts that actually resolved. This keeps AlterX source attribution
+// without materializing millions of unresolved candidates in memory or JSON.
+func MergeFileSourcesForLive(dst map[string][]string, filename string, live map[string][]string, source string) error {
+	if filename == "" || len(live) == 0 || source == "" {
+		return nil
+	}
+
+	file, err := os.Open(filename)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+
+	addSource := func(host string) {
+		host = strings.TrimSpace(host)
+		if host == "" {
+			return
+		}
+		if _, ok := live[host]; !ok {
+			return
+		}
+
+		seen := make(map[string]bool)
+		for _, existing := range dst[host] {
+			existing = strings.TrimSpace(existing)
+			if existing != "" {
+				seen[existing] = true
+			}
+		}
+		seen[source] = true
+
+		merged := make([]string, 0, len(seen))
+		for item := range seen {
+			merged = append(merged, item)
+		}
+		sort.Strings(merged)
+		dst[host] = merged
+	}
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+
+	for scanner.Scan() {
+		addSource(scanner.Text())
+	}
+
+	return scanner.Err()
+}
+
 // MergeLiveResults merges already-resolved live DNS results, de-duplicating IPs per host.
 // It is used after DNSX to inject PureDNS results that were resolved earlier and
 // should not be revalidated by DNSX.
