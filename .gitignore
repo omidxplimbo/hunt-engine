@@ -78,3 +78,6 @@ docker-compose.hunt35.override.yml
 docker-compose.hunt35.override.yml.bak
 docker-compose.yml.bak
 hunt35-wordlists/
+
+# Runtime uploaded PureDNS wordlists
+hunt-wordlists/
