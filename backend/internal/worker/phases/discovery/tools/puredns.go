@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/utils"
 )
 
@@ -36,30 +37,7 @@ func RunPureDNS(ctx Context, rootDomain string, wordlists []string) (map[string]
 	}
 	defer os.Remove(resolversFile)
 
-	validWordlists := make([]string, 0, len(wordlists))
-	for _, wlPath := range wordlists {
-		wlPath = strings.TrimSpace(wlPath)
-		if wlPath == "" {
-			continue
-		}
-
-		info, err := os.Stat(wlPath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				log.Printf("⚠️ PureDNS wordlist not found: %s, skipping...\n", wlPath)
-				continue
-			}
-			log.Printf("⚠️ Failed to stat PureDNS wordlist %s: %v, skipping...\n", wlPath, err)
-			continue
-		}
-
-		if info.IsDir() {
-			log.Printf("⚠️ PureDNS wordlist is a directory: %s, skipping...\n", wlPath)
-			continue
-		}
-
-		validWordlists = append(validWordlists, wlPath)
-	}
+	validWordlists := resolvePureDNSWordlistPaths(ctx, wordlists)
 
 	if len(validWordlists) == 0 {
 		log.Printf("⚠️ No valid PureDNS wordlists found for %s, skipping puredns\n", rootDomain)
@@ -127,6 +105,150 @@ func RunPureDNS(ctx Context, rootDomain string, wordlists []string) (map[string]
 	log.Printf("✅ PureDNS found %d live subdomains for %s across %d wordlist(s)\n", len(results), rootDomain, len(validWordlists))
 
 	return results, nil
+}
+
+type pureDNSWordlistPathRow struct {
+	StoragePath string `gorm:"column:storage_path"`
+}
+
+func resolvePureDNSWordlistPaths(ctx Context, wordlists []string) []string {
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(wordlists))
+
+	add := func(raw, resolved string) {
+		resolved = strings.TrimSpace(resolved)
+		if resolved == "" || seen[resolved] {
+			return
+		}
+
+		info, err := os.Stat(resolved)
+		if err != nil {
+			if os.IsNotExist(err) {
+				log.Printf("⚠️ PureDNS wordlist not found: raw=%s resolved=%s, skipping...\n", raw, resolved)
+				return
+			}
+			log.Printf("⚠️ Failed to stat PureDNS wordlist raw=%s resolved=%s: %v, skipping...\n", raw, resolved, err)
+			return
+		}
+
+		if info.IsDir() {
+			log.Printf("⚠️ PureDNS wordlist is a directory: raw=%s resolved=%s, skipping...\n", raw, resolved)
+			return
+		}
+
+		seen[resolved] = true
+		out = append(out, resolved)
+	}
+
+	for _, raw := range wordlists {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+
+		// System/default wordlists and already-absolute custom storage paths.
+		if filepath.IsAbs(raw) {
+			add(raw, raw)
+			continue
+		}
+
+		// Account custom puredns path, e.g. user:1/my-list.txt.
+		if strings.HasPrefix(raw, "user:") {
+			if resolved := resolveUserPureDNSWordlistToken(raw); resolved != "" {
+				add(raw, resolved)
+			} else {
+				log.Printf("⚠️ Could not resolve PureDNS custom wordlist token: %s\n", raw)
+			}
+			continue
+		}
+
+		// Fallback for older UI/DB values that stored only the display name.
+		if resolved := resolveTargetOwnerPureDNSWordlistName(ctx.TargetID, raw); resolved != "" {
+			add(raw, resolved)
+			continue
+		}
+
+		// Final fallback: allow relative paths that exist from current process cwd.
+		add(raw, raw)
+	}
+
+	return out
+}
+
+func resolveUserPureDNSWordlistToken(token string) string {
+	value := strings.TrimPrefix(strings.TrimSpace(token), "user:")
+	parts := strings.SplitN(value, "/", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+
+	userIDRaw := strings.TrimSpace(parts[0])
+	name := strings.TrimSpace(parts[1])
+	if userIDRaw == "" || name == "" {
+		return ""
+	}
+
+	var userID uint
+	if _, err := fmt.Sscanf(userIDRaw, "%d", &userID); err != nil || userID == 0 {
+		return ""
+	}
+
+	var row pureDNSWordlistPathRow
+	err := database.DB.Raw(`
+		SELECT storage_path
+		FROM user_wordlists
+		WHERE deleted_at IS NULL
+		  AND user_id = ?
+		  AND (name = ? OR storage_path = ? OR storage_path LIKE ?)
+		ORDER BY id DESC
+		LIMIT 1
+	`, userID, name, name, "%/"+name).Scan(&row).Error
+	if err != nil {
+		log.Printf("⚠️ Failed to resolve PureDNS custom wordlist token %s: %v\n", token, err)
+		return ""
+	}
+
+	return strings.TrimSpace(row.StoragePath)
+}
+
+func resolveTargetOwnerPureDNSWordlistName(targetID uint, name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+
+	var target struct {
+		CreatedByUserID uint `gorm:"column:created_by_user_id"`
+	}
+
+	if err := database.DB.Table("targets").
+		Select("created_by_user_id").
+		Where("id = ?", targetID).
+		Scan(&target).Error; err != nil {
+		log.Printf("⚠️ Failed to resolve target owner for PureDNS wordlist %s: %v\n", name, err)
+		return ""
+	}
+
+	if target.CreatedByUserID == 0 {
+		return ""
+	}
+
+	var row pureDNSWordlistPathRow
+	err := database.DB.Raw(`
+		SELECT storage_path
+		FROM user_wordlists
+		WHERE deleted_at IS NULL
+		  AND user_id = ?
+		  AND (name = ? OR storage_path = ? OR storage_path LIKE ?)
+		ORDER BY id DESC
+		LIMIT 1
+	`, target.CreatedByUserID, name, name, "%/"+name).Scan(&row).Error
+	if err != nil {
+		log.Printf("⚠️ Failed to resolve target-owner PureDNS wordlist %s: %v\n", name, err)
+		return ""
+	}
+
+	return strings.TrimSpace(row.StoragePath)
 }
 
 func trustedResolvers() []string {
