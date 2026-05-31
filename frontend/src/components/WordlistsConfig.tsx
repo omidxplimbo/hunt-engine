@@ -131,6 +131,9 @@ const WordlistsConfig = () => {
   const [url, setUrl] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [uploadLoadedBytes, setUploadLoadedBytes] = useState(0);
+  const [uploadTotalBytes, setUploadTotalBytes] = useState(0);
 
   const query = useQuery({
     queryKey: ["me", "wordlists"],
@@ -164,15 +167,26 @@ const WordlistsConfig = () => {
       if (!selectedFile.name.toLowerCase().endsWith(".txt")) {
         throw new Error("Only .txt wordlists are allowed");
       }
-      return uploadMyWordlistFile(selectedFile);
+      setUploadProgress(0);
+      setUploadLoadedBytes(0);
+      setUploadTotalBytes(selectedFile.size || 0);
+      return uploadMyWordlistFile(selectedFile, (percent, loaded, total) => {
+        setUploadProgress(percent);
+        setUploadLoadedBytes(loaded);
+        setUploadTotalBytes(total || selectedFile.size || 0);
+      });
     },
     onSuccess: (row) => {
       setSelectedFile(null);
+      setUploadProgress(100);
       setErrorMsg(null);
       setMessage(`Wordlist uploaded: ${row.name}`);
       refreshAllWordlistQueries();
     },
     onError: (err: any) => {
+      setUploadProgress(null);
+      setUploadLoadedBytes(0);
+      setUploadTotalBytes(0);
       setMessage(null);
       setErrorMsg(
         err?.response?.data?.message ||
@@ -274,6 +288,28 @@ const WordlistsConfig = () => {
         </div>
       )}
 
+      {(fileMutation.isPending || uploadProgress !== null) && (
+        <div className="mb-4 border border-hack-border bg-black/40 p-3">
+          <div className="mb-2 flex items-center justify-between gap-3 font-mono text-xs">
+            <span className="uppercase tracking-wider text-hack-dim">
+              Upload progress
+            </span>
+            <span className="text-hack-primary">
+              {Math.max(0, Math.min(100, uploadProgress ?? 0))}%
+            </span>
+          </div>
+          <div className="h-2 overflow-hidden bg-black">
+            <div
+              className="h-2 bg-hack-primary transition-all duration-200"
+              style={{ width: `${Math.max(0, Math.min(100, uploadProgress ?? 0))}%` }}
+            />
+          </div>
+          <div className="mt-2 font-mono text-[10px] text-hack-dim">
+            {formatBytes(uploadLoadedBytes)} / {formatBytes(uploadTotalBytes)}
+          </div>
+        </div>
+      )}
+
       <div className="mb-4 grid gap-3 lg:grid-cols-4">
         <div className="border border-hack-border bg-black/20 p-3">
           <div className="font-mono text-[10px] uppercase tracking-wider text-hack-dim">
@@ -329,7 +365,12 @@ const WordlistsConfig = () => {
             <input
               type="file"
               accept=".txt,text/plain"
-              onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
+              onChange={(event) => {
+                  setSelectedFile(event.target.files?.[0] || null);
+                  setUploadProgress(null);
+                  setUploadLoadedBytes(0);
+                  setUploadTotalBytes(0);
+                }}
               className="w-full border border-hack-border bg-black px-3 py-2 text-sm text-hack-dim file:mr-3 file:border-0 file:bg-hack-primary file:px-3 file:py-1 file:font-mono file:text-xs file:uppercase file:text-black"
             />
             <button
