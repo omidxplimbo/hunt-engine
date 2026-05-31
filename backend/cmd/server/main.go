@@ -24,7 +24,6 @@ import (
 	"github.com/gofiber/contrib/websocket"
 )
 
-
 func requestBodyLimitBytes() int {
 	defaultMB := 5120 // 5GB transport ceiling; app/user quota still applies after auth.
 
@@ -119,6 +118,7 @@ func main() {
 	api.Post("/targets/:id/scan", handlers.StartDiscovery) // 👈 Restore scan endpoint
 	api.Post("/targets/:id/discovery", handlers.StartDiscovery)
 	api.Post("/targets/:id/resume", handlers.ResumeTargetScan)
+	api.Post("/targets/:id/restart", handlers.RestartTargetScan)
 	api.Post("/targets/:id/stop", handlers.StopScan)
 
 	// Asset Routes
