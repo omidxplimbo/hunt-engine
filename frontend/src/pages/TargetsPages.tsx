@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { getTargets, deleteTarget, stopTarget, startDiscovery } from '../api/targets';
+import { getTargets, deleteTarget, stopTarget, startDiscovery, restartTargetScan } from '../api/targets';
 import { Plus, Globe, Clock, Database, Trash2, Edit2, Square, Play, Download, Upload, User2 } from 'lucide-react';
 import { CreateTargetModal } from '../components/CreateTargetModal';
 import { EditTargetModal } from '../components/EditTargetModal';
@@ -30,6 +30,13 @@ const TargetsPage = () => {
   const stopMutation = useMutation({
     mutationFn: stopTarget,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['targets'] }),
+  });
+
+  const restartMutation = useMutation({
+    mutationFn: (id: number) => restartTargetScan(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['targets'] });
+    },
   });
 
   const resumeMutation = useMutation({
@@ -122,9 +129,24 @@ const TargetsPage = () => {
                       </button>
                     )}
                     {(target.status === 'PAUSED' || target.status === 'READY') && (
+                      <>
+
+                      <button
+                        onClick={() => {
+                          if (window.confirm('Fresh restart this target scan? Checkpoints/temp scan state will be reset, but existing assets/findings remain.')) {
+                            restartMutation.mutate(target.id);
+                          }
+                        }}
+                        className="p-2 hover:text-yellow-400 transition-colors"
+                        title="FRESH RESTART"
+                      >
+                        ↻
+                      </button>
                       <button onClick={() => resumeMutation.mutate(target.id)} className="p-2 hover:text-hack-primary transition-colors" title="EXECUTE">
                         <Play size={18} />
                       </button>
+
+                      </>
                     )}
                     <Link to={`/targets/${target.id}`} className="text-hack-primary hover:text-white transition-colors">
                       DATA

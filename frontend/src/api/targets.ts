@@ -79,6 +79,11 @@ export const startDiscovery = async (id: number) => {
   await apiClient.post(`/targets/${id}/scan`);
 };
 
+// شروع دوباره از صفر: checkpoint/temp state پاک می‌شود ولی assets/findings قبلی حذف نمی‌شوند
+export const restartTargetScan = async (id: number, force = false) => {
+  await apiClient.post(`/targets/${id}/restart${force ? "?force=true" : ""}`);
+};
+
 // دریافت جزئیات کامل یک تارگت
 export const getTargetDetails = async (id: number) => {
   const response = await apiClient.get<{ status: string; data: TargetDetails }>(

@@ -19,6 +19,8 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/utils"
+	workerstate "github.com/omidxplimbo/hunt-engine/backend/internal/worker/state"
+	workerutils "github.com/omidxplimbo/hunt-engine/backend/internal/worker/utils"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -279,6 +281,74 @@ func UpdateTarget(c *fiber.Ctx) error {
 		"status": "success", "message": "Target updated successfully", "data": target})
 }
 
+func queuePayloadTargetID(payload string) (uint, bool) {
+	parts := strings.SplitN(strings.TrimSpace(payload), ":", 3)
+	if len(parts) < 3 {
+		return 0, false
+	}
+
+	id, err := strconv.ParseUint(strings.TrimSpace(parts[1]), 10, 64)
+	if err != nil || id == 0 {
+		return 0, false
+	}
+
+	return uint(id), true
+}
+
+func removeTargetQueuedJobs(targetID uint) {
+	keys := []string{redisq.QueueName}
+
+	if userKeys, err := redisq.UserQueueKeys(redisq.Ctx); err == nil {
+		keys = append(keys, userKeys...)
+	}
+
+	seenKeys := make(map[string]bool)
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		if key == "" || seenKeys[key] {
+			continue
+		}
+		seenKeys[key] = true
+
+		items, err := redisq.Client.LRange(redisq.Ctx, key, 0, -1).Result()
+		if err != nil {
+			continue
+		}
+
+		for _, item := range items {
+			itemTargetID, ok := queuePayloadTargetID(item)
+			if !ok || itemTargetID != targetID {
+				continue
+			}
+
+			_ = redisq.Client.LRem(redisq.Ctx, key, 0, item).Err()
+		}
+	}
+}
+
+func cleanupTargetRestartArtifacts(targetID uint) {
+	tempDir, _, err := workerutils.GetTargetTempDir(targetID)
+	if err == nil && strings.TrimSpace(tempDir) != "" {
+		_ = os.RemoveAll(tempDir)
+	}
+
+	lockDir := filepath.Join(workerutils.WorkerTempRoot, "locks", fmt.Sprintf("target_%d.lock", targetID))
+	_ = os.RemoveAll(lockDir)
+}
+
+func targetScanModulesOrDefault(target *models.Target) []string {
+	var modules []string
+	if target != nil {
+		_ = json.Unmarshal([]byte(target.ScanModules), &modules)
+	}
+
+	if len(modules) == 0 {
+		modules = []string{"DISCOVERY", "PROBING", "CRAWLING"}
+	}
+
+	return sortScanModules(modules)
+}
+
 // StartDiscovery هندلر شروع مجدد اسکن (هوشمند)
 func StartDiscovery(c *fiber.Ctx) error {
 	id := c.Params("id")
@@ -365,6 +435,89 @@ func StartDiscovery(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{
 		"status": "success", "message": fmt.Sprintf("Scan started. Next phase: %s", resumeModule)})
+}
+
+// RestartTargetScan starts a fresh scan for a target.
+// Unlike StartDiscovery/Resume, this clears scan checkpoints and target temp artifacts.
+// Existing assets/findings are intentionally preserved; only scan progress/checkpoints reset.
+func RestartTargetScan(c *fiber.Ctx) error {
+	id := c.Params("id")
+	targetID := uint(0)
+	_, _ = fmt.Sscanf(id, "%d", &targetID)
+
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	force := strings.EqualFold(c.Query("force"), "true") || c.Query("force") == "1"
+
+	var st models.TargetScanState
+	stErr := database.DB.Where("target_id = ?", target.ID).First(&st).Error
+
+	if target.Status == "SCANNING" && !force {
+		if stErr == nil && st.HeartbeatAt != nil && time.Since(*st.HeartbeatAt) < 2*time.Minute {
+			return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+				"status":  "error",
+				"message": "Target appears to be actively scanning. Stop it first, or retry restart with force=true after confirming no worker is active.",
+			})
+		}
+	}
+
+	modules := targetScanModulesOrDefault(target)
+	firstModule := modules[0]
+
+	sortedJSON, _ := json.Marshal(modules)
+
+	removeTargetQueuedJobs(target.ID)
+	cleanupTargetRestartArtifacts(target.ID)
+
+	if err := workerstate.ResetForNewRun(target.ID); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Failed to reset scan state",
+			"error":   err.Error(),
+		})
+	}
+
+	updateData := map[string]interface{}{
+		"status":         "QUEUED",
+		"current_phase":  fmt.Sprintf("QUEUED: FRESH RESTART %s...", firstModule),
+		"stop_requested": false,
+		"scan_modules":   string(sortedJSON),
+	}
+
+	if err := database.DB.Model(target).Updates(updateData).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Failed to update target restart state",
+			"error":   err.Error(),
+		})
+	}
+
+	taskPayload := fmt.Sprintf("%s:%d:%s", firstModule, target.ID, target.RootDomain)
+	if err := redisq.Client.RPush(redisq.Ctx, redisq.QueueNameForUser(target.CreatedByUserID), taskPayload).Err(); err != nil {
+		_ = database.DB.Model(target).Updates(map[string]interface{}{
+			"status":        "READY",
+			"current_phase": "RESTART QUEUE FAILED",
+		}).Error
+
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Failed to enqueue fresh restart",
+			"error":   err.Error(),
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"status":  "success",
+		"message": fmt.Sprintf("Fresh restart queued. First phase: %s", firstModule),
+		"data": fiber.Map{
+			"target_id":    target.ID,
+			"first_module": firstModule,
+			"force":        force,
+		},
+	})
 }
 
 // ResumeTargetScan is an alias for StartDiscovery (kept for clarity in UI/API).
