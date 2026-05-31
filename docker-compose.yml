@@ -28,6 +28,7 @@ services:
     volumes:
       # 👇 این خط برای وردلیست‌های سفارشی اضافه شد (برای آینده)
       - ./custom_wordlists:/wordlists/custom
+      - ${HUNT_WORDLISTS_DIR:-./hunt-wordlists}:/data/wordlists
       - ./custom_nuclei_templates:/data/nuclei/custom
       # 👇 persist worker temp workspace for crash-safe resume
       - hunt_workspaces:/tmp/hunt-engine
