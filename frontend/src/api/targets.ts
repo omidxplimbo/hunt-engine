@@ -939,3 +939,23 @@ export const createTargetAgentChatMessage = async (
 
   return response.data.data;
 };
+
+// Agent Action Dispatcher - v3.7.0 foundation
+export const dispatchTargetAgentAction = async (
+  targetId: number,
+  actionId: number,
+  note = "",
+) => {
+  const response = await apiClient.post<{
+    status: string;
+    data: {
+      action: TargetAgentAction;
+      dispatch: any;
+    };
+  }>(`/targets/${targetId}/agent-actions/${actionId}/dispatch`, {
+    dry_run: true,
+    note,
+  });
+
+  return response.data.data;
+};

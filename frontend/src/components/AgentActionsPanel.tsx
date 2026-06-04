@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ClipboardList,
   Loader2,
+  PlayCircle,
   RefreshCw,
   ShieldAlert,
   XCircle,
@@ -12,6 +13,7 @@ import {
 import clsx from "clsx";
 import {
   approveTargetAgentAction,
+  dispatchTargetAgentAction,
   getTargetAgentActions,
   proposeTargetAgentAction,
   rejectTargetAgentAction,
@@ -102,17 +104,21 @@ const ActionCard = ({
   busy,
   onApprove,
   onReject,
+  onDispatch,
 }: {
   action: TargetAgentAction;
   busy: boolean;
   onApprove: (action: TargetAgentAction) => void;
   onReject: (action: TargetAgentAction) => void;
+  onDispatch: (action: TargetAgentAction) => void;
 }) => {
   const policyCheck = parseJSONValue(action.policy_check_json);
   const canApprove =
     action.status === "proposed" && action.policy_status !== "blocked";
   const canReject =
     action.status === "proposed" || action.status === "approved";
+  const canDispatch =
+    action.status === "approved" && action.policy_status !== "blocked";
 
   return (
     <div className="border border-hack-border bg-black/20 p-4">
@@ -210,6 +216,16 @@ const ActionCard = ({
         >
           <XCircle className="h-3 w-3" /> Reject
         </button>
+
+        <button
+          type="button"
+          onClick={() => onDispatch(action)}
+          disabled={!canDispatch || busy}
+          className="hack-btn-ghost border border-hack-warning/70 px-3 py-1 text-[10px] uppercase tracking-wider text-hack-warning disabled:opacity-50"
+          title="Record dispatcher preview. Real execution is disabled in v3.7.0."
+        >
+          <PlayCircle className="h-3 w-3" /> Dispatch Preview
+        </button>
       </div>
     </div>
   );
@@ -286,10 +302,24 @@ const AgentActionsPanel = ({ targetId, enabled = true }: Props) => {
     },
   });
 
+  const dispatchMutation = useMutation({
+    mutationFn: (action: TargetAgentAction) =>
+      dispatchTargetAgentAction(
+        targetId,
+        action.id,
+        "dispatcher preview requested from target analysis UI",
+      ),
+    onSuccess: () => {
+      setMessage("Dispatcher preview recorded. Real execution remains disabled.");
+      refresh();
+    },
+  });
+
   const busy =
     proposeMutation.isPending ||
     approveMutation.isPending ||
-    rejectMutation.isPending;
+    rejectMutation.isPending ||
+    dispatchMutation.isPending;
 
   if (!enabled) {
     return null;
@@ -343,14 +373,16 @@ const AgentActionsPanel = ({ targetId, enabled = true }: Props) => {
         </div>
       )}
 
-      {(proposeMutation.error || approveMutation.error || rejectMutation.error) && (
+      {(proposeMutation.error || approveMutation.error || rejectMutation.error || dispatchMutation.error) && (
         <div className="mb-3 border border-hack-danger/60 bg-hack-danger/10 p-3 font-mono text-sm text-hack-danger">
           {(proposeMutation.error as any)?.response?.data?.message ||
             (approveMutation.error as any)?.response?.data?.message ||
             (rejectMutation.error as any)?.response?.data?.message ||
+            (dispatchMutation.error as any)?.response?.data?.message ||
             (proposeMutation.error as any)?.message ||
             (approveMutation.error as any)?.message ||
             (rejectMutation.error as any)?.message ||
+            (dispatchMutation.error as any)?.message ||
             "Agent action operation failed"}
         </div>
       )}
@@ -407,6 +439,7 @@ const AgentActionsPanel = ({ targetId, enabled = true }: Props) => {
               busy={busy}
               onApprove={(item) => approveMutation.mutate(item)}
               onReject={(item) => rejectMutation.mutate(item)}
+              onDispatch={(item) => dispatchMutation.mutate(item)}
             />
           ))}
         </div>

@@ -137,6 +137,7 @@ func main() {
 	api.Post("/targets/:id/agent-actions/propose", handlers.ProposeTargetAgentAction)
 	api.Post("/targets/:id/agent-actions/:action_id/approve", handlers.ApproveTargetAgentAction)
 	api.Post("/targets/:id/agent-actions/:action_id/reject", handlers.RejectTargetAgentAction)
+	api.Post("/targets/:id/agent-actions/:action_id/dispatch", handlers.DispatchTargetAgentAction)
 	// Agent Chat Routes
 	api.Get("/targets/:id/agent-chat/sessions", handlers.GetTargetAgentChatSessions)
 	api.Post("/targets/:id/agent-chat/sessions", handlers.CreateTargetAgentChatSession)
