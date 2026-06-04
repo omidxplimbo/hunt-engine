@@ -34,6 +34,9 @@ type ReportData struct {
 	RecentURLs       []models.FoundURL
 	AssetChanges     []models.AssetHistory
 	LatestAnalysis   *models.AIAnalysis
+	LatestSummaryRun *models.AgentRun
+	LatestTriageRun  *models.AgentRun
+	LatestReportRun  *models.AgentRun
 }
 
 type ReportCounts struct {
@@ -193,6 +196,16 @@ func Load(targetID uint) (*ReportData, error) {
 		data.LatestAnalysis = &latestAnalysis
 	}
 
+	if row := latestAgentRun(targetID, models.AgentRunTypeSummary); row != nil {
+		data.LatestSummaryRun = row
+	}
+	if row := latestAgentRun(targetID, models.AgentRunTypeTriage); row != nil {
+		data.LatestTriageRun = row
+	}
+	if row := latestAgentRun(targetID, models.AgentRunTypeReport); row != nil {
+		data.LatestReportRun = row
+	}
+
 	return data, nil
 }
 
@@ -232,6 +245,17 @@ func countFindingsBy(targetID uint, field string) (map[string]int64, error) {
 	return out, nil
 }
 
+func latestAgentRun(targetID uint, agentType string) *models.AgentRun {
+	var row models.AgentRun
+	if err := database.DB.
+		Where("target_id = ? AND agent_type = ? AND status = ?", targetID, agentType, models.AgentRunStatusCompleted).
+		Order("created_at DESC").
+		First(&row).Error; err != nil {
+		return nil
+	}
+	return &row
+}
+
 func Filename(data *ReportData) string {
 	domain := strings.TrimSpace(data.Target.RootDomain)
 	if domain == "" {
@@ -266,6 +290,7 @@ func Render(data *ReportData) ([]byte, error) {
 	paragraph(pdf, "This report summarizes the current Hunt Engine reconnaissance and security findings for the selected target. It is generated from stored scan data, assets, URLs, findings, structured evidence, and the latest deterministic target analysis when available. Risk is evidence-based; coverage gaps are reported separately and do not inflate severity.")
 	metricsGrid(pdf, data)
 	analysisSection(pdf, data)
+	agentRunsSection(pdf, data)
 	scanStateSection(pdf, data)
 	assetAndURLSection(pdf, data)
 	findingSummarySection(pdf, data)
@@ -557,6 +582,206 @@ func stringListFromAnalysis(value interface{}) []string {
 		}
 	}
 	return out
+}
+
+func agentRunsSection(pdf *gofpdf.Fpdf, data *ReportData) {
+	if data.LatestSummaryRun == nil && data.LatestTriageRun == nil && data.LatestReportRun == nil {
+		return
+	}
+
+	ensureSpace(pdf, 50)
+	sectionTitle(pdf, "Advisory Agent Outputs")
+	paragraph(pdf, "This section summarizes the latest advisory agent outputs. Agent outputs are draft guidance only: they do not override deterministic findings, severity, target risk score, policy enforcement, or human validation requirements. Report drafts must not be submitted automatically.")
+
+	agentRunSummaryBlock(pdf, "Summary Agent", data.LatestSummaryRun)
+	agentRunTriageBlock(pdf, "Triage Agent", data.LatestTriageRun)
+	agentRunReportBlock(pdf, "Report Agent Draft", data.LatestReportRun)
+}
+
+func agentRunMeta(run *models.AgentRun) string {
+	if run == nil {
+		return ""
+	}
+	return fmt.Sprintf(
+		"Agent run #%d - %s/%s - policy: %s - generated at %s",
+		run.ID,
+		emptyDash(run.Provider),
+		emptyDash(run.Model),
+		emptyDash(run.PolicyStatus),
+		run.CreatedAt.UTC().Format(time.RFC3339),
+	)
+}
+
+func agentOutputMap(raw []byte) map[string]interface{} {
+	out := map[string]interface{}{}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || !json.Valid(trimmed) {
+		return out
+	}
+	_ = json.Unmarshal(trimmed, &out)
+	return out
+}
+
+func agentRunSummaryBlock(pdf *gofpdf.Fpdf, title string, run *models.AgentRun) {
+	if run == nil {
+		return
+	}
+
+	output := agentOutputMap(run.OutputJSON)
+	ensureSpace(pdf, 28)
+	analysisSubTitle(pdf, title)
+	paragraph(pdf, agentRunMeta(run))
+
+	summary := analysisString(output, "attack_surface_summary")
+	if summary != "" {
+		paragraph(pdf, summary)
+	}
+
+	coverage := interfaceMap(output["coverage_summary"])
+	rows := [][2]string{
+		{"Total Assets", fmt.Sprint(coverage["total_assets"])},
+		{"Live Assets", fmt.Sprint(coverage["total_live_assets"])},
+		{"Findings", fmt.Sprint(coverage["total_findings"])},
+		{"URLs", fmt.Sprint(coverage["total_urls"])},
+	}
+	keyValueTable(pdf, rows)
+
+	if narrative := analysisString(output, "risk_narrative"); narrative != "" {
+		paragraph(pdf, "Risk narrative: "+narrative)
+	}
+
+	analysisBulletList(pdf, "Summary Agent - What To Test Next", stringListFromAnalysis(output["what_to_test_next"]), 6)
+	analysisBulletList(pdf, "Summary Agent - Policy Safety Notes", stringListFromAnalysis(output["policy_safety_notes"]), 5)
+}
+
+func agentRunTriageBlock(pdf *gofpdf.Fpdf, title string, run *models.AgentRun) {
+	if run == nil {
+		return
+	}
+
+	output := agentOutputMap(run.OutputJSON)
+	ensureSpace(pdf, 28)
+	analysisSubTitle(pdf, title)
+	paragraph(pdf, agentRunMeta(run))
+
+	if summary := analysisString(output, "summary"); summary != "" {
+		paragraph(pdf, summary)
+	}
+
+	findings := interfaceList(output["top_interesting_findings"])
+	if len(findings) > 0 {
+		analysisSubTitle(pdf, "Triage Agent - Top Interesting Findings")
+		tableHeader(pdf, []string{"Finding", "Score", "Signal", "Reason"}, []float64{34, 18, 34, 92})
+
+		limit := len(findings)
+		if limit > 6 {
+			limit = 6
+		}
+
+		for _, raw := range findings[:limit] {
+			finding := interfaceMap(raw)
+			reasons := stringListFromAnalysis(finding["why_interesting"])
+			reason := ""
+			if len(reasons) > 0 {
+				reason = reasons[0]
+			}
+
+			ensureSpace(pdf, 8)
+			tableRow(pdf, []string{
+				ellipsize("#"+fmt.Sprint(finding["finding_id"])+" "+fmt.Sprint(finding["title"]), 30),
+				ellipsize(fmt.Sprint(finding["interest_score"]), 10),
+				ellipsize(fmt.Sprint(finding["source_tool"])+" / "+fmt.Sprint(finding["category"]), 28),
+				ellipsize(reason, 70),
+			}, []float64{34, 18, 34, 92})
+		}
+		pdf.Ln(2)
+	}
+
+	analysisBulletList(pdf, "Triage Agent - Manual Validation Steps", stringListFromAnalysis(output["manual_validation_steps"]), 6)
+	analysisBulletList(pdf, "Triage Agent - Recommended Manual Tests", agentManualTestList(output["recommended_manual_tests"]), 6)
+}
+
+func agentRunReportBlock(pdf *gofpdf.Fpdf, title string, run *models.AgentRun) {
+	if run == nil {
+		return
+	}
+
+	output := agentOutputMap(run.OutputJSON)
+	candidate := interfaceMap(output["report_candidate"])
+
+	ensureSpace(pdf, 34)
+	analysisSubTitle(pdf, title)
+	paragraph(pdf, agentRunMeta(run))
+
+	reportTitle := strings.TrimSpace(fmt.Sprint(candidate["title"]))
+	if reportTitle == "" || reportTitle == "<nil>" {
+		reportTitle = "Draft report candidate"
+	}
+
+	rows := [][2]string{
+		{"Draft Title", reportTitle},
+		{"Validation Status", fmt.Sprint(candidate["validation_status"])},
+		{"Confidence", fmt.Sprint(candidate["confidence"])},
+		{"Human Validation Required", fmt.Sprint(candidate["human_validation_required"])},
+		{"Do Not Auto-submit", fmt.Sprint(candidate["do_not_submit_automatically"])},
+	}
+	keyValueTable(pdf, rows)
+
+	if summary := strings.TrimSpace(fmt.Sprint(candidate["summary"])); summary != "" && summary != "<nil>" {
+		paragraph(pdf, summary)
+	}
+
+	impact := strings.TrimSpace(fmt.Sprint(candidate["impact_hypothesis"]))
+	if impact == "" || impact == "<nil>" {
+		impact = analysisString(output, "impact_hypothesis")
+	}
+	if impact != "" {
+		paragraph(pdf, "Impact hypothesis: "+impact)
+	}
+
+	analysisBulletList(pdf, "Report Agent - Evidence Needed", stringListFromAnalysis(firstNonNil(output["evidence_needed"], candidate["evidence_needed"])), 7)
+	analysisBulletList(pdf, "Report Agent - Validation Checklist", stringListFromAnalysis(firstNonNil(output["validation_checklist"], candidate["validation_checklist"])), 7)
+	analysisBulletList(pdf, "Report Agent - Platform Safe Wording", stringListFromAnalysis(firstNonNil(output["platform_safe_wording"], candidate["platform_safe_wording"])), 5)
+	analysisBulletList(pdf, "Report Agent - Suggested Fix", stringListFromAnalysis(candidate["suggested_fix"]), 5)
+}
+
+func agentManualTestList(value interface{}) []string {
+	items := interfaceList(value)
+	out := make([]string, 0, len(items))
+
+	for _, item := range items {
+		m := interfaceMap(item)
+		testType := strings.TrimSpace(fmt.Sprint(m["test_type"]))
+		why := strings.TrimSpace(fmt.Sprint(m["why"]))
+		priority := strings.TrimSpace(fmt.Sprint(m["priority"]))
+
+		parts := []string{}
+		if priority != "" && priority != "<nil>" {
+			parts = append(parts, "priority="+priority)
+		}
+		if testType != "" && testType != "<nil>" {
+			parts = append(parts, testType)
+		}
+		if why != "" && why != "<nil>" {
+			parts = append(parts, why)
+		}
+
+		text := strings.Join(parts, " - ")
+		if text != "" {
+			out = append(out, text)
+		}
+	}
+
+	return out
+}
+
+func firstNonNil(values ...interface{}) interface{} {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
 }
 
 func scanStateSection(pdf *gofpdf.Fpdf, data *ReportData) {
