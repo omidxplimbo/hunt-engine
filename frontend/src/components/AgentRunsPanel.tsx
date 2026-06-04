@@ -14,6 +14,7 @@ import {
 import clsx from "clsx";
 import {
   getTargetAgentRuns,
+  runTargetReportAgent,
   runTargetSummaryAgent,
   runTargetTriageAgent,
   type TargetAgentRun,
@@ -24,6 +25,7 @@ type Props = {
   agentRunsEnabled?: boolean;
   triageEnabled?: boolean;
   summaryEnabled?: boolean;
+  reportEnabled?: boolean;
 };
 
 const parseJSONValue = (value: any) => {
@@ -301,12 +303,70 @@ const TriageOutput = ({ output }: { output: any }) => {
   );
 };
 
+
+const ReportOutput = ({ output }: { output: any }) => {
+  const candidate = output?.report_candidate || {};
+  const evidenceNeeded = asArray(output?.evidence_needed || candidate?.evidence_needed);
+  const checklist = asArray(output?.validation_checklist || candidate?.validation_checklist);
+  const safeWording = asArray(output?.platform_safe_wording || candidate?.platform_safe_wording);
+
+  return (
+    <div className="space-y-4">
+      <div className="border border-hack-border bg-black/20 p-4">
+        <div className="mb-2 font-mono text-sm uppercase tracking-wider text-hack-primary">
+          Report Candidate
+        </div>
+        <div className="font-mono text-base text-white">
+          {candidate?.title || "Draft report candidate"}
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <StatusPill tone="warning">{candidate?.validation_status || "needs_manual_validation"}</StatusPill>
+          <StatusPill>{candidate?.confidence || "low confidence"}</StatusPill>
+          <StatusPill tone="danger">
+            {candidate?.human_validation_required === false ? "validation not marked" : "human validation required"}
+          </StatusPill>
+          <StatusPill tone="danger">
+            {candidate?.do_not_submit_automatically === false ? "auto-submit not blocked" : "do not auto-submit"}
+          </StatusPill>
+        </div>
+        {candidate?.summary && (
+          <div className="mt-4 text-sm text-hack-dim">{candidate.summary}</div>
+        )}
+      </div>
+
+      {candidate?.impact_hypothesis && (
+        <div className="border border-hack-warning/50 bg-hack-warning/10 p-4 text-sm text-hack-warning">
+          <div className="mb-2 font-mono text-sm uppercase tracking-wider">
+            Impact Hypothesis
+          </div>
+          {candidate.impact_hypothesis}
+        </div>
+      )}
+
+      <ListBlock title="Evidence Needed" items={evidenceNeeded} />
+      <ListBlock title="Validation Checklist" items={checklist} />
+      <ListBlock title="Platform Safe Wording" items={safeWording} />
+
+      {asArray(candidate?.steps_to_reproduce_draft).length > 0 && (
+        <ListBlock title="Steps To Reproduce Draft" items={asArray(candidate.steps_to_reproduce_draft)} />
+      )}
+
+      {asArray(candidate?.suggested_fix).length > 0 && (
+        <ListBlock title="Suggested Fix" items={asArray(candidate.suggested_fix)} />
+      )}
+    </div>
+  );
+};
+
+
 const AgentRunDetails = ({ run }: { run: TargetAgentRun }) => {
   const output = useMemo(() => parseJSONValue(run.output_json), [run.output_json]);
 
   return (
     <div className="space-y-4">
-      {run.agent_type === "summary" ? (
+      {run.agent_type === "report" ? (
+        <ReportOutput output={output} />
+      ) : run.agent_type === "summary" ? (
         <SummaryOutput output={output} />
       ) : run.agent_type === "triage" ? (
         <TriageOutput output={output} />
@@ -333,6 +393,7 @@ const AgentRunsPanel = ({
   agentRunsEnabled = true,
   triageEnabled = true,
   summaryEnabled = true,
+  reportEnabled = true,
 }: Props) => {
   const queryClient = useQueryClient();
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
@@ -371,6 +432,14 @@ const AgentRunsPanel = ({
     },
   });
 
+  const reportMutation = useMutation({
+    mutationFn: () => runTargetReportAgent(targetId),
+    onSuccess: (row) => {
+      setSelectedRunId(row.id);
+      refresh();
+    },
+  });
+
   if (!agentRunsEnabled) {
     return (
       <div className="border border-hack-border bg-black/30 p-5">
@@ -384,7 +453,7 @@ const AgentRunsPanel = ({
     );
   }
 
-  const running = triageMutation.isPending || summaryMutation.isPending;
+  const running = triageMutation.isPending || summaryMutation.isPending || reportMutation.isPending;
 
   return (
     <div className="border border-hack-border bg-black/30 p-5">
@@ -400,6 +469,22 @@ const AgentRunsPanel = ({
         </div>
 
         <div className="flex flex-wrap gap-2">
+
+          <button
+            type="button"
+            onClick={() => reportMutation.mutate()}
+            disabled={!reportEnabled || running}
+            className="hack-btn border border-hack-warning px-3 py-1 text-[10px] uppercase tracking-wider text-hack-warning disabled:opacity-50"
+            title={!reportEnabled ? "Report agent is disabled" : "Run Report Agent"}
+          >
+            {reportMutation.isPending ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <ClipboardList className="h-3 w-3" />
+            )}
+            Run Report
+          </button>
+
           <button
             type="button"
             onClick={() => summaryMutation.mutate()}
@@ -442,12 +527,14 @@ const AgentRunsPanel = ({
         </div>
       </div>
 
-      {(triageMutation.error || summaryMutation.error) && (
+      {(triageMutation.error || summaryMutation.error || reportMutation.error) && (
         <div className="mb-4 border border-hack-danger/60 bg-hack-danger/10 p-3 text-sm text-hack-danger">
           {(triageMutation.error as any)?.response?.data?.message ||
             (summaryMutation.error as any)?.response?.data?.message ||
             (triageMutation.error as any)?.message ||
             (summaryMutation.error as any)?.message ||
+            (reportMutation.error as any)?.response?.data?.message ||
+            (reportMutation.error as any)?.message ||
             "Failed to run agent"}
         </div>
       )}

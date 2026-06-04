@@ -39,6 +39,7 @@ import {
 } from "../api/me";
 import FindingsPanel from "../components/FindingsPanel";
 import AIAnalysisPanel from "../components/AIAnalysisPanel";
+import AgentRunsPanel from "../components/AgentRunsPanel";
 import TargetPolicyPanel from "../components/TargetPolicyPanel";
 
 type ActiveTab = "assets" | "urls" | "findings" | "analysis" | "policy";
@@ -326,11 +327,37 @@ const TargetAssets = () => {
     true,
   );
 
+  const featureAgentRuns = isAccountFeatureEnabled(
+    accountFeatureFlags,
+    FEATURE_FLAGS.agentRuns,
+    true,
+  );
+
+  const featureAITriageAgent = isAccountFeatureEnabled(
+    accountFeatureFlags,
+    FEATURE_FLAGS.aiTriageAgent,
+    true,
+  );
+
+  const featureAISummaryAgent = isAccountFeatureEnabled(
+    accountFeatureFlags,
+    FEATURE_FLAGS.aiSummaryAgent,
+    true,
+  );
+
+  const featureAIReportAgent = isAccountFeatureEnabled(
+    accountFeatureFlags,
+    FEATURE_FLAGS.aiReportAgent,
+    true,
+  );
+
+  const featureAnalysisTab = featureAIAnalysis || featureAgentRuns;
+
   useEffect(() => {
-    if (activeTab === "analysis" && !featureAIAnalysis) {
+    if (activeTab === "analysis" && !featureAnalysisTab) {
       setActiveTab("assets");
     }
-  }, [activeTab, featureAIAnalysis]);
+  }, [activeTab, featureAnalysisTab]);
 
   useEffect(() => {
     if (activeTab === "policy" && !featureTargetPolicy) {
@@ -548,8 +575,8 @@ const TargetAssets = () => {
           </button>
 
           <button
-            onClick={() => featureAIAnalysis && setActiveTab("analysis")}
-            disabled={!featureAIAnalysis}
+            onClick={() => featureAnalysisTab && setActiveTab("analysis")}
+            disabled={!featureAnalysisTab}
             title={
               featureAIAnalysis
                 ? "Target analysis"
@@ -791,12 +818,22 @@ const TargetAssets = () => {
       ) : activeTab === "policy" ? (
         <TargetPolicyPanel targetId={targetId} enabled={featureTargetPolicy} />
       ) : activeTab === "analysis" ? (
-        <AIAnalysisPanel
-          targetId={targetId}
-          aiAnalysisEnabled={featureAIAnalysis}
-          llmAssistedEnabled={featureLLMAssistedAnalysis}
-          recommendationsEnabled={featureAIRecommendations}
-        />
+        <>
+          <AIAnalysisPanel
+            targetId={targetId}
+            aiAnalysisEnabled={featureAIAnalysis}
+            llmAssistedEnabled={featureLLMAssistedAnalysis}
+            recommendationsEnabled={featureAIRecommendations}
+          />
+
+          <AgentRunsPanel
+            targetId={targetId}
+            agentRunsEnabled={featureAgentRuns}
+            triageEnabled={featureAITriageAgent}
+            summaryEnabled={featureAISummaryAgent}
+            reportEnabled={featureAIReportAgent}
+          />
+        </>
       ) : (
         <div className="overflow-hidden border border-hack-border bg-black/20">
           <div className="border-b border-hack-border px-3 py-2 font-mono text-xs uppercase tracking-wider text-hack-dim">

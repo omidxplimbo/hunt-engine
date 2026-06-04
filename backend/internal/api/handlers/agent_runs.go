@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/ai/agents/reportagent"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/ai/agents/summary"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/ai/agents/triage"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
@@ -194,6 +195,70 @@ func RunTargetSummaryAgent(c *fiber.Ctx) error {
 	_ = auditlog.Record(auditlog.Entry{
 		ActorUserID: &uid,
 		Action:      "target.agent.summary.run",
+		EntityType:  "agent_run",
+		EntityID:    &entityID,
+		TargetID:    &target.ID,
+		IPAddress:   auditlog.ClientIP(c),
+		UserAgent:   auditlog.UserAgent(c),
+		Metadata: map[string]interface{}{
+			"target_id":     target.ID,
+			"root_domain":   target.RootDomain,
+			"agent_type":    row.AgentType,
+			"provider":      row.Provider,
+			"model":         row.Model,
+			"status":        row.Status,
+			"policy_status": row.PolicyStatus,
+		},
+	})
+
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"status": "success",
+		"data":   row,
+	})
+}
+
+// RunTargetReportAgent creates a policy-aware advisory report draft agent run.
+func RunTargetReportAgent(c *fiber.Ctx) error {
+	targetID, err := parseTargetIDParam(c)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	_, featureOwnerKey, _, _, ownerErr := currentAccountOwner(c)
+	if ownerErr != nil {
+		return ownerErr
+	}
+
+	if !featureflags.IsEnabledForOwner(featureOwnerKey, featureflags.KeyAgentRuns) {
+		return featureflags.DisabledResponse(c, featureflags.KeyAgentRuns)
+	}
+
+	if !featureflags.IsEnabledForOwner(featureOwnerKey, featureflags.KeyAIReportAgent) {
+		return featureflags.DisabledResponse(c, featureflags.KeyAIReportAgent)
+	}
+
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+
+	row, err := reportagent.Run(reportagent.Input{
+		TargetID:        target.ID,
+		CreatedByUserID: &uid,
+	})
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	entityID := row.ID
+	_ = auditlog.Record(auditlog.Entry{
+		ActorUserID: &uid,
+		Action:      "target.agent.report.run",
 		EntityType:  "agent_run",
 		EntityID:    &entityID,
 		TargetID:    &target.ID,
