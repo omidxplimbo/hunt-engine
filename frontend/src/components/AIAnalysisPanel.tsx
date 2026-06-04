@@ -26,6 +26,7 @@ type Props = {
   aiAnalysisEnabled?: boolean;
   llmAssistedEnabled?: boolean;
   recommendationsEnabled?: boolean;
+  mode?: "full" | "analysis" | "recommendations";
 };
 
 const parseJSONValue = (value: any) => {
@@ -667,13 +668,14 @@ const AIAnalysisPanel = ({
   aiAnalysisEnabled = true,
   llmAssistedEnabled = true,
   recommendationsEnabled = true,
+  mode = "full",
 }: Props) => {
   const queryClient = useQueryClient();
 
   const query = useQuery({
     queryKey: ["target-ai-analyses", targetId],
     queryFn: () => getTargetAIAnalyses(targetId, 5),
-    enabled: Boolean(targetId) && aiAnalysisEnabled,
+    enabled: Boolean(targetId) && aiAnalysisEnabled && mode !== "recommendations",
   });
 
   const generateMutation = useMutation({
@@ -690,6 +692,15 @@ const AIAnalysisPanel = ({
   const latestOutput = latest ? parseJSONValue(latest.output_json) : {};
   const latestLLMAssisted = asBool(latestOutput?.llm_assisted);
   const latestLLMFallback = asBool(latestOutput?.llm_fallback);
+
+  if (mode === "recommendations") {
+    return (
+      <RecommendationsSection
+        targetId={targetId}
+        enabled={recommendationsEnabled}
+      />
+    );
+  }
 
   if (!aiAnalysisEnabled) {
     return (
@@ -827,10 +838,12 @@ const AIAnalysisPanel = ({
         </div>
       )}
 
-      <RecommendationsSection
-        targetId={targetId}
-        enabled={recommendationsEnabled}
-      />
+      {mode === "full" && (
+        <RecommendationsSection
+          targetId={targetId}
+          enabled={recommendationsEnabled}
+        />
+      )}
 
       {analyses.length > 1 && (
         <div className="border border-hack-border bg-black/20 p-4">

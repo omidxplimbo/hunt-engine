@@ -45,6 +45,7 @@ import AgentChatPanel from "../components/AgentChatPanel";
 import TargetPolicyPanel from "../components/TargetPolicyPanel";
 
 type ActiveTab = "assets" | "urls" | "findings" | "analysis" | "policy";
+type AnalysisSection = "overview" | "recommendations" | "agents" | "actions" | "chat";
 
 const KNOWN_ASSET_PROVIDERS = [
   { id: "subfinder", label: "Subfinder" },
@@ -141,6 +142,7 @@ const TargetAssets = () => {
   const targetId = Number(id);
 
   const [activeTab, setActiveTab] = useState<ActiveTab>("assets");
+  const [activeAnalysisSection, setActiveAnalysisSection] = useState<AnalysisSection>("overview");
   const [page, setPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -832,32 +834,115 @@ const TargetAssets = () => {
       ) : activeTab === "policy" ? (
         <TargetPolicyPanel targetId={targetId} enabled={featureTargetPolicy} />
       ) : activeTab === "analysis" ? (
-        <>
-          <AIAnalysisPanel
-            targetId={targetId}
-            aiAnalysisEnabled={featureAIAnalysis}
-            llmAssistedEnabled={featureLLMAssistedAnalysis}
-            recommendationsEnabled={featureAIRecommendations}
-          />
+        <div className="space-y-4">
+          <div className="border border-hack-border bg-black/30 p-4">
+            <div className="mb-3 font-mono text-xs uppercase tracking-wider text-hack-dim">
+              Analysis Workspace
+            </div>
 
-          <AgentRunsPanel
-            targetId={targetId}
-            agentRunsEnabled={featureAgentRuns}
-            triageEnabled={featureAITriageAgent}
-            summaryEnabled={featureAISummaryAgent}
-            reportEnabled={featureAIReportAgent}
-          />
+            <div className="grid gap-2 md:grid-cols-5">
+              {[
+                {
+                  id: "overview",
+                  label: "AI Analysis",
+                  description: "risk and narrative",
+                  enabled: featureAIAnalysis,
+                },
+                {
+                  id: "recommendations",
+                  label: "Recommendations",
+                  description: "operational tasks",
+                  enabled: featureAIRecommendations,
+                },
+                {
+                  id: "agents",
+                  label: "Advisory Agents",
+                  description: "triage / summary / report",
+                  enabled: featureAgentRuns,
+                },
+                {
+                  id: "actions",
+                  label: "Agent Actions",
+                  description: "approve / reject",
+                  enabled: featureAgentActions,
+                },
+                {
+                  id: "chat",
+                  label: "Attack Surface Chat",
+                  description: "chat to action plan",
+                  enabled: featureAgentChat,
+                },
+              ].map((section) => (
+                <button
+                  key={section.id}
+                  type="button"
+                  disabled={!section.enabled}
+                  onClick={() =>
+                    section.enabled &&
+                    setActiveAnalysisSection(section.id as AnalysisSection)
+                  }
+                  className={clsx(
+                    "border p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+                    activeAnalysisSection === section.id
+                      ? "border-hack-primary bg-hack-primary/10 text-hack-primary"
+                      : "border-hack-border bg-black/20 text-hack-dim hover:border-hack-primary/60 hover:text-white",
+                  )}
+                >
+                  <div className="font-mono text-xs uppercase tracking-wider">
+                    {section.label}
+                  </div>
+                  <div className="mt-1 text-[11px] text-hack-dim">
+                    {section.description}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
 
-          <AgentActionsPanel
-            targetId={targetId}
-            enabled={featureAgentActions}
-          />
+          {activeAnalysisSection === "overview" && (
+            <AIAnalysisPanel
+              targetId={targetId}
+              aiAnalysisEnabled={featureAIAnalysis}
+              llmAssistedEnabled={featureLLMAssistedAnalysis}
+              recommendationsEnabled={featureAIRecommendations}
+              mode="analysis"
+            />
+          )}
 
-          <AgentChatPanel
-            targetId={targetId}
-            enabled={featureAgentChat}
-          />
-        </>
+          {activeAnalysisSection === "recommendations" && (
+            <AIAnalysisPanel
+              targetId={targetId}
+              aiAnalysisEnabled={featureAIAnalysis}
+              llmAssistedEnabled={featureLLMAssistedAnalysis}
+              recommendationsEnabled={featureAIRecommendations}
+              mode="recommendations"
+            />
+          )}
+
+          {activeAnalysisSection === "agents" && (
+            <AgentRunsPanel
+              targetId={targetId}
+              agentRunsEnabled={featureAgentRuns}
+              triageEnabled={featureAITriageAgent}
+              summaryEnabled={featureAISummaryAgent}
+              reportEnabled={featureAIReportAgent}
+            />
+          )}
+
+          {activeAnalysisSection === "actions" && (
+            <AgentActionsPanel
+              targetId={targetId}
+              enabled={featureAgentActions}
+            />
+          )}
+
+          {activeAnalysisSection === "chat" && (
+            <AgentChatPanel
+              targetId={targetId}
+              enabled={featureAgentChat}
+            />
+          )}
+        </div>
       ) : (
         <div className="overflow-hidden border border-hack-border bg-black/20">
           <div className="border-b border-hack-border px-3 py-2 font-mono text-xs uppercase tracking-wider text-hack-dim">
