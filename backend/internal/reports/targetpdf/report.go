@@ -335,7 +335,7 @@ func coverPage(pdf *gofpdf.Fpdf, data *ReportData) {
 	pdf.SetY(208)
 	pdf.SetFont("Helvetica", "", 10)
 	pdf.SetTextColor(190, 200, 214)
-	pdf.MultiCell(170, 6, cleanText("Hunt Engine v3.5.0 target report. The report includes target metadata, scan state, asset and URL inventory, findings, structured evidence summaries, source-specific security sections, and deterministic commercial-grade target analysis when available."), "", "L", false)
+	pdf.MultiCell(170, 6, cleanText("Hunt Engine v3.6.0 target report. The report includes target metadata, scan state, asset and URL inventory, findings, structured evidence summaries, source-specific security sections, and deterministic commercial-grade target analysis when available."), "", "L", false)
 }
 
 func coverKV(pdf *gofpdf.Fpdf, label string, value string) {
