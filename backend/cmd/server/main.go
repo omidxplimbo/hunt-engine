@@ -132,6 +132,11 @@ func main() {
 	api.Put("/targets/:id/policy", handlers.PutTargetPolicy)
 	api.Delete("/targets/:id/policy", handlers.DeleteTargetPolicy)
 	api.Get("/targets/:id/report.pdf", handlers.DownloadTargetPDFReport)
+	// Agent Action Routes
+	api.Get("/targets/:id/agent-actions", handlers.GetTargetAgentActions)
+	api.Post("/targets/:id/agent-actions/propose", handlers.ProposeTargetAgentAction)
+	api.Post("/targets/:id/agent-actions/:action_id/approve", handlers.ApproveTargetAgentAction)
+	api.Post("/targets/:id/agent-actions/:action_id/reject", handlers.RejectTargetAgentAction)
 
 	// 👇 Self-service (کاربر روی اکانت خودش)
 	api.Get("/me", handlers.GetMe)

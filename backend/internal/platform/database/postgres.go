@@ -65,6 +65,8 @@ func Connect() {
 		&models.AIRecommendation{},
 		&models.AuditLog{},
 		&models.AgentRun{},
+		&models.AgentAction{},
+		&models.AgentActionApproval{},
 		&models.NucleiTemplate{},
 	)
 
