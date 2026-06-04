@@ -1,696 +1,756 @@
 # Hunt Engine
 
-Continuous reconnaissance, asset monitoring, crawling, and security-finding platform for bug bounty hunters, security researchers, and red teams.
+Hunt Engine is a commercial-grade attack surface intelligence, reconnaissance, security finding, advisory analysis, and reporting platform. It is designed to help security teams and bug bounty hunters continuously discover assets, validate live exposure, collect evidence, prioritize findings, generate professional reports, and use policy-aware advisory agents without allowing uncontrolled AI execution or unsafe automated exploitation.
 
-Current release branch: **v3.5.0**
-
----
-
-## Overview
-
-Hunt Engine is designed as a continuous hunting machine, not a one-shot scanner. It discovers assets, monitors changes, crawls URLs and JavaScript, runs security checks, stores structured evidence, and sends user-scoped Telegram notifications.
-
-Core capabilities:
-
-- Multi-source subdomain discovery
-- Live probing and asset fingerprinting
-- Asset diffing and change tracking
-- URL crawling and archival discovery
-- Built-in findings
-- Nuclei scanning with custom template support
-- Subdomain takeover candidate detection
-- JavaScript intelligence
-- Structured finding evidence with `evidence_json`
-- Per-user queues and scan limits
-- Per-account Telegram notifications
-- Fresh asset screenshot upload and cleanup
-
-- Target PDF reporting
-- AI-ready analysis and recommendation data layer
-- Commercial-grade deterministic target analysis
-- Optional LLM-assisted report narrative
-- Evidence-based target recommendations
-- Audit logs for report, AI, recommendation, and Nuclei draft actions
-- Global and account-scoped feature flags
-- AI-generated Nuclei template draft workflow with human approval guardrails
+The platform combines deterministic scanner logic with structured evidence, account-scoped configuration, professional PDF reporting, and advisory agent workflows. Deterministic product logic remains authoritative for severity, risk scoring, finding validity, policy enforcement, and execution decisions. AI and advisory agents provide interpretation, triage, summaries, and report draft assistance only.
 
 ---
 
-## v3.5.0 Highlights
+## Current release focus: v3.6.0
 
-### Target PDF Reporting
+v3.6.0 extends Hunt Engine from a scanner and reporting platform into a policy-aware, AI-assisted advisory workflow layer for attack surface intelligence and manual hunting.
 
-Target-level PDF reporting is now available.
+### Core v3.6.0 scope
 
-- Generates a professional downloadable PDF report per target.
-- Includes target metadata, scan state, assets, URLs, findings, evidence summaries, severity/source breakdowns, and analysis output.
-- Uses existing stored data and does not require an LLM token.
-- PDF report downloads are audit logged.
-- Controlled by feature flag `feature.target_pdf_report`.
+- **Target Policy Foundation**
+  - Per-target policy context for platform name, program URL, in-scope patterns, out-of-scope patterns, allowed/disallowed test types, max testing intensity, authentication requirements, safe testing notes, reporting preferences, business context, and default asset criticality.
+  - Policy is used as advisory context for agent outputs and future human-approved workflows.
 
-### AI-Ready Data Layer
+- **Agent Runs Data Layer**
+  - Persistent `agent_runs` records for advisory agent executions.
+  - Stores target, creator, agent type, provider, model, status, policy status, input digest, input JSON, output JSON, error message, start time, and completion time.
+  - Agent runs are auditable and target-scoped.
 
-v3.5.0 adds the storage foundation for AI-assisted security workflows.
+- **Deterministic Triage Agent**
+  - Generates policy-aware advisory triage output from stored findings and evidence.
+  - Highlights interesting findings, manual validation steps, false-positive risk, bug bounty value, policy safety notes, and recommended manual tests.
+  - Does not override deterministic severity, risk score, finding validity, or policy enforcement.
 
-New data entities include:
+- **Deterministic Summary Agent**
+  - Generates attack surface summaries from stored target data.
+  - Summarizes assets, live assets, URLs, findings, interesting assets, coverage, risk narrative, what to test next, safety notes, assumptions, and limitations.
+  - Advisory only; no active testing or exploitation.
 
-- `ai_analyses`
-- `ai_recommendations`
-- `audit_logs`
+- **Deterministic Report Agent**
+  - Generates human-validation-required report draft candidates.
+  - Output includes report candidate, impact hypothesis, evidence needed, validation checklist, platform-safe wording, suggested fix, related findings/assets, and explicit no-auto-submit guardrails.
+  - Does not submit reports and does not claim confirmed impact without manual validation.
 
-These tables provide normalized storage for target analysis, recommendations, and operator/security-relevant actions.
+- **Advisory Agents UI**
+  - Target Analysis now includes an Advisory Agents panel.
+  - Supports Run Summary, Run Triage, and Run Report.
+  - Displays latest agent outputs with guardrail language: advisory only, no auto-exploitation, human validation required, and policy-aware guidance.
 
-### Commercial-Grade Target Analysis
+- **Agent Outputs in PDF Reports**
+  - Target PDF reports now include an Advisory Agent Outputs section.
+  - Shows latest completed Summary, Triage, and Report agent outputs after Target Analysis.
+  - Includes guardrail wording to keep deterministic product logic authoritative.
 
-Target analysis now uses deterministic commercial guardrails.
+### Additional v3.6.0 operational improvements
 
-- Generates target-scoped analysis rows with `provider = local`.
-- Uses `model = deterministic-target-v1`.
-- Produces evidence-based `risk_score`, `risk_level`, `confidence_score`, `coverage_score`, `exposure_score`, and `finding_quality_score`.
-- Separates true security risk from coverage gaps.
-- Prevents reconnaissance-only or coverage-gap signals from inflating critical risk.
-- Keeps deterministic logic authoritative for scoring, severity, prioritization, and finding validity.
+- **Account Custom PureDNS Wordlists**
+  - Users can upload account-scoped `.txt` PureDNS wordlists.
+  - Wordlists are available in the target create/edit PureDNS selector.
+  - Admin/user quotas are supported.
 
-### Optional LLM-Assisted Narrative
+- **Persistent Wordlist Storage**
+  - Uploaded wordlists are stored under `/data/wordlists` inside the backend container.
+  - The backend mounts `${HUNT_WORDLISTS_DIR:-./hunt-wordlists}:/data/wordlists`.
+  - This prevents uploaded wordlists from being lost when containers are recreated or deployments are performed.
 
-LLM-assisted target analysis can add narrative content when a valid account-scoped provider is configured.
+- **Large Upload Support**
+  - Backend request body limit is configurable with `HUNT_MAX_REQUEST_BODY_MB`.
+  - Nginx supports large uploads with increased body size and long upload/proxy timeouts.
 
-- Deterministic risk scoring remains authoritative.
-- LLM output is limited to narrative fields such as executive summary, customer summary, remediation plan, report notes, and validation notes.
-- Missing, invalid, or unsupported provider settings safely fall back to deterministic output.
-- Supports account-scoped LLM provider configuration.
-- API keys are stored in the database and never returned to the frontend.
-- Provider config is cached in Redis and invalidated on update/delete.
+- **Improved Wordlist Uploader UI**
+  - Account wordlist uploader supports drag-and-drop.
+  - Upload progress shows percentage and uploaded/total bytes for local file uploads.
+  - URL imports remain server-side and show pending/importing state rather than browser upload progress.
 
-### Evidence-Based Recommendations
+- **PureDNS Large Wordlist Stability**
+  - PureDNS runs selected wordlists sequentially instead of merging all selected wordlists into one huge in-memory combined list.
+  - Progress is shown per wordlist.
+  - Only resolved/live PureDNS results are persisted.
 
-Target recommendations are generated from stored findings, evidence, latest target analysis, and coverage gaps.
+- **AlterX Live-Only Persistence**
+  - Large AlterX candidate streams are validated before persistence.
+  - Unresolved AlterX candidates are not stored as assets, preventing database bloat.
+  - Live AlterX-resolved assets retain source attribution.
 
-- Generates deterministic, actionable recommendations.
-- Preserves deterministic guardrails.
-- Does not treat coverage gaps as vulnerabilities.
-- Aggregates repetitive signals such as exposed login/admin interface indicators.
-- Preserves user-decided recommendations during regeneration.
-- Hard-deletes regenerated open system recommendations to avoid soft-deleted duplicates.
-- Controlled by feature flag `feature.ai_recommendations`.
-
-### Audit Logs
-
-Audit logging now records important operator and system actions.
-
-Covered v3.5.0 actions include:
-
-- `target.report_pdf.download`
-- `target.ai_analysis.generate`
-- `target.ai_recommendations.generate`
-- `nuclei.template_strategy.generate`
-- `nuclei.template_draft.generate`
-
-### Feature Flags
-
-Feature flags are available globally and per account.
-
-Global flags are managed through system configuration. Account-level feature access supports:
-
-- `inherit`
-- `enabled`
-- `disabled`
-
-Supported feature flags:
-
-- `feature.target_pdf_report`
-- `feature.ai_analysis`
-- `feature.llm_assisted_analysis`
-- `feature.ai_recommendations`
-- `feature.ai_nuclei_template_drafts`
-
-Admins share the `admin` owner scope. Non-admin users use their own `user:{id}` owner scope.
-
-### AI-Generated Nuclei Template Draft Workflow
-
-The Nuclei AI draft workflow is hardened for production safety.
-
-- Disabled by default.
-- Requires account feature flag `feature.ai_nuclei_template_drafts`.
-- Requires environment kill switch `NUCLEI_ALLOW_AI_TEMPLATES=true`.
-- Draft-only behavior.
-- No auto-save.
-- No auto-execute.
-- Requires human review, validation, and manual save.
-- Strategy and draft actions are audit logged.
-- API and UI expose disabled reasons.
-- Strategy output remains agent-ready while respecting deterministic safety guardrails.
+- **Target Fresh Restart**
+  - Target-level fresh restart resets scan checkpoints, removes queued jobs for that target, clears target temp artifacts/locks, preserves existing assets/findings, and queues the first configured scan module.
+  - Useful after manual stop, stale scan state, crash recovery, or pipeline logic changes.
 
 ---
 
-## v3.4.0 Highlights
+## Guardrail principles
 
-### Takeover Detection
+Hunt Engine is built around strict commercial-grade security product guardrails:
 
-Post-probing takeover detection is now included.
-
-- Runs after full probing completion.
-- Creates findings with `source_tool = takeover`.
-- Uses `category = subdomain-takeover`.
-- Stores structured evidence in `evidence_json`.
-- Evidence includes provider, CNAME, confidence, matched signals, asset, and final URL.
-- Matcher logic requires provider-compatible CNAME evidence before generic status/title signals are used.
-- Azure Front Door and Azure Traffic Manager are handled separately.
-
-### JavaScript Intelligence
-
-Post-crawling JavaScript intelligence is now included.
-
-- Runs after crawling completion.
-- Analyzes JavaScript URLs discovered from crawled URLs.
-- Falls back to extracting same-root-domain script URLs from live asset homepages.
-- Filters out third-party JavaScript URLs.
-- Creates findings with `source_tool = js-intel`.
-- Supports categories such as `js-endpoints`, `js-source-map`, and `js-secret`.
-- Stores structured metadata such as JS URL, signal type, endpoint count, status code, and content type.
-
-### Structured Evidence
-
-Findings now support structured evidence through the `evidence_json` JSONB field.
-
-Covered finding sources:
-
-- `builtin`
-- `nuclei`
-- `takeover`
-- `js-intel`
-
-This improves inspection, export, UI rendering, and future AI processing.
-
-### Better Finding Evidence UI
-
-The Findings panel now renders source-aware structured evidence.
-
-UI improvements:
-
-- Important evidence fields
-- Additional evidence fields
-- Legacy evidence text
-- Raw JSON view
-- Copy buttons for JSON/text
-- Clipboard fallback for non-secure contexts
-
-### Custom Nuclei Templates
-
-Custom Nuclei template execution and ingestion were fixed and validated.
-
-- Templates are stored in the database.
-- Templates are synced into `/data/nuclei/custom/users/{user_id}/{placement}`.
-- Custom templates run without built-in profile tag filtering.
-- Built-in and custom outputs are merged before ingestion.
-- Nuclei findings include structured `evidence_json`.
-
-### Per-Account Telegram Notifications
-
-Telegram settings moved from global System Config to Account settings.
-
-Behavior:
-
-- Non-admin users have their own Telegram settings.
-- Admin users share one `admin` Telegram config.
-- Bot token and chat ID are stored in the database.
-- Telegram credentials are no longer read from `.env`.
-- Bot token is never returned to the frontend.
-- Leaving the token field blank preserves the existing saved token.
-- Notification routing resolves the target owner and uses that owner's Telegram config.
-- Telegram config resolution is cached in Redis with TTL.
-- Updating Telegram settings invalidates the relevant Redis cache.
-
-Configurable events:
-
-- `fresh_asset`
-- `fresh_url`
-- `asset_change_is_live`
-- `asset_change_status_code`
-- `asset_change_title`
-- `asset_change_web_server`
-- `asset_change_technologies`
-- `asset_change_host_ip`
-
-### Fresh Asset Screenshots
-
-When enabled, fresh live asset notifications can include a homepage screenshot.
-
-Flow:
-
-1. Capture the asset homepage.
-2. Save temporarily under the user/target scoped screenshot path.
-3. Upload to Telegram.
-4. Delete the temporary screenshot from the server.
-
-Temporary path pattern:
-
-```text
-/data/screenshots/users/{user_id}/targets/{target_id}/fresh-assets/
-```
+- Deterministic product logic remains authoritative for risk score, severity, priority, finding validity, policy enforcement, and execution decisions.
+- AI/advisory agents provide interpretation, triage, summaries, report drafts, and manual validation guidance only.
+- Coverage gaps are not treated as vulnerabilities.
+- Reconnaissance-only signals do not become critical solely because they are numerous.
+- No uncontrolled AI execution.
+- No unsafe auto-exploitation.
+- No out-of-scope testing.
+- No destructive testing.
+- Report Agent output must not be submitted automatically.
+- Human validation is required before customer-facing or bug bounty claims.
 
 ---
 
-## Architecture
+## High-level capabilities
 
-### Backend
+### Reconnaissance and asset discovery
 
-- Go
-- Fiber
-- PostgreSQL
-- GORM
-- Redis
-- JWT authentication
-- RBAC and target ownership isolation
-- Dockerized worker/API runtime
+- Passive and active subdomain discovery.
+- Optional sources such as Subfinder, Assetfinder, crt.sh, Cero, AbuseDB, Amass, PureDNS, and AlterX.
+- Large target support with streamed/controlled processing for massive candidate sets.
+- Source attribution for discovered assets.
+- Live DNS validation with DNSX.
+- CDN/WAF/cloud enrichment.
+- Optional port scanning for eligible live assets.
 
-### Frontend
+### Probing and HTTP intelligence
 
-- React
-- Vite
-- TypeScript
-- Tailwind CSS
-- TanStack Query
+- HTTP probing and response metadata collection.
+- Status code, title, final URL, content length, server, technologies, response timing, and raw metadata.
+- Fresh asset detection and status change tracking.
+- Screenshot-assisted notification flows where configured.
 
-### Runtime Services
+### Crawling and URL inventory
 
-- Backend API
-- Frontend dashboard
-- PostgreSQL
-- Redis
-- Nginx reverse proxy
-- Optional DNS/certbot services
+- URL collection from crawling and archive sources.
+- JavaScript resource discovery.
+- URL source attribution.
+- JS-focused filtering and intelligence.
 
----
+### Security findings and evidence
 
-## Access Control
+- Built-in deterministic findings.
+- Nuclei security engine integration.
+- Custom Nuclei template support.
+- Subdomain takeover detection.
+- JavaScript intelligence findings.
+- Structured `evidence_json` for source-specific evidence display.
+- Better Finding Evidence UI with source-aware structured evidence rendering.
 
-### Admin
+### Reporting and analysis
 
-- Can view all targets.
-- Can manage users.
-- Can see target owner metadata.
-- Uses shared `admin` Telegram notification config.
-- Has unlimited personal scan slots.
+- Professional target PDF reports.
+- Deterministic commercial-grade target risk methodology.
+- Local deterministic target analysis.
+- Optional LLM-assisted narrative generation with deterministic guardrails.
+- Deterministic target recommendations.
+- v3.6.0 advisory agent outputs in PDF reports.
 
-### Viewer
+### Account-scoped configuration
 
-- Can only access owned targets.
-- Can manage own account.
-- Can configure own Telegram notifications.
-- Can manage own scan queue.
-- Uses per-user Telegram notification config.
-
-Targets are scoped by `created_by_user_id`.
-
-Queues are isolated per user:
-
-```text
-discovery_tasks:user:{user_id}
-```
+- Per-user Telegram notification settings.
+- Per-user LLM provider settings.
+- Account-scoped feature flags.
+- Account custom PureDNS wordlists.
+- User-specific quotas and concurrency controls.
 
 ---
 
-## Recon Pipeline
+## Architecture overview
+
+Hunt Engine is deployed as a Docker Compose application with these primary services:
+
+- **frontend**: React/Vite web UI.
+- **backend**: Go/Fiber API and worker runtime.
+- **postgres**: persistent application database.
+- **redis**: queue, cache, and worker coordination.
+- **nginx**: reverse proxy and production frontend/API routing.
+- **certbot**: certificate automation where configured.
+- **dns**: optional DNS service integration.
+
+Typical data flow:
+
+1. User creates or edits a target.
+2. Target scan modules are queued in Redis.
+3. Worker executes selected phases in order: Discovery, Probing, Crawling, and security engines.
+4. Results are persisted to PostgreSQL with structured evidence.
+5. UI displays assets, URLs, findings, analysis, policies, recommendations, and agent outputs.
+6. Reports are generated from stored database state.
+
+---
+
+## Scan phases
 
 ### Discovery
 
-Integrated discovery and enrichment tools include:
+Discovery collects candidate subdomains and validates live DNS results.
 
-- `subfinder`
-- `assetfinder`
-- `cero`
-- `crtsh`
-- `puredns`
-- `amass`
-- `alterx`
-- `dnsx`
-- `cdncheck`
-- optional `nmap`
+Supported/related components:
+
+- Subfinder
+- Assetfinder
+- crt.sh
+- Cero
+- AbuseDB
+- Amass
+- PureDNS
+- AlterX
+- DNSX
+- CDNCheck
+- Optional Nmap/port scan
+
+Important v3.6.0 behavior:
+
+- PureDNS selected wordlists are executed sequentially.
+- PureDNS persists only resolved/live results.
+- AlterX candidate streams are validated before persistence.
+- Unresolved AlterX candidates are not stored as dead assets.
 
 ### Probing
 
-Probing uses `httpx` to collect:
+Probing enriches live assets with HTTP metadata and runs post-probing security checks.
 
-- status code
-- final URL
-- title
-- web server
-- technologies
-- IPs
-- CDN/WAF metadata
-- raw HTTPX data
+Post-probing checks include:
 
-Post-probing security steps:
-
-- built-in findings
-- takeover detection
-- Nuclei security scan
+- Built-in findings.
+- Takeover detection.
+- Nuclei security engine.
 
 ### Crawling
 
-Crawling sources include:
+Crawling discovers and stores URLs and JavaScript resources.
 
-- `gau`
-- `waybackurls`
-- `katana`
-- `waymore`
-- VirusTotal URL discovery
+Post-crawling checks include:
 
-Post-crawling security step:
-
-- JavaScript intelligence
+- JS Intelligence.
+- JavaScript endpoint/source map/secret style signals where evidence supports them.
 
 ---
 
-## Findings
+## Advisory agents
 
-Findings can come from:
+v3.6.0 introduces advisory agents as a policy-aware interpretation layer on top of stored Hunt Engine data.
 
-- `builtin`
-- `nuclei`
-- `takeover`
-- `js-intel`
+### Agent types
+
+- `triage`
+- `summary`
+- `report`
+- `policy_review` reserved for future expansion
+
+### Agent run storage
+
+Agent executions are stored in `agent_runs`.
 
 Important fields:
 
-- `severity`
-- `category`
-- `source_tool`
-- `evidence`
-- `evidence_json`
-- `recommendation`
+- `target_id`
+- `created_by_user_id`
+- `agent_type`
+- `provider`
+- `model`
 - `status`
-- `first_seen`
-- `last_seen`
-- `fingerprint`
+- `source`
+- `policy_status`
+- `input_digest`
+- `input_json`
+- `output_json`
+- `error_message`
+- `started_at`
+- `completed_at`
+
+### Triage Agent
+
+Output includes:
+
+- top interesting findings
+- manual validation steps
+- false-positive risk
+- bug bounty value
+- policy safety notes
+- recommended manual tests
+
+### Summary Agent
+
+Output includes:
+
+- attack surface summary
+- most interesting assets
+- coverage summary
+- risk narrative
+- what to test next
+- policy safety notes
+- assumptions
+- limitations
+
+### Report Agent
+
+Output includes:
+
+- report candidate
+- impact hypothesis
+- evidence needed
+- validation checklist
+- platform-safe wording
+- suggested fix
+- related findings/assets
+- `human_validation_required=true`
+- `do_not_submit_automatically=true`
 
 ---
 
-## Nuclei Engine
+## Target policy
 
-Supported profiles include:
+Target policies provide the context required for safe advisory workflows and future human-approved automation.
 
-- `safe`
-- `fast`
-- `balanced`
-- `misconfig`
-- `full`
+Policy fields include:
 
-Custom templates are stored in DB and synced into:
+- `platform_name`
+- `program_url`
+- `in_scope_patterns`
+- `out_of_scope_patterns`
+- `allowed_test_types`
+- `disallowed_test_types`
+- `max_test_intensity`
+- `rate_limit_notes`
+- `auth_required`
+- `safe_testing_notes`
+- `reporting_preferences`
+- `business_context`
+- `asset_criticality_default`
 
-```text
-/data/nuclei/custom/users/{user_id}/{placement}
-```
-
----
-
-## Account Settings
-
-The Account page includes:
-
-- profile details
-- password change
-- personal scan queue control
-- Subfinder provider keys
-- Telegram notification settings
-
-Telegram settings are configured from:
-
-```text
-Account -> Telegram Notifications
-```
+Policy does not automatically authorize unsafe actions. It gives the product and advisory agents context for safe, bounded recommendations.
 
 ---
 
-## Environment Configuration
+## Environment variables
 
-Copy the example file:
+Create a `.env` from `.env.example` and set required values.
 
-```bash
-cp .env.example .env
-```
-
-Required values:
+Important variables:
 
 ```env
-DB_PASSWORD=change_me_to_a_strong_database_password
-JWT_SECRET=change_me_to_a_random_64_hex_secret
-```
+# Required secret. Use a strong value in production.
+JWT_SECRET=change-me-to-a-long-random-secret
 
-Telegram credentials are no longer configured in `.env`. Configure them from the Account page.
+# Backend max request body size in MB. Useful for large custom wordlist uploads.
+HUNT_MAX_REQUEST_BODY_MB=5120
 
-Optional integration:
+# Persistent host path for uploaded account PureDNS wordlists.
+# Mounted into backend as /data/wordlists.
+HUNT_WORDLISTS_DIR=./hunt-wordlists
 
-```env
-VIRUSTOTAL_API_KEY=
-```
-
-Nuclei tuning:
-
-```env
-NUCLEI_TIMEOUT_SECONDS=1800
-NUCLEI_RATE_LIMIT=50
-NUCLEI_CONCURRENCY=10
-NUCLEI_BULK_SIZE=25
-NUCLEI_DEFAULT_PROFILE=safe
-HUNT_NUCLEI_TIMEOUT=10m
-```
-
-Worker tuning:
-
-```env
-PROBE_BATCH_SIZE=1000
-DNSX_BATCH_SIZE=2000
-DNSX_THREADS=30
-AMASS_TIMEOUT_SECONDS=900
+# Optional worker/tool tuning.
 TRUSTED_RESOLVERS=1.1.1.1,8.8.8.8,1.0.0.1,8.8.4.4
 ```
 
+Database, Redis, domain, DNS, and production TLS values should also be configured in `.env` according to the deployment environment.
+
 ---
 
-## Quick Start
+## Persistent volumes and mounts
+
+The backend service should include persistent mounts for custom templates, wordlists, worker workspaces, and Docker socket access where required by the toolchain.
+
+Recommended backend volume configuration:
+
+```yaml
+volumes:
+  - ${HUNT_WORDLISTS_DIR:-./hunt-wordlists}:/data/wordlists
+  - ./custom_wordlists:/wordlists/custom
+  - ./custom_nuclei_templates:/data/nuclei/custom
+  - hunt_workspaces:/tmp/hunt-engine
+  - /var/run/docker.sock:/var/run/docker.sock
+```
+
+Production verification:
+
+```bash
+docker inspect hunt-backend --format '{{range .Mounts}}{{println .Source "->" .Destination}}{{end}}'
+```
+
+Expected wordlist mount:
+
+```text
+/root/hunt-engine/hunt-wordlists -> /data/wordlists
+```
+
+---
+
+## Quick start
+
+### 1. Clone
 
 ```bash
 git clone https://github.com/omidxplimbo/hunt-engine.git
 cd hunt-engine
+```
 
+### 2. Configure environment
+
+```bash
 cp .env.example .env
+nano .env
+```
+
+At minimum, set a strong `JWT_SECRET` and confirm persistent paths such as `HUNT_WORDLISTS_DIR`.
+
+### 3. Start services
+
+```bash
 docker compose up -d --build
 ```
 
-Default credentials:
+### 4. Check service status
 
-```text
-username: admin
-password: admin123
+```bash
+docker compose ps
 ```
 
-Change the default password immediately after first login.
+### 5. View logs
+
+```bash
+docker compose logs -f backend
+```
 
 ---
 
-## Useful Commands
+## Production deployment checklist
 
-Backend tests:
+Before production deployment:
+
+- Configure `.env` securely.
+- Confirm `JWT_SECRET` is strong and not committed.
+- Confirm PostgreSQL and Redis persistence.
+- Confirm `HUNT_WORDLISTS_DIR` is mounted to `/data/wordlists`.
+- Confirm Nginx upload limits support expected wordlist size.
+- Confirm account feature flags for production users.
+- Confirm AI/advisory features are enabled only where intended.
+- Confirm target policies are configured before active or sensitive workflows.
+
+Recommended production update flow:
 
 ```bash
-cd backend
-JWT_SECRET="hunt-engine-test-jwt-secret-minimum-32-chars" go test ./...
+git checkout main
+git pull origin main
+docker compose build backend frontend
+docker compose up -d --force-recreate backend frontend nginx
+```
+
+For frontend-only UI changes:
+
+```bash
+docker compose build frontend
+docker compose up -d --force-recreate frontend nginx
+```
+
+---
+
+## Development workflow
+
+Typical v3.6.0 development branch workflow:
+
+```bash
+git checkout v3.6.0
+git pull origin v3.6.0
 ```
 
 Frontend build:
 
 ```bash
-cd frontend
-npm install
-npm run build
+npm --prefix frontend run build
 ```
 
-Rebuild containers:
+Backend tests:
 
 ```bash
-docker compose up -d --build
+cd backend
+JWT_SECRET="hunt-engine-v36-test-jwt-secret-minimum-32-chars" go test ./...
+cd ..
 ```
 
-Backend logs:
+Local/test Docker Compose project example:
 
 ```bash
-docker compose logs backend -f
+docker compose \
+  --env-file .env.v35 \
+  -p hunt35 \
+  -f docker-compose.yml \
+  -f docker-compose.hunt35.override.yml \
+  build backend frontend
+
+
+docker compose \
+  --env-file .env.v35 \
+  -p hunt35 \
+  -f docker-compose.yml \
+  -f docker-compose.hunt35.override.yml \
+  up -d --force-recreate backend frontend nginx
 ```
 
-Check scan state:
+---
+
+## Validation checklist for v3.6.0
+
+### Backend and frontend
+
+```bash
+npm --prefix frontend run build
+
+cd backend
+JWT_SECRET="hunt-engine-v36-test-jwt-secret-minimum-32-chars" go test ./...
+cd ..
+```
+
+### Agent workflow validation
+
+- Open Target -> Analysis.
+- Confirm Advisory Agents panel is visible.
+- Run Summary.
+- Run Triage.
+- Run Report.
+- Confirm rows are stored in `agent_runs`.
+- Confirm output is rendered in UI.
+- Confirm guardrail wording is visible.
+
+Example database check:
 
 ```bash
 docker compose exec -T postgres sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "
-SELECT target_id, status, current_module, current_step, completed_steps, last_error, updated_at
-FROM target_scan_states
-ORDER BY updated_at DESC
+SELECT id, target_id, agent_type, provider, model, status, policy_status, created_at
+FROM agent_runs
+ORDER BY id DESC
 LIMIT 10;
 "'
 ```
 
-Check Telegram configs:
+### PDF report validation
+
+- Generate a target analysis.
+- Run Summary/Triage/Report agents.
+- Download target PDF.
+- Confirm `Advisory Agent Outputs` appears after Target Analysis.
+- Confirm Summary Agent, Triage Agent, and Report Agent Draft content appears when runs exist.
+
+### Wordlist persistence validation
 
 ```bash
-docker compose exec -T postgres sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "
-SELECT id, owner_key, user_id, enabled, chat_id, enabled_events,
-       fresh_asset_screenshot_enabled,
-       bot_token <> '\''\''' AS has_token
-FROM user_telegram_configs
-ORDER BY id;
-"'
+docker inspect hunt-backend --format '{{range .Mounts}}{{println .Source "->" .Destination}}{{end}}'
 ```
 
-Check Telegram Redis cache:
+Confirm:
+
+```text
+/root/hunt-engine/hunt-wordlists -> /data/wordlists
+```
+
+Write test:
 
 ```bash
-docker compose exec -T redis sh -lc '
-for k in $(redis-cli KEYS "telegram:*"); do
-  echo "$k ttl=$(redis-cli TTL "$k")"
-done
+docker compose exec -T backend sh -lc '
+mkdir -p /data/wordlists/users/999
+echo test > /data/wordlists/users/999/persist-test.txt
+ls -lah /data/wordlists/users/999/persist-test.txt
 '
+
+ls -lah ~/hunt-engine/hunt-wordlists/users/999/persist-test.txt
 ```
+
+### PureDNS validation
+
+- Upload one or more custom `.txt` wordlists from Account.
+- Confirm upload progress appears for local files.
+- Confirm uploaded files exist under host `hunt-wordlists`.
+- Select custom and default wordlists on a target.
+- Fresh Restart the target.
+- Confirm PureDNS executes all selected wordlists sequentially.
+- Confirm only resolved/live PureDNS results are persisted.
+
+### AlterX validation
+
+- Run a target with AlterX enabled.
+- Confirm large candidate streams do not become huge dead-asset database inserts.
+- Confirm live/resolved AlterX candidates retain `alterx` source attribution.
+
+### Fresh Restart validation
+
+- Stop or interrupt a target scan.
+- Use Fresh Restart from the target controls.
+- Confirm scan checkpoints are reset.
+- Confirm queued jobs for the target are cleaned.
+- Confirm assets/findings remain preserved.
+- Confirm scan restarts from the first configured module.
 
 ---
 
-## Important Data Paths
+## Feature flags
 
-Custom Nuclei templates:
+Important feature flags include:
 
 ```text
-/data/nuclei/custom/users/{user_id}/{placement}
+feature.target_policy
+feature.agent_runs
+feature.ai_triage_agent
+feature.ai_summary_agent
+feature.ai_report_agent
+feature.target_pdf_report
+feature.ai_analysis
+feature.llm_assisted_analysis
+feature.ai_recommendations
+feature.ai_nuclei_template_drafts
 ```
 
-Fresh asset screenshots:
-
-```text
-/data/screenshots/users/{user_id}/targets/{target_id}/fresh-assets/
-```
-
-Worker temporary workspace:
-
-```text
-/tmp/hunt-engine
-```
+Feature flags support account-scoped effective resolution. Admin/shared and non-admin user behavior should follow the account owner resolution implemented in the backend.
 
 ---
 
-## Security Notes
+## Account custom PureDNS wordlists
 
-- Change the default admin password.
-- Keep `JWT_SECRET` strong and private.
-- Use HTTPS in production.
-- Restrict dashboard access.
-- Telegram bot tokens are stored in DB and are not returned by the API.
-- Validate custom Nuclei templates before enabling them.
-- Treat takeover and JS intelligence findings as candidates until manually verified.
+Custom wordlists are uploaded from Account and become available in target create/edit forms.
 
----
+Supported upload modes:
 
-## Release Status
+- Local `.txt` file upload.
+- URL import from public safe URLs.
 
-### v3.5.0
+Notes:
 
-v3.5.0 is complete and ready for release.
-
-Completed scope:
-
-- Target PDF Reporting
-- AI-ready Data Layer
-- `ai_analyses`
-- `ai_recommendations`
-- `audit_logs`
-- Account-scoped LLM provider configuration
-- LLM-assisted target analysis narrative
-- Commercial-grade deterministic target risk methodology
-- Global and account-scoped feature flags
-- Account Feature Access UI
-- AI-generated Nuclei template draft workflow with human approval guardrails
-
-Production safety notes:
-
-- Deterministic product logic remains authoritative for risk score, risk level, severity, priority, and finding validity.
-- LLM output is limited to narrative, interpretation, validation notes, remediation reasoning, and report text.
-- Coverage gaps are reported separately and do not inflate vulnerability severity.
-- Nuclei AI template drafts are disabled by default.
-- Nuclei AI template drafts require both account feature access and `NUCLEI_ALLOW_AI_TEMPLATES=true`.
-- Nuclei AI template drafts never auto-save or auto-execute.
-
-### v3.4.0
-
-v3.4.0 completed the structured-evidence security engine foundation:
-
-- Takeover Detection
-- JavaScript Intelligence
-- `evidence_json`
-- Better Finding Evidence UI
-- Custom Nuclei execution and ingestion fixes
-- Per-account Telegram notifications
-- Fresh asset screenshot notification support
+- Local file upload shows browser upload progress.
+- URL import is downloaded server-side and therefore does not expose browser upload progress.
+- SSRF guardrails should block private or unsafe URL targets.
+- Persistent storage must be mounted correctly before relying on uploaded wordlists in production.
 
 ---
 
-## Roadmap
+## Nuclei templates
+
+Hunt Engine supports custom Nuclei template workflows with guardrails:
+
+- Templates are stored in the database.
+- Templates are synced to user-specific custom template paths.
+- Custom templates can be run without builtin tag filtering where appropriate.
+- AI-generated Nuclei template drafts are draft-only and human-approval gated.
+- No auto-save or auto-execute is allowed for AI-generated templates.
+
+---
+
+## Telegram notifications
+
+Telegram notification settings are account scoped:
+
+- Non-admin users have per-user Telegram config.
+- Admin users can share an admin owner scope.
+- Bot token and chat ID are stored in the database.
+- Bot token is never returned to the frontend.
+- Blank token update preserves the existing token.
+- Redis caching is used for notification config resolution and invalidated on update.
+
+---
+
+## LLM provider settings
+
+LLM providers are account scoped:
+
+- Multiple providers/models can be configured.
+- API keys are stored in the database but never returned to the frontend.
+- Blank API key update preserves the existing key.
+- Clear-key behavior is supported.
+- Real LLM-assisted features use deterministic guardrails as source of truth.
+
+LLM-assisted output may provide narrative and interpretation, but must not override deterministic risk, severity, finding validity, priority, or policy enforcement.
+
+---
+
+## PDF reports
+
+Target PDF reports include:
+
+- Target metadata.
+- Executive summary.
+- Metrics grid.
+- Target analysis.
+- Advisory Agent Outputs.
+- Scan state.
+- Asset and URL inventory.
+- Findings summary.
+- Source-specific finding tables.
+- Recent assets and URLs.
+
+v3.6.0 PDF reports include advisory outputs from the latest completed Summary, Triage, and Report agent runs.
+
+---
+
+## Release history
 
 ### v3.6.0
 
-Potential next milestones:
+Policy-aware advisory agents and operational scale improvements:
 
-- Business context and asset criticality model
-- Per-target risk policy configuration
-- Finding validation workflow and analyst review states
-- Recommendation lifecycle actions in UI
-- Report branding and customer-ready report templates
-- Scheduled report generation
-- Organization/workspace model
-- External LLM provider hardening and provider-specific validation
-- AI-assisted finding clustering and deduplication
-- AI-assisted remediation playbooks
-- Extended audit log UI and export
-- Billing/plan-aware feature entitlements
+- Target Policy Foundation.
+- Agent Runs Data Layer.
+- Deterministic Triage Agent.
+- Deterministic Summary Agent.
+- Deterministic Report Agent.
+- Advisory Agents UI in Target Analysis.
+- Advisory Agent Outputs in PDF reports.
+- Account custom PureDNS wordlists.
+- Persistent wordlist storage.
+- Large upload support.
+- Drag-and-drop wordlist uploader with progress.
+- PureDNS sequential wordlist execution.
+- PureDNS resolved-only persistence.
+- AlterX live-only persistence.
+- Target Fresh Restart.
 
-### Future AI Agent Layer
+### v3.5.0
 
-Planned AI agent capabilities should remain downstream of deterministic guardrails.
+AI-ready reporting and account-scoped configuration:
 
-Possible agents:
+- Target PDF Reporting.
+- AI-ready data layer.
+- `ai_analyses`.
+- LLM-assisted target analysis narrative.
+- `ai_recommendations`.
+- `audit_logs`.
+- Global and account-scoped feature flags.
+- Account Feature Access UI.
+- Account-scoped LLM provider settings.
+- Deterministic commercial-grade target risk methodology.
+- Hardened AI-generated Nuclei template draft workflow.
 
-- AI Triage Agent
-- AI Summary Agent
-- AI Report Agent
-- AI Remediation Agent
-- AI Nuclei Draft Assistant
-- AI-assisted recon recommendation agent
+### v3.4.0
 
-Guardrails:
+Structured evidence and security intelligence foundation:
 
-- AI may add interpretation, correlation, explanation, validation hypotheses, remediation reasoning, and customer-facing narrative.
-- AI must not override deterministic source-of-truth fields such as risk score, risk level, severity, finding validity, or priority without explicit human approval and deterministic validation support.
+- Takeover Detection.
+- JS Intelligence.
+- More Evidence / `evidence_json`.
+- Better Finding Evidence UI.
+- Custom Nuclei template execution and ingestion fixes.
+- Telegram notification settings moved from System Config to Account.
 
 ---
 
-## Current Release Summary
+## Roadmap direction
 
-v3.5.0 includes:
+Hunt Engine is evolving toward a commercial-grade AI-assisted Attack Surface Intelligence and Bug Bounty Automation Platform.
 
-- professional target PDF reports
-- deterministic commercial target analysis
-- optional LLM-assisted narrative
-- account-scoped LLM provider settings
-- deterministic target recommendations
-- AI-ready data layer
-- audit logging
-- global and account-scoped feature flags
-- Account Feature Access UI
-- hardened Nuclei AI draft workflow
+Planned future directions:
 
-v3.4.0 includes:
+- Human-approved recon workflows.
+- Policy-aware agent action approval.
+- Safe Bug Testing Engine.
+- XSS, open redirect, CORS, and security header candidate testing with strict safety levels.
+- Pattern intelligence and update system.
+- Learning engine from user feedback and test outcomes.
+- Manual hunting workspace.
+- Bug bounty report builder.
+- Controlled automation and scheduling.
 
-- takeover detection
-- JavaScript intelligence
-- structured `evidence_json`
-- improved finding evidence UI
-- custom Nuclei execution and ingestion fixes
-- per-account Telegram notifications
-- fresh asset screenshot notifications
+Future work must keep deterministic guardrails authoritative and keep risky execution human-approved, audited, policy-aware, and rate-limited.
+
+---
+
+## Safety statement
+
+Use Hunt Engine only on assets and programs where you have authorization. Configure target policy and scope before running active testing. Advisory agents and generated report drafts are not proof of vulnerability and must be manually validated before use in customer-facing or bug bounty submissions.
+

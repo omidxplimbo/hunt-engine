@@ -700,3 +700,23 @@ export const runTargetTriageAgent = async (targetId: number) => {
 
   return response.data.data;
 };
+
+
+export const runTargetSummaryAgent = async (targetId: number) => {
+  const response = await apiClient.post<{
+    status: string;
+    data: TargetAgentRun;
+  }>(`/targets/${targetId}/agents/summary/run`);
+
+  return response.data.data;
+};
+
+
+export const runTargetReportAgent = async (targetId: number) => {
+  const response = await apiClient.post<{
+    status: string;
+    data: TargetAgentRun;
+  }>(`/targets/${targetId}/agents/report/run`);
+
+  return response.data.data;
+};
