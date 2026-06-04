@@ -41,6 +41,7 @@ import FindingsPanel from "../components/FindingsPanel";
 import AIAnalysisPanel from "../components/AIAnalysisPanel";
 import AgentRunsPanel from "../components/AgentRunsPanel";
 import AgentActionsPanel from "../components/AgentActionsPanel";
+import AgentChatPanel from "../components/AgentChatPanel";
 import TargetPolicyPanel from "../components/TargetPolicyPanel";
 
 type ActiveTab = "assets" | "urls" | "findings" | "analysis" | "policy";
@@ -337,6 +338,12 @@ const TargetAssets = () => {
   const featureAgentActions = isAccountFeatureEnabled(
     accountFeatureFlags,
     FEATURE_FLAGS.agentActions,
+    true,
+  );
+
+  const featureAgentChat = isAccountFeatureEnabled(
+    accountFeatureFlags,
+    FEATURE_FLAGS.agentChat,
     true,
   );
 
@@ -844,6 +851,11 @@ const TargetAssets = () => {
           <AgentActionsPanel
             targetId={targetId}
             enabled={featureAgentActions}
+          />
+
+          <AgentChatPanel
+            targetId={targetId}
+            enabled={featureAgentChat}
           />
         </>
       ) : (

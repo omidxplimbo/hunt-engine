@@ -178,6 +178,7 @@ export const FEATURE_FLAGS = {
   aiNucleiTemplateDrafts: "feature.ai_nuclei_template_drafts",
   agentRuns: "feature.agent_runs",
   agentActions: "feature.agent_actions",
+  agentChat: "feature.agent_chat",
   aiTriageAgent: "feature.ai_triage_agent",
   aiSummaryAgent: "feature.ai_summary_agent",
   aiReportAgent: "feature.ai_report_agent",

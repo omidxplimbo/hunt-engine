@@ -837,3 +837,105 @@ export const rejectTargetAgentAction = async (
   return response.data.data;
 };
 
+
+// -----------------------------
+// Agent Chat - v3.7.0 foundation
+// -----------------------------
+export interface TargetAgentChatSession {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  target_id: number;
+  created_by_user_id?: number | null;
+  title: string;
+  status: string;
+  context_json: any;
+  last_message_at?: string | null;
+}
+
+export interface TargetAgentChatMessage {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  session_id: number;
+  target_id: number;
+  created_by_user_id?: number | null;
+  role: "user" | "assistant" | "system" | "tool" | string;
+  message_type: string;
+  content: string;
+  input_json: any;
+  output_json: any;
+  agent_run_id?: number | null;
+  agent_action_id?: number | null;
+}
+
+export interface TargetAgentChatSessionsResponse {
+  status: string;
+  data: TargetAgentChatSession[];
+  count: number;
+  total_count: number;
+  page: number;
+}
+
+export interface TargetAgentChatMessagesResponse {
+  status: string;
+  data: TargetAgentChatMessage[];
+  count: number;
+}
+
+export interface CreateAgentChatMessageResponse {
+  status: string;
+  data: {
+    user_message: TargetAgentChatMessage;
+    assistant_message: TargetAgentChatMessage;
+    proposed_actions: TargetAgentAction[];
+  };
+}
+
+export const getTargetAgentChatSessions = async (
+  targetId: number,
+  limit = 20,
+) => {
+  const response = await apiClient.get<TargetAgentChatSessionsResponse>(
+    `/targets/${targetId}/agent-chat/sessions`,
+    { params: { limit } },
+  );
+
+  return response.data;
+};
+
+export const createTargetAgentChatSession = async (
+  targetId: number,
+  title = "Attack Surface Chat",
+) => {
+  const response = await apiClient.post<{
+    status: string;
+    data: TargetAgentChatSession;
+  }>(`/targets/${targetId}/agent-chat/sessions`, { title });
+
+  return response.data.data;
+};
+
+export const getTargetAgentChatMessages = async (
+  targetId: number,
+  sessionId: number,
+) => {
+  const response = await apiClient.get<TargetAgentChatMessagesResponse>(
+    `/targets/${targetId}/agent-chat/sessions/${sessionId}/messages`,
+  );
+
+  return response.data;
+};
+
+export const createTargetAgentChatMessage = async (
+  targetId: number,
+  sessionId: number,
+  content: string,
+) => {
+  const response = await apiClient.post<CreateAgentChatMessageResponse>(
+    `/targets/${targetId}/agent-chat/sessions/${sessionId}/messages`,
+    { content },
+  );
+
+  return response.data.data;
+};
