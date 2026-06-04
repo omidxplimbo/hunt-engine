@@ -113,6 +113,12 @@ const ActionCard = ({
   onDispatch: (action: TargetAgentAction) => void;
 }) => {
   const policyCheck = parseJSONValue(action.policy_check_json);
+  const actionOutput = parseJSONValue(action.output_json);
+  const dispatchPreview = actionOutput?.dispatcher_version ? actionOutput : null;
+  const dispatchGuardrails = Array.isArray(dispatchPreview?.guardrails)
+    ? dispatchPreview.guardrails
+    : [];
+
   const canApprove =
     action.status === "proposed" && action.policy_status !== "blocked";
   const canReject =
@@ -192,7 +198,84 @@ const ActionCard = ({
         </div>
       )}
 
-      {action.error_message && (
+      {dispatchPreview && (
+        <div className="mt-3 border border-hack-warning/50 bg-hack-warning/10 p-3">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-hack-warning">
+              <AlertTriangle className="h-3 w-3" /> Dispatcher Preview
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Pill tone={dispatchPreview.execution_enabled ? "primary" : "warning"}>
+                execution: {String(dispatchPreview.execution_enabled)}
+              </Pill>
+              <Pill tone={dispatchPreview.executed ? "primary" : "warning"}>
+                executed: {String(dispatchPreview.executed)}
+              </Pill>
+              <Pill tone={dispatchPreview.hard_blocked ? "danger" : "neutral"}>
+                hard blocked: {String(dispatchPreview.hard_blocked)}
+              </Pill>
+            </div>
+          </div>
+
+          <div className="grid gap-2 md:grid-cols-3">
+            <div className="border border-hack-border/70 bg-black/30 p-2">
+              <div className="font-mono text-[10px] uppercase text-hack-dim">
+                Handler
+              </div>
+              <div className="break-all font-mono text-xs text-white">
+                {dispatchPreview.handler || "-"}
+              </div>
+            </div>
+
+            <div className="border border-hack-border/70 bg-black/30 p-2">
+              <div className="font-mono text-[10px] uppercase text-hack-dim">
+                Version
+              </div>
+              <div className="break-all font-mono text-xs text-white">
+                {dispatchPreview.dispatcher_version || "-"}
+              </div>
+            </div>
+
+            <div className="border border-hack-border/70 bg-black/30 p-2">
+              <div className="font-mono text-[10px] uppercase text-hack-dim">
+                Completed
+              </div>
+              <div className="break-all font-mono text-xs text-white">
+                {formatDate(action.completed_at)}
+              </div>
+            </div>
+          </div>
+
+          {dispatchPreview.reason && (
+            <div className="mt-3 text-sm text-hack-warning">
+              {dispatchPreview.reason}
+            </div>
+          )}
+
+          {dispatchGuardrails.length > 0 && (
+            <details className="mt-3">
+              <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-wider text-hack-dim hover:text-white">
+                Guardrails
+              </summary>
+              <ul className="mt-2 space-y-1 text-xs text-hack-dim">
+                {dispatchGuardrails.map((item: any, idx: number) => (
+                  <li key={idx} className="break-words">
+                    - {String(item)}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+
+          {action.error_message && (
+            <div className="mt-3 border border-hack-border/70 bg-black/30 p-2 text-xs text-hack-dim">
+              {action.error_message}
+            </div>
+          )}
+        </div>
+      )}
+
+      {action.error_message && !dispatchPreview && (
         <div className="mt-3 border border-hack-danger/50 bg-hack-danger/10 p-3 text-sm text-hack-danger">
           {action.error_message}
         </div>
