@@ -40,6 +40,7 @@ import {
 import FindingsPanel from "../components/FindingsPanel";
 import AIAnalysisPanel from "../components/AIAnalysisPanel";
 import AgentRunsPanel from "../components/AgentRunsPanel";
+import AgentActionsPanel from "../components/AgentActionsPanel";
 import TargetPolicyPanel from "../components/TargetPolicyPanel";
 
 type ActiveTab = "assets" | "urls" | "findings" | "analysis" | "policy";
@@ -330,6 +331,12 @@ const TargetAssets = () => {
   const featureAgentRuns = isAccountFeatureEnabled(
     accountFeatureFlags,
     FEATURE_FLAGS.agentRuns,
+    true,
+  );
+
+  const featureAgentActions = isAccountFeatureEnabled(
+    accountFeatureFlags,
+    FEATURE_FLAGS.agentActions,
     true,
   );
 
@@ -832,6 +839,11 @@ const TargetAssets = () => {
             triageEnabled={featureAITriageAgent}
             summaryEnabled={featureAISummaryAgent}
             reportEnabled={featureAIReportAgent}
+          />
+
+          <AgentActionsPanel
+            targetId={targetId}
+            enabled={featureAgentActions}
           />
         </>
       ) : (
