@@ -296,7 +296,7 @@ const AgentActionsPanel = ({ targetId, enabled = true }: Props) => {
   }
 
   return (
-    <div className="mt-6 border border-hack-border bg-black/30 p-5">
+    <div id="agent-actions-panel" className="mt-6 border border-hack-border bg-black/30 p-5">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="flex items-center gap-2 font-mono text-lg uppercase tracking-wider text-hack-primary">

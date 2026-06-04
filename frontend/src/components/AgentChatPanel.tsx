@@ -77,13 +77,24 @@ const MessageBubble = ({ message }: { message: TargetAgentChatMessage }) => {
           <span>{message.message_type}</span>
         </div>
 
-        <div className="whitespace-pre-wrap text-sm text-white">
+        <div dir="auto" className="whitespace-pre-wrap text-sm text-white">
           {message.content}
         </div>
 
         {actionIds.length > 0 && (
           <div className="mt-3 border border-hack-warning/50 bg-hack-warning/10 p-2 font-mono text-[11px] text-hack-warning">
-            Created proposed action IDs: {actionIds.join(", ")}
+            <div>Created proposed action IDs: {actionIds.join(", ")}</div>
+            <button
+              type="button"
+              onClick={() =>
+                document
+                  .getElementById("agent-actions-panel")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
+              }
+              className="mt-2 border border-hack-warning/70 px-2 py-1 text-[10px] uppercase tracking-wider hover:bg-hack-warning/10"
+            >
+              Jump to Agent Actions
+            </button>
           </div>
         )}
       </div>
