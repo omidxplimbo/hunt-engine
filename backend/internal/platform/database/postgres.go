@@ -67,6 +67,8 @@ func Connect() {
 		&models.AgentRun{},
 		&models.AgentAction{},
 		&models.AgentActionApproval{},
+		&models.AgentChatSession{},
+		&models.AgentChatMessage{},
 		&models.NucleiTemplate{},
 	)
 

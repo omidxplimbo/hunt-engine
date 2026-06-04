@@ -25,6 +25,7 @@ const (
 	KeyAIReportAgent          = "feature.ai_report_agent"
 	KeyAgentActions           = "feature.agent_actions"
 
+	KeyAgentChat  = "feature.agent_chat"
 	StateInherit  = "inherit"
 	StateEnabled  = "enabled"
 	StateDisabled = "disabled"
@@ -107,6 +108,11 @@ var definitions = []Definition{
 		Key:         KeyAgentActions,
 		Default:     true,
 		Description: "Enable proposed/approved/rejected agent actions for human-approved workflows.",
+	},
+	{
+		Key:         KeyAgentChat,
+		Default:     true,
+		Description: "Enable target-scoped conversational chat/command agent sessions.",
 	},
 }
 

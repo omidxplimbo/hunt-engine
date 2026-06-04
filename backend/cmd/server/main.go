@@ -137,6 +137,11 @@ func main() {
 	api.Post("/targets/:id/agent-actions/propose", handlers.ProposeTargetAgentAction)
 	api.Post("/targets/:id/agent-actions/:action_id/approve", handlers.ApproveTargetAgentAction)
 	api.Post("/targets/:id/agent-actions/:action_id/reject", handlers.RejectTargetAgentAction)
+	// Agent Chat Routes
+	api.Get("/targets/:id/agent-chat/sessions", handlers.GetTargetAgentChatSessions)
+	api.Post("/targets/:id/agent-chat/sessions", handlers.CreateTargetAgentChatSession)
+	api.Get("/targets/:id/agent-chat/sessions/:session_id/messages", handlers.GetTargetAgentChatMessages)
+	api.Post("/targets/:id/agent-chat/sessions/:session_id/messages", handlers.CreateTargetAgentChatMessage)
 
 	// 👇 Self-service (کاربر روی اکانت خودش)
 	api.Get("/me", handlers.GetMe)
