@@ -176,6 +176,7 @@ func main() {
 	api.Post("/targets/:id/ai/recommendations/generate", handlers.GenerateTargetAIRecommendations)
 	api.Get("/targets/:id/agents/runs", handlers.GetTargetAgentRuns)
 	api.Post("/targets/:id/agents/triage/run", handlers.RunTargetTriageAgent)
+	api.Post("/targets/:id/agents/summary/run", handlers.RunTargetSummaryAgent)
 	api.Get("/targets/:id/audit-logs", handlers.GetTargetAuditLogs)
 
 	api.Get("/dashboard/stats", handlers.GetDashboardStats)
