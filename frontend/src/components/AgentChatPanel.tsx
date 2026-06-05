@@ -8,12 +8,14 @@ import {
   RefreshCw,
   Send,
   ShieldCheck,
+  Trash2,
   User,
 } from "lucide-react";
 import clsx from "clsx";
 import {
   createTargetAgentChatMessage,
   createTargetAgentChatSession,
+  deleteTargetAgentChatSession,
   getTargetAgentChatMessages,
   getTargetAgentChatSessions,
   type TargetAgentChatMessage,
@@ -200,6 +202,16 @@ const AgentChatPanel = ({ targetId, enabled = true }: Props) => {
     },
   });
 
+  const deleteSessionMutation = useMutation({
+    mutationFn: (sessionId: number) =>
+      deleteTargetAgentChatSession(targetId, sessionId),
+    onSuccess: () => {
+      setSelectedSessionId(null);
+      setNotice("Chat session deleted");
+      refreshAll();
+    },
+  });
+
   const sendMessageMutation = useMutation({
     mutationFn: async () => {
       const content = message.trim();
@@ -234,6 +246,7 @@ const AgentChatPanel = ({ targetId, enabled = true }: Props) => {
 
   const busy =
     createSessionMutation.isPending ||
+    deleteSessionMutation.isPending ||
     sendMessageMutation.isPending ||
     sessionsQuery.isFetching ||
     messagesQuery.isFetching;
@@ -281,6 +294,22 @@ const AgentChatPanel = ({ targetId, enabled = true }: Props) => {
           >
             <Plus className="h-3 w-3" /> New Chat
           </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (
+                selectedSessionId &&
+                window.confirm("Delete this chat session and its messages? This is a soft delete.")
+              ) {
+                deleteSessionMutation.mutate(selectedSessionId);
+              }
+            }}
+            disabled={busy || !selectedSessionId}
+            className="hack-btn-ghost border border-hack-danger/60 px-3 py-1 text-[10px] uppercase tracking-wider text-hack-danger disabled:opacity-50"
+          >
+            <Trash2 className="h-3 w-3" /> Delete Chat
+          </button>
         </div>
       </div>
 
@@ -290,12 +319,14 @@ const AgentChatPanel = ({ targetId, enabled = true }: Props) => {
         </div>
       )}
 
-      {(createSessionMutation.error || sendMessageMutation.error) && (
+      {(createSessionMutation.error || sendMessageMutation.error || deleteSessionMutation.error) && (
         <div className="mb-3 border border-hack-danger/60 bg-hack-danger/10 p-3 font-mono text-sm text-hack-danger">
           {(createSessionMutation.error as any)?.response?.data?.message ||
             (sendMessageMutation.error as any)?.response?.data?.message ||
+            (deleteSessionMutation.error as any)?.response?.data?.message ||
             (createSessionMutation.error as any)?.message ||
             (sendMessageMutation.error as any)?.message ||
+            (deleteSessionMutation.error as any)?.message ||
             "Chat operation failed"}
         </div>
       )}

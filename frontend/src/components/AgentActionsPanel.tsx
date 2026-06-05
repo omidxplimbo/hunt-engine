@@ -8,12 +8,14 @@ import {
   PlayCircle,
   RefreshCw,
   ShieldAlert,
+  Trash2,
   XCircle,
 } from "lucide-react";
 import clsx from "clsx";
 import {
   approveTargetAgentAction,
   dispatchTargetAgentAction,
+  deleteTargetAgentAction,
   getTargetAgentActions,
   proposeTargetAgentAction,
   rejectTargetAgentAction,
@@ -105,12 +107,14 @@ const ActionCard = ({
   onApprove,
   onReject,
   onDispatch,
+  onDelete,
 }: {
   action: TargetAgentAction;
   busy: boolean;
   onApprove: (action: TargetAgentAction) => void;
   onReject: (action: TargetAgentAction) => void;
   onDispatch: (action: TargetAgentAction) => void;
+  onDelete: (action: TargetAgentAction) => void;
 }) => {
   const policyCheck = parseJSONValue(action.policy_check_json);
   const actionOutput = parseJSONValue(action.output_json);
@@ -125,6 +129,7 @@ const ActionCard = ({
     action.status === "proposed" || action.status === "approved";
   const canDispatch =
     action.status === "approved" && action.policy_status !== "blocked";
+  const canDelete = action.status !== "executed";
 
   return (
     <div className="border border-hack-border bg-black/20 p-4">
@@ -309,6 +314,16 @@ const ActionCard = ({
         >
           <PlayCircle className="h-3 w-3" /> Dispatch Preview
         </button>
+
+        <button
+          type="button"
+          onClick={() => onDelete(action)}
+          disabled={!canDelete || busy}
+          className="hack-btn-ghost border border-hack-danger/60 px-3 py-1 text-[10px] uppercase tracking-wider text-hack-danger disabled:opacity-50"
+          title="Soft-delete this action. Executed actions are protected."
+        >
+          <Trash2 className="h-3 w-3" /> Delete
+        </button>
       </div>
     </div>
   );
@@ -398,11 +413,20 @@ const AgentActionsPanel = ({ targetId, enabled = true }: Props) => {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (action: TargetAgentAction) => deleteTargetAgentAction(targetId, action.id),
+    onSuccess: () => {
+      setMessage("Agent action deleted");
+      refresh();
+    },
+  });
+
   const busy =
     proposeMutation.isPending ||
     approveMutation.isPending ||
     rejectMutation.isPending ||
-    dispatchMutation.isPending;
+    dispatchMutation.isPending ||
+    deleteMutation.isPending;
 
   if (!enabled) {
     return null;
@@ -456,16 +480,18 @@ const AgentActionsPanel = ({ targetId, enabled = true }: Props) => {
         </div>
       )}
 
-      {(proposeMutation.error || approveMutation.error || rejectMutation.error || dispatchMutation.error) && (
+      {(proposeMutation.error || approveMutation.error || rejectMutation.error || dispatchMutation.error || deleteMutation.error) && (
         <div className="mb-3 border border-hack-danger/60 bg-hack-danger/10 p-3 font-mono text-sm text-hack-danger">
           {(proposeMutation.error as any)?.response?.data?.message ||
             (approveMutation.error as any)?.response?.data?.message ||
             (rejectMutation.error as any)?.response?.data?.message ||
             (dispatchMutation.error as any)?.response?.data?.message ||
+            (deleteMutation.error as any)?.response?.data?.message ||
             (proposeMutation.error as any)?.message ||
             (approveMutation.error as any)?.message ||
             (rejectMutation.error as any)?.message ||
             (dispatchMutation.error as any)?.message ||
+            (deleteMutation.error as any)?.message ||
             "Agent action operation failed"}
         </div>
       )}
@@ -523,6 +549,11 @@ const AgentActionsPanel = ({ targetId, enabled = true }: Props) => {
               onApprove={(item) => approveMutation.mutate(item)}
               onReject={(item) => rejectMutation.mutate(item)}
               onDispatch={(item) => dispatchMutation.mutate(item)}
+              onDelete={(item) => {
+                if (window.confirm(`Delete agent action #${item.id}? This is a soft delete.`)) {
+                  deleteMutation.mutate(item);
+                }
+              }}
             />
           ))}
         </div>

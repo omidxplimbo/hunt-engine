@@ -959,3 +959,45 @@ export const dispatchTargetAgentAction = async (
 
   return response.data.data;
 };
+
+// -----------------------------
+// Analysis cleanup / delete endpoints
+// -----------------------------
+export const deleteTargetAIAnalysis = async (
+  targetId: number,
+  analysisId: number,
+) => {
+  await apiClient.delete(`/targets/${targetId}/ai/analyses/${analysisId}`);
+};
+
+export const deleteTargetAIRecommendation = async (
+  targetId: number,
+  recommendationId: number,
+) => {
+  await apiClient.delete(
+    `/targets/${targetId}/ai/recommendations/${recommendationId}`,
+  );
+};
+
+export const deleteTargetAgentRun = async (
+  targetId: number,
+  runId: number,
+) => {
+  await apiClient.delete(`/targets/${targetId}/agents/runs/${runId}`);
+};
+
+export const deleteTargetAgentAction = async (
+  targetId: number,
+  actionId: number,
+) => {
+  await apiClient.delete(`/targets/${targetId}/agent-actions/${actionId}`);
+};
+
+export const deleteTargetAgentChatSession = async (
+  targetId: number,
+  sessionId: number,
+) => {
+  await apiClient.delete(
+    `/targets/${targetId}/agent-chat/sessions/${sessionId}`,
+  );
+};
