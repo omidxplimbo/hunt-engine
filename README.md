@@ -6,82 +6,86 @@ The platform combines deterministic scanner logic with structured evidence, acco
 
 ---
 
-## Current release focus: v3.6.0
+## Current release focus: v3.7.0
 
-v3.6.0 extends Hunt Engine from a scanner and reporting platform into a policy-aware, AI-assisted advisory workflow layer for attack surface intelligence and manual hunting.
+v3.7.0 extends Hunt Engine from policy-aware advisory agents into a human-approved attack-surface workflow layer. It introduces target-scoped Agent Actions, an Attack Surface Chat interface, deterministic chat-to-action planning, policy/autonomy guardrails, dispatch previews, duplicate proposal prevention, and cleanup controls for generated analysis data.
 
-### Core v3.6.0 scope
+### Core v3.7.0 scope
 
-- **Target Policy Foundation**
-  - Per-target policy context for platform name, program URL, in-scope patterns, out-of-scope patterns, allowed/disallowed test types, max testing intensity, authentication requirements, safe testing notes, reporting preferences, business context, and default asset criticality.
-  - Policy is used as advisory context for agent outputs and future human-approved workflows.
+- **Human-approved Agent Actions**
+  - Target-scoped `agent_actions` records for proposed, approved, rejected, blocked, failed, and future executed workflow actions.
+  - Supported action types include OWASP checklist planning, crawling, Nuclei profile runs, JS intelligence, safe bug-test planning, endpoint review, payload planning, severity review, report generation, and report submission planning.
+  - Actions remain policy-aware and approval-gated.
+  - Real command execution, payload execution, scan execution from actions, severity auto-apply, and report auto-submit remain disabled in the v3.7.0 foundation.
 
-- **Agent Runs Data Layer**
-  - Persistent `agent_runs` records for advisory agent executions.
-  - Stores target, creator, agent type, provider, model, status, policy status, input digest, input JSON, output JSON, error message, start time, and completion time.
-  - Agent runs are auditable and target-scoped.
+- **Agent Action Approval Workflow**
+  - Users can approve or reject proposed actions from Target Analysis.
+  - Human decisions are stored in `agent_action_approvals`.
+  - Approval/rejection activity is audit logged.
+  - Blocked-by-policy actions cannot be approved.
 
-- **Deterministic Triage Agent**
-  - Generates policy-aware advisory triage output from stored findings and evidence.
-  - Highlights interesting findings, manual validation steps, false-positive risk, bug bounty value, policy safety notes, and recommended manual tests.
-  - Does not override deterministic severity, risk score, finding validity, or policy enforcement.
+- **Attack Surface Chat**
+  - Target Analysis includes an Attack Surface Chat workspace.
+  - Users can write natural-language requests such as OWASP coverage planning, safe XSS/CORS/open redirect checks, JS review, report preparation, or severity review.
+  - The chat agent uses existing target context and deterministically converts intent into proposed agent actions.
+  - Chat creates action plans only; it does not execute commands, payloads, scans, or submissions.
 
-- **Deterministic Summary Agent**
-  - Generates attack surface summaries from stored target data.
-  - Summarizes assets, live assets, URLs, findings, interesting assets, coverage, risk narrative, what to test next, safety notes, assumptions, and limitations.
-  - Advisory only; no active testing or exploitation.
+- **Chat Sessions and Messages**
+  - Persistent `agent_chat_sessions` and `agent_chat_messages` tables.
+  - Sessions are target-scoped and user-owned.
+  - Assistant responses can include action-plan metadata and proposed action IDs.
+  - Chat sessions/messages can be soft-deleted from the UI.
 
-- **Deterministic Report Agent**
-  - Generates human-validation-required report draft candidates.
-  - Output includes report candidate, impact hypothesis, evidence needed, validation checklist, platform-safe wording, suggested fix, related findings/assets, and explicit no-auto-submit guardrails.
-  - Does not submit reports and does not claim confirmed impact without manual validation.
+- **Agent Action Dispatcher Foundation**
+  - Approved actions can be sent to Dispatch Preview.
+  - Dispatcher preview records output JSON, handler name, action class, guardrails, required controls, hard-block reasons, and execution-disabled status.
+  - `agent-action-dispatcher-v2` does not execute commands, payloads, scans, severity changes, or report submissions.
+  - Dispatcher actions are audit logged with `target.agent_action.dispatch`.
 
-- **Advisory Agents UI**
-  - Target Analysis now includes an Advisory Agents panel.
-  - Supports Run Summary, Run Triage, and Run Report.
-  - Displays latest agent outputs with guardrail language: advisory only, no auto-exploitation, human validation required, and policy-aware guidance.
+- **Policy Checker v2 and Autonomy Controls Foundation**
+  - `policy_check_json` now uses `agent-actions-policy-v2`.
+  - Action classes are classified into advisory, passive recon, template scan, safe bug test, deep scan, command execution, payload generation, payload execution, finding validation, severity apply, and report submission.
+  - Policy checker emits policy tokens, blocked reasons, warning reasons, required controls, autonomy controls, max-test-intensity enforcement, allowed/disallowed test type handling, auth warnings, and rate-limit warnings.
+  - High/critical risk, level-3 exploit validation, payload execution, report submission, and dangerous future action classes are blocked by default.
 
-- **Agent Outputs in PDF Reports**
-  - Target PDF reports now include an Advisory Agent Outputs section.
-  - Shows latest completed Summary, Triage, and Report agent outputs after Target Analysis.
-  - Includes guardrail wording to keep deterministic product logic authoritative.
+- **Duplicate Action Proposal Prevention**
+  - Similar active actions are not repeatedly created for the same target.
+  - Proposed, approved, and blocked-by-policy actions are considered active duplicates.
+  - Duplicate proposal attempts are audit logged with `target.agent_action.propose_duplicate`.
 
-### Additional v3.6.0 operational improvements
+- **Target Analysis Workspace Reorganization**
+  - The Target Analysis tab now uses a single-active-section workspace.
+  - Sections include AI Analysis, Recommendations, Advisory Agents, Agent Actions, and Attack Surface Chat.
+  - Only one section is rendered at a time, reducing page length, clutter, and unnecessary frontend workload.
 
-- **Account Custom PureDNS Wordlists**
-  - Users can upload account-scoped `.txt` PureDNS wordlists.
-  - Wordlists are available in the target create/edit PureDNS selector.
-  - Admin/user quotas are supported.
+- **Analysis Workspace Cleanup Controls**
+  - Users can soft-delete generated AI analyses, AI recommendations, advisory agent runs, agent actions, and chat sessions/messages.
+  - Backend deletion is owner-scoped, target-scoped, and audit logged.
+  - Executed agent actions are protected from UI deletion to preserve security/audit trail integrity.
+  - Audit actions include `target.ai_analysis.delete`, `target.ai_recommendation.delete`, `target.agent_run.delete`, `target.agent_action.delete`, and `target.agent_chat.session.delete`.
 
-- **Persistent Wordlist Storage**
-  - Uploaded wordlists are stored under `/data/wordlists` inside the backend container.
-  - The backend mounts `${HUNT_WORDLISTS_DIR:-./hunt-wordlists}:/data/wordlists`.
-  - This prevents uploaded wordlists from being lost when containers are recreated or deployments are performed.
+- **LLM Provider Secret Cache Fix**
+  - LLM provider configs containing API keys are no longer cached in Redis in a way that strips secrets through JSON serialization.
+  - This prevents false fallback errors such as "LLM provider has no API key saved" after a key is correctly stored.
+  - Deterministic fallback behavior remains safe when provider calls fail.
 
-- **Large Upload Support**
-  - Backend request body limit is configurable with `HUNT_MAX_REQUEST_BODY_MB`.
-  - Nginx supports large uploads with increased body size and long upload/proxy timeouts.
+### v3.7.0 guardrail status
 
-- **Improved Wordlist Uploader UI**
-  - Account wordlist uploader supports drag-and-drop.
-  - Upload progress shows percentage and uploaded/total bytes for local file uploads.
-  - URL imports remain server-side and show pending/importing state rather than browser upload progress.
+v3.7.0 is a foundation release for human-approved workflow orchestration. It intentionally does **not** enable real autonomous execution.
 
-- **PureDNS Large Wordlist Stability**
-  - PureDNS runs selected wordlists sequentially instead of merging all selected wordlists into one huge in-memory combined list.
-  - Progress is shown per wordlist.
-  - Only resolved/live PureDNS results are persisted.
+Disabled by design in v3.7.0:
 
-- **AlterX Live-Only Persistence**
-  - Large AlterX candidate streams are validated before persistence.
-  - Unresolved AlterX candidates are not stored as assets, preventing database bloat.
-  - Live AlterX-resolved assets retain source attribution.
+- Direct command execution.
+- Payload execution.
+- Automated exploit validation.
+- Scan execution from agent actions.
+- Automatic severity changes.
+- Automatic report submission.
+- Out-of-scope or destructive testing.
+- Uncontrolled AI-driven hacking workflows.
 
-- **Target Fresh Restart**
-  - Target-level fresh restart resets scan checkpoints, removes queued jobs for that target, clears target temp artifacts/locks, preserves existing assets/findings, and queues the first configured scan module.
-  - Useful after manual stop, stale scan state, crash recovery, or pipeline logic changes.
+Future versions may enable selected execution paths only behind explicit account controls, target policy checks, feature flags, human approval, rate limits, audit logs, and evidence requirements.
 
----
 
 ## Guardrail principles
 
@@ -144,6 +148,7 @@ Hunt Engine is built around strict commercial-grade security product guardrails:
 - Optional LLM-assisted narrative generation with deterministic guardrails.
 - Deterministic target recommendations.
 - v3.6.0 advisory agent outputs in PDF reports.
+- v3.7.0 human-approved Agent Actions, Attack Surface Chat, policy/autonomy checks, dispatcher previews, and cleanup controls.
 
 ### Account-scoped configuration
 
@@ -447,11 +452,11 @@ docker compose up -d --force-recreate frontend nginx
 
 ## Development workflow
 
-Typical v3.6.0 development branch workflow:
+Typical v3.7.0 development branch workflow:
 
 ```bash
-git checkout v3.6.0
-git pull origin v3.6.0
+git checkout v3.7.0
+git pull origin v3.7.0
 ```
 
 Frontend build:
@@ -680,6 +685,28 @@ v3.6.0 PDF reports include advisory outputs from the latest completed Summary, T
 ---
 
 ## Release history
+
+### v3.7.0
+
+Human-approved attack-surface workflow foundation:
+
+- Agent Actions Data Layer and UI.
+- Approval and rejection workflow for proposed actions.
+- Audit logs for propose, approve, reject, duplicate proposal, dispatch, and cleanup operations.
+- Attack Surface Chat backend and frontend UI.
+- Target-scoped chat sessions and messages.
+- Deterministic chat-to-action planner.
+- Chat-to-proposed-agent-actions flow.
+- Duplicate action proposal prevention.
+- Agent Action Dispatcher Foundation.
+- Dispatch Preview UI and dispatcher output details.
+- `agent-action-dispatcher-v2` guardrail output.
+- Policy Checker v2 and autonomy controls foundation.
+- Action class classification, policy tokens, blocked reasons, warning reasons, required controls, and max-test-intensity enforcement.
+- Target Analysis single-active-section workspace.
+- Delete/cleanup controls for AI analyses, AI recommendations, advisory agent runs, agent actions, and chat sessions/messages.
+- LLM provider secret-cache fix.
+- Real command execution, payload execution, scan execution from actions, severity auto-apply, and report auto-submit remain disabled.
 
 ### v3.6.0
 

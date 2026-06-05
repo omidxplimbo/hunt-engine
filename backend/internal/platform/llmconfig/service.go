@@ -1,20 +1,14 @@
 package llmconfig
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
-	"time"
-
-	"github.com/redis/go-redis/v9"
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 )
-
-const cacheTTL = 10 * time.Minute
 
 func cacheKey(ownerKey string) string {
 	ownerKey = strings.TrimSpace(ownerKey)
@@ -25,28 +19,16 @@ func cacheKey(ownerKey string) string {
 }
 
 // GetProvidersForOwner returns account-scoped LLM provider configs.
-// It caches full internal rows, including API keys, in Redis.
-// API handlers must still sanitize API keys before returning data to frontend.
+//
+// Important security note:
+// UserLLMProviderConfig.APIKey is tagged json:"-" so JSON marshaling drops it.
+// Caching this model in Redis causes ResolveDefault to read cached provider rows
+// without API keys and incorrectly fall back with "no API key saved".
+// Do not cache provider configs that include secrets; read them directly from DB.
 func GetProvidersForOwner(ownerKey string) ([]models.UserLLMProviderConfig, error) {
 	ownerKey = strings.TrimSpace(ownerKey)
 	if ownerKey == "" {
 		return nil, fmt.Errorf("owner key is required")
-	}
-
-	key := cacheKey(ownerKey)
-
-	if redisq.Client != nil {
-		raw, err := redisq.Client.Get(redisq.Ctx, key).Result()
-		if err == nil && strings.TrimSpace(raw) != "" {
-			var rows []models.UserLLMProviderConfig
-			if jsonErr := json.Unmarshal([]byte(raw), &rows); jsonErr == nil {
-				return rows, nil
-			} else {
-				log.Printf("⚠️ Failed to decode LLM provider cache for %s: %v", ownerKey, jsonErr)
-			}
-		} else if err != nil && err != redis.Nil {
-			log.Printf("⚠️ Failed to read LLM provider cache for %s: %v", ownerKey, err)
-		}
 	}
 
 	var rows []models.UserLLMProviderConfig
@@ -57,17 +39,11 @@ func GetProvidersForOwner(ownerKey string) ([]models.UserLLMProviderConfig, erro
 		return nil, err
 	}
 
-	if redisq.Client != nil {
-		if payload, err := json.Marshal(rows); err == nil {
-			if err := redisq.Client.Set(redisq.Ctx, key, payload, cacheTTL).Err(); err != nil {
-				log.Printf("⚠️ Failed to write LLM provider cache for %s: %v", ownerKey, err)
-			}
-		}
-	}
-
 	return rows, nil
 }
 
+// InvalidateOwner removes legacy/stale provider cache entries.
+// Provider configs are intentionally not cached because they include secrets.
 func InvalidateOwner(ownerKey string) {
 	ownerKey = strings.TrimSpace(ownerKey)
 	if ownerKey == "" || redisq.Client == nil {

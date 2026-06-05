@@ -720,3 +720,284 @@ export const runTargetReportAgent = async (targetId: number) => {
 
   return response.data.data;
 };
+
+// -----------------------------
+// Agent Actions - v3.7.0 foundation
+// -----------------------------
+export type AgentActionStatus =
+  | "proposed"
+  | "approved"
+  | "rejected"
+  | "executed"
+  | "failed"
+  | "blocked_by_policy";
+
+export type AgentActionPolicyStatus =
+  | "allowed"
+  | "warning"
+  | "blocked"
+  | "unknown";
+
+export interface TargetAgentAction {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  target_id: number;
+  agent_run_id?: number | null;
+  created_by_user_id?: number | null;
+  approved_by_user_id?: number | null;
+  action_type: string;
+  title: string;
+  description: string;
+  status: AgentActionStatus | string;
+  policy_status: AgentActionPolicyStatus | string;
+  risk_level: string;
+  safety_level: number;
+  test_level: number;
+  autonomy_level: number;
+  requested_by_agent: boolean;
+  requires_approval: boolean;
+  input_json: any;
+  output_json: any;
+  policy_check_json: any;
+  error_message?: string;
+  reject_reason?: string;
+  approved_at?: string | null;
+  rejected_at?: string | null;
+  executed_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface TargetAgentActionsResponse {
+  status: string;
+  data: TargetAgentAction[];
+  count: number;
+  total_count: number;
+  page: number;
+}
+
+export interface ProposeAgentActionPayload {
+  agent_run_id?: number | null;
+  action_type: string;
+  title: string;
+  description?: string;
+  risk_level?: string;
+  safety_level?: number;
+  test_level?: number;
+  autonomy_level?: number;
+  requested_by_agent?: boolean;
+  requires_approval?: boolean;
+  input_json?: Record<string, any>;
+}
+
+export const getTargetAgentActions = async (targetId: number, limit = 30) => {
+  const response = await apiClient.get<TargetAgentActionsResponse>(
+    `/targets/${targetId}/agent-actions`,
+    { params: { limit } },
+  );
+
+  return response.data;
+};
+
+export const proposeTargetAgentAction = async (
+  targetId: number,
+  payload: ProposeAgentActionPayload,
+) => {
+  const response = await apiClient.post<{
+    status: string;
+    data: TargetAgentAction;
+  }>(`/targets/${targetId}/agent-actions/propose`, payload);
+
+  return response.data.data;
+};
+
+export const approveTargetAgentAction = async (
+  targetId: number,
+  actionId: number,
+  reason = "",
+) => {
+  const response = await apiClient.post<{
+    status: string;
+    data: TargetAgentAction;
+  }>(`/targets/${targetId}/agent-actions/${actionId}/approve`, { reason });
+
+  return response.data.data;
+};
+
+export const rejectTargetAgentAction = async (
+  targetId: number,
+  actionId: number,
+  reason = "",
+) => {
+  const response = await apiClient.post<{
+    status: string;
+    data: TargetAgentAction;
+  }>(`/targets/${targetId}/agent-actions/${actionId}/reject`, { reason });
+
+  return response.data.data;
+};
+
+
+// -----------------------------
+// Agent Chat - v3.7.0 foundation
+// -----------------------------
+export interface TargetAgentChatSession {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  target_id: number;
+  created_by_user_id?: number | null;
+  title: string;
+  status: string;
+  context_json: any;
+  last_message_at?: string | null;
+}
+
+export interface TargetAgentChatMessage {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  session_id: number;
+  target_id: number;
+  created_by_user_id?: number | null;
+  role: "user" | "assistant" | "system" | "tool" | string;
+  message_type: string;
+  content: string;
+  input_json: any;
+  output_json: any;
+  agent_run_id?: number | null;
+  agent_action_id?: number | null;
+}
+
+export interface TargetAgentChatSessionsResponse {
+  status: string;
+  data: TargetAgentChatSession[];
+  count: number;
+  total_count: number;
+  page: number;
+}
+
+export interface TargetAgentChatMessagesResponse {
+  status: string;
+  data: TargetAgentChatMessage[];
+  count: number;
+}
+
+export interface CreateAgentChatMessageResponse {
+  status: string;
+  data: {
+    user_message: TargetAgentChatMessage;
+    assistant_message: TargetAgentChatMessage;
+    proposed_actions: TargetAgentAction[];
+  };
+}
+
+export const getTargetAgentChatSessions = async (
+  targetId: number,
+  limit = 20,
+) => {
+  const response = await apiClient.get<TargetAgentChatSessionsResponse>(
+    `/targets/${targetId}/agent-chat/sessions`,
+    { params: { limit } },
+  );
+
+  return response.data;
+};
+
+export const createTargetAgentChatSession = async (
+  targetId: number,
+  title = "Attack Surface Chat",
+) => {
+  const response = await apiClient.post<{
+    status: string;
+    data: TargetAgentChatSession;
+  }>(`/targets/${targetId}/agent-chat/sessions`, { title });
+
+  return response.data.data;
+};
+
+export const getTargetAgentChatMessages = async (
+  targetId: number,
+  sessionId: number,
+) => {
+  const response = await apiClient.get<TargetAgentChatMessagesResponse>(
+    `/targets/${targetId}/agent-chat/sessions/${sessionId}/messages`,
+  );
+
+  return response.data;
+};
+
+export const createTargetAgentChatMessage = async (
+  targetId: number,
+  sessionId: number,
+  content: string,
+) => {
+  const response = await apiClient.post<CreateAgentChatMessageResponse>(
+    `/targets/${targetId}/agent-chat/sessions/${sessionId}/messages`,
+    { content },
+  );
+
+  return response.data.data;
+};
+
+// Agent Action Dispatcher - v3.7.0 foundation
+export const dispatchTargetAgentAction = async (
+  targetId: number,
+  actionId: number,
+  note = "",
+) => {
+  const response = await apiClient.post<{
+    status: string;
+    data: {
+      action: TargetAgentAction;
+      dispatch: any;
+    };
+  }>(`/targets/${targetId}/agent-actions/${actionId}/dispatch`, {
+    dry_run: true,
+    note,
+  });
+
+  return response.data.data;
+};
+
+// -----------------------------
+// Analysis cleanup / delete endpoints
+// -----------------------------
+export const deleteTargetAIAnalysis = async (
+  targetId: number,
+  analysisId: number,
+) => {
+  await apiClient.delete(`/targets/${targetId}/ai/analyses/${analysisId}`);
+};
+
+export const deleteTargetAIRecommendation = async (
+  targetId: number,
+  recommendationId: number,
+) => {
+  await apiClient.delete(
+    `/targets/${targetId}/ai/recommendations/${recommendationId}`,
+  );
+};
+
+export const deleteTargetAgentRun = async (
+  targetId: number,
+  runId: number,
+) => {
+  await apiClient.delete(`/targets/${targetId}/agents/runs/${runId}`);
+};
+
+export const deleteTargetAgentAction = async (
+  targetId: number,
+  actionId: number,
+) => {
+  await apiClient.delete(`/targets/${targetId}/agent-actions/${actionId}`);
+};
+
+export const deleteTargetAgentChatSession = async (
+  targetId: number,
+  sessionId: number,
+) => {
+  await apiClient.delete(
+    `/targets/${targetId}/agent-chat/sessions/${sessionId}`,
+  );
+};
