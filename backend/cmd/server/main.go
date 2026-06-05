@@ -138,11 +138,13 @@ func main() {
 	api.Post("/targets/:id/agent-actions/:action_id/approve", handlers.ApproveTargetAgentAction)
 	api.Post("/targets/:id/agent-actions/:action_id/reject", handlers.RejectTargetAgentAction)
 	api.Post("/targets/:id/agent-actions/:action_id/dispatch", handlers.DispatchTargetAgentAction)
+	api.Delete("/targets/:id/agent-actions/:action_id", handlers.DeleteTargetAgentAction)
 	// Agent Chat Routes
 	api.Get("/targets/:id/agent-chat/sessions", handlers.GetTargetAgentChatSessions)
 	api.Post("/targets/:id/agent-chat/sessions", handlers.CreateTargetAgentChatSession)
 	api.Get("/targets/:id/agent-chat/sessions/:session_id/messages", handlers.GetTargetAgentChatMessages)
 	api.Post("/targets/:id/agent-chat/sessions/:session_id/messages", handlers.CreateTargetAgentChatMessage)
+	api.Delete("/targets/:id/agent-chat/sessions/:session_id", handlers.DeleteTargetAgentChatSession)
 
 	// 👇 Self-service (کاربر روی اکانت خودش)
 	api.Get("/me", handlers.GetMe)
@@ -183,12 +185,15 @@ func main() {
 
 	api.Get("/targets/:id/ai/analyses", handlers.GetTargetAIAnalyses)
 	api.Post("/targets/:id/ai/analyses/generate", handlers.GenerateTargetAIAnalysis)
+	api.Delete("/targets/:id/ai/analyses/:analysis_id", handlers.DeleteTargetAIAnalysis)
 	api.Get("/targets/:id/ai/recommendations", handlers.GetTargetAIRecommendations)
 	api.Post("/targets/:id/ai/recommendations/generate", handlers.GenerateTargetAIRecommendations)
+	api.Delete("/targets/:id/ai/recommendations/:recommendation_id", handlers.DeleteTargetAIRecommendation)
 	api.Get("/targets/:id/agents/runs", handlers.GetTargetAgentRuns)
 	api.Post("/targets/:id/agents/triage/run", handlers.RunTargetTriageAgent)
 	api.Post("/targets/:id/agents/summary/run", handlers.RunTargetSummaryAgent)
 	api.Post("/targets/:id/agents/report/run", handlers.RunTargetReportAgent)
+	api.Delete("/targets/:id/agents/runs/:run_id", handlers.DeleteTargetAgentRun)
 	api.Get("/targets/:id/audit-logs", handlers.GetTargetAuditLogs)
 
 	api.Get("/dashboard/stats", handlers.GetDashboardStats)
