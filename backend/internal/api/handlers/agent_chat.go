@@ -317,6 +317,34 @@ func createActionFromChat(c *fiber.Ctx, target *models.Target, uid uint, req pro
 		title = actionType
 	}
 
+	duplicate, duplicateErr := findDuplicateAgentAction(target.ID, actionType, title)
+	if duplicateErr != nil {
+		return nil, duplicateErr
+	}
+	if duplicate != nil {
+		entityID := duplicate.ID
+		_ = auditlog.Record(auditlog.Entry{
+			ActorUserID: &uid,
+			Action:      "target.agent_action.propose_duplicate",
+			EntityType:  "agent_action",
+			EntityID:    &entityID,
+			TargetID:    &target.ID,
+			IPAddress:   auditlog.ClientIP(c),
+			UserAgent:   auditlog.UserAgent(c),
+			Metadata: map[string]interface{}{
+				"target_id":     target.ID,
+				"root_domain":   target.RootDomain,
+				"source":        "agent_chat",
+				"action_type":   duplicate.ActionType,
+				"status":        duplicate.Status,
+				"policy_status": duplicate.PolicyStatus,
+				"risk_level":    duplicate.RiskLevel,
+				"duplicate":     true,
+			},
+		})
+		return duplicate, nil
+	}
+
 	risk := normalizeAgentRisk(req.RiskLevel)
 	safetyLevel := clampAgentLevel(req.SafetyLevel)
 	testLevel := clampAgentLevel(req.TestLevel)

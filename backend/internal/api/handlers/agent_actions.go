@@ -103,6 +103,39 @@ func clampAgentLevel(value int) int {
 	return value
 }
 
+func duplicateActionStatuses() []string {
+	return []string{
+		models.AgentActionStatusProposed,
+		models.AgentActionStatusApproved,
+		models.AgentActionStatusBlockedByPolicy,
+	}
+}
+
+func findDuplicateAgentAction(targetID uint, actionType string, title string) (*models.AgentAction, error) {
+	actionType = normalizeAgentActionType(actionType)
+	title = strings.TrimSpace(title)
+	if actionType == "" {
+		return nil, nil
+	}
+
+	var row models.AgentAction
+	q := database.DB.
+		Where("target_id = ? AND action_type = ? AND status IN ?", targetID, actionType, duplicateActionStatuses())
+
+	if title != "" {
+		q = q.Where("LOWER(title) = LOWER(?)", title)
+	}
+
+	err := q.Order("created_at DESC, id DESC").First(&row).Error
+	if err == nil {
+		return &row, nil
+	}
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return nil, err
+}
+
 func agentActionJSON(value interface{}) datatypes.JSON {
 	if value == nil {
 		return datatypes.JSON([]byte("{}"))
@@ -290,6 +323,39 @@ func ProposeTargetAgentAction(c *fiber.Ctx) error {
 	uid, err := currentUserID(c)
 	if err != nil {
 		return err
+	}
+
+	duplicate, duplicateErr := findDuplicateAgentAction(target.ID, actionType, title)
+	if duplicateErr != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": duplicateErr.Error()})
+	}
+	if duplicate != nil {
+		entityID := duplicate.ID
+		_ = auditlog.Record(auditlog.Entry{
+			ActorUserID: &uid,
+			Action:      "target.agent_action.propose_duplicate",
+			EntityType:  "agent_action",
+			EntityID:    &entityID,
+			TargetID:    &target.ID,
+			IPAddress:   auditlog.ClientIP(c),
+			UserAgent:   auditlog.UserAgent(c),
+			Metadata: map[string]interface{}{
+				"target_id":     target.ID,
+				"root_domain":   target.RootDomain,
+				"action_type":   duplicate.ActionType,
+				"status":        duplicate.Status,
+				"policy_status": duplicate.PolicyStatus,
+				"risk_level":    duplicate.RiskLevel,
+				"duplicate":     true,
+			},
+		})
+
+		return c.Status(fiber.StatusOK).JSON(fiber.Map{
+			"status":    "success",
+			"duplicate": true,
+			"message":   "similar active agent action already exists",
+			"data":      duplicate,
+		})
 	}
 
 	risk := normalizeAgentRisk(req.RiskLevel)
