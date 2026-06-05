@@ -179,6 +179,7 @@ export const FEATURE_FLAGS = {
   agentRuns: "feature.agent_runs",
   agentActions: "feature.agent_actions",
   agentChat: "feature.agent_chat",
+  safeBugTesting: "feature.safe_bug_testing",
   aiTriageAgent: "feature.ai_triage_agent",
   aiSummaryAgent: "feature.ai_summary_agent",
   aiReportAgent: "feature.ai_report_agent",

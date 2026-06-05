@@ -42,10 +42,11 @@ import AIAnalysisPanel from "../components/AIAnalysisPanel";
 import AgentRunsPanel from "../components/AgentRunsPanel";
 import AgentActionsPanel from "../components/AgentActionsPanel";
 import AgentChatPanel from "../components/AgentChatPanel";
+import BugTestsPanel from "../components/BugTestsPanel";
 import TargetPolicyPanel from "../components/TargetPolicyPanel";
 
 type ActiveTab = "assets" | "urls" | "findings" | "analysis" | "policy";
-type AnalysisSection = "overview" | "recommendations" | "agents" | "actions" | "chat";
+type AnalysisSection = "overview" | "recommendations" | "agents" | "actions" | "bugtests" | "chat";
 
 const KNOWN_ASSET_PROVIDERS = [
   { id: "subfinder", label: "Subfinder" },
@@ -346,6 +347,12 @@ const TargetAssets = () => {
   const featureAgentChat = isAccountFeatureEnabled(
     accountFeatureFlags,
     FEATURE_FLAGS.agentChat,
+    true,
+  );
+
+  const featureSafeBugTesting = isAccountFeatureEnabled(
+    featureFlagsQuery.data?.flags,
+    FEATURE_FLAGS.safeBugTesting,
     true,
   );
 
@@ -840,7 +847,7 @@ const TargetAssets = () => {
               Analysis Workspace
             </div>
 
-            <div className="grid gap-2 md:grid-cols-5">
+            <div className="grid gap-2 md:grid-cols-6">
               {[
                 {
                   id: "overview",
@@ -865,6 +872,12 @@ const TargetAssets = () => {
                   label: "Agent Actions",
                   description: "approve / reject",
                   enabled: featureAgentActions,
+                },
+                {
+                  id: "bugtests",
+                  label: "Bug Tests",
+                  description: "safe passive checks",
+                  enabled: featureSafeBugTesting,
                 },
                 {
                   id: "chat",
@@ -933,6 +946,13 @@ const TargetAssets = () => {
             <AgentActionsPanel
               targetId={targetId}
               enabled={featureAgentActions}
+            />
+          )}
+
+          {activeAnalysisSection === "bugtests" && (
+            <BugTestsPanel
+              targetId={targetId}
+              enabled={featureSafeBugTesting}
             />
           )}
 

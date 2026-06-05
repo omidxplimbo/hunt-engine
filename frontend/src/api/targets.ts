@@ -1001,3 +1001,111 @@ export const deleteTargetAgentChatSession = async (
     `/targets/${targetId}/agent-chat/sessions/${sessionId}`,
   );
 };
+
+// -----------------------------
+// Safe Bug Testing - v3.8.0 foundation
+// -----------------------------
+export interface TargetBugTestRun {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  target_id: number;
+  created_by_user_id?: number | null;
+  agent_action_id?: number | null;
+  profile: string;
+  status: string;
+  policy_status: string;
+  safety_level: number;
+  test_level: number;
+  bug_types?: any;
+  owasp_refs?: any;
+  input_json?: any;
+  output_json?: any;
+  policy_check_json?: any;
+  error_message?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface TargetBugTestResult {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  run_id: number;
+  target_id: number;
+  asset_id?: number | null;
+  url_id?: number | null;
+  finding_id?: number | null;
+  bug_type: string;
+  test_name: string;
+  status: string;
+  confidence: string;
+  severity_hint: string;
+  evidence_json?: any;
+  owasp_refs?: any;
+  tags?: any;
+}
+
+export interface TargetBugTestRunsResponse {
+  status: string;
+  data: TargetBugTestRun[];
+  count: number;
+  total_count: number;
+  page: number;
+}
+
+export interface TargetBugTestResultsResponse {
+  status: string;
+  data: TargetBugTestResult[];
+  count: number;
+  total_count: number;
+  page: number;
+}
+
+export const getTargetBugTestRuns = async (targetId: number, limit = 20) => {
+  const response = await apiClient.get<TargetBugTestRunsResponse>(
+    `/targets/${targetId}/bug-tests/runs`,
+    {
+      params: { limit },
+    },
+  );
+
+  return response.data;
+};
+
+export const createTargetBugTestRun = async (
+  targetId: number,
+  payload: {
+    profile: string;
+    bug_types: string[];
+    owasp_refs?: string[];
+    safety_level?: number;
+    test_level?: number;
+    input_json?: any;
+  },
+) => {
+  const response = await apiClient.post<{
+    status: string;
+    data: TargetBugTestRun;
+  }>(`/targets/${targetId}/bug-tests/runs`, payload);
+
+  return response.data.data;
+};
+
+export const getTargetBugTestResults = async (
+  targetId: number,
+  limit = 50,
+  runId?: number | null,
+) => {
+  const response = await apiClient.get<TargetBugTestResultsResponse>(
+    `/targets/${targetId}/bug-tests/results`,
+    {
+      params: {
+        limit,
+        ...(runId ? { run_id: runId } : {}),
+      },
+    },
+  );
+
+  return response.data;
+};
