@@ -7,10 +7,13 @@ import {
   PlayCircle,
   RefreshCw,
   ShieldCheck,
+  Trash2,
 } from "lucide-react";
 import clsx from "clsx";
 import {
   createTargetBugTestRun,
+  deleteTargetBugTestRun,
+  deleteTargetBugTestResult,
   getTargetBugTestResults,
   getTargetBugTestRuns,
   type TargetBugTestResult,
@@ -143,7 +146,15 @@ const RunCard = ({
   );
 };
 
-const ResultCard = ({ result }: { result: TargetBugTestResult }) => {
+const ResultCard = ({
+  result,
+  busy = false,
+  onDelete,
+}: {
+  result: TargetBugTestResult;
+  busy?: boolean;
+  onDelete?: (result: TargetBugTestResult) => void;
+}) => {
   const evidence = parseJSONValue(result.evidence_json);
   const tags = asArray(result.tags);
   const refs = asArray(result.owasp_refs);
@@ -162,8 +173,21 @@ const ResultCard = ({ result }: { result: TargetBugTestResult }) => {
             {result.severity_hint}
           </Pill>
         </div>
-        <div className="font-mono text-[10px] text-hack-dim">
-          #{result.id}
+        <div className="flex items-center gap-2">
+          <div className="font-mono text-[10px] text-hack-dim">
+            #{result.id}
+          </div>
+          {onDelete && (
+            <button
+              type="button"
+              onClick={() => onDelete(result)}
+              disabled={busy}
+              className="border border-hack-danger/60 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-hack-danger disabled:opacity-50"
+              title="Soft-delete this bug test result"
+            >
+              <Trash2 className="inline h-3 w-3" /> Delete
+            </button>
+          )}
         </div>
       </div>
 
@@ -250,6 +274,29 @@ const BugTestsPanel = ({ targetId, enabled = true }: Props) => {
       queryClient.invalidateQueries({
         queryKey: ["target", targetId, "bug-test-runs"],
       });
+      queryClient.invalidateQueries({
+        queryKey: ["target", targetId, "bug-test-results"],
+      });
+    },
+  });
+
+  const deleteRunMutation = useMutation({
+    mutationFn: (run: TargetBugTestRun) => deleteTargetBugTestRun(targetId, run.id),
+    onSuccess: () => {
+      setSelectedRunId(null);
+      queryClient.invalidateQueries({
+        queryKey: ["target", targetId, "bug-test-runs"],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["target", targetId, "bug-test-results"],
+      });
+    },
+  });
+
+  const deleteResultMutation = useMutation({
+    mutationFn: (result: TargetBugTestResult) =>
+      deleteTargetBugTestResult(targetId, result.id),
+    onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ["target", targetId, "bug-test-results"],
       });
@@ -403,8 +450,23 @@ const BugTestsPanel = ({ targetId, enabled = true }: Props) => {
                 <Pill>profile: {selectedRun.profile}</Pill>
                 <Pill>active_testing: false</Pill>
               </div>
-              <div className="font-mono text-xs text-hack-dim">
-                Run #{selectedRun.id} · {formatDate(selectedRun.created_at)}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="font-mono text-xs text-hack-dim">
+                  Run #{selectedRun.id} · {formatDate(selectedRun.created_at)}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm(`Delete bug test run #${selectedRun.id} and its results? This is a soft delete.`)) {
+                      deleteRunMutation.mutate(selectedRun);
+                    }
+                  }}
+                  disabled={deleteRunMutation.isPending}
+                  className="border border-hack-danger/60 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-hack-danger disabled:opacity-50"
+                  title="Soft-delete this bug test run"
+                >
+                  <Trash2 className="inline h-3 w-3" /> Delete Run
+                </button>
               </div>
             </div>
           )}
@@ -415,7 +477,16 @@ const BugTestsPanel = ({ targetId, enabled = true }: Props) => {
             </div>
           ) : (
             results.map((result) => (
-              <ResultCard key={result.id} result={result} />
+              <ResultCard
+                key={result.id}
+                result={result}
+                busy={deleteResultMutation.isPending}
+                onDelete={(item) => {
+                  if (window.confirm(`Delete bug test result #${item.id}? This is a soft delete.`)) {
+                    deleteResultMutation.mutate(item);
+                  }
+                }}
+              />
             ))
           )}
         </div>

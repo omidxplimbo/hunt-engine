@@ -198,6 +198,8 @@ func main() {
 	api.Get("/targets/:id/bug-tests/runs", handlers.GetTargetBugTestRuns)
 	api.Post("/targets/:id/bug-tests/runs", handlers.CreateTargetBugTestRun)
 	api.Get("/targets/:id/bug-tests/results", handlers.GetTargetBugTestResults)
+	api.Delete("/targets/:id/bug-tests/runs/:run_id", handlers.DeleteTargetBugTestRun)
+	api.Delete("/targets/:id/bug-tests/results/:result_id", handlers.DeleteTargetBugTestResult)
 
 	api.Get("/targets/:id/audit-logs", handlers.GetTargetAuditLogs)
 

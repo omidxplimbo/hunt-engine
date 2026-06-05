@@ -1109,3 +1109,17 @@ export const getTargetBugTestResults = async (
 
   return response.data;
 };
+
+export const deleteTargetBugTestRun = async (
+  targetId: number,
+  runId: number,
+) => {
+  await apiClient.delete(`/targets/${targetId}/bug-tests/runs/${runId}`);
+};
+
+export const deleteTargetBugTestResult = async (
+  targetId: number,
+  resultId: number,
+) => {
+  await apiClient.delete(`/targets/${targetId}/bug-tests/results/${resultId}`);
+};

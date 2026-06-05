@@ -13,6 +13,7 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/featureflags"
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 )
 
 type createBugTestRunRequest struct {
@@ -658,4 +659,142 @@ func CreateBugTestRunFromAgentAction(target *models.Target, action *models.Agent
 	})
 
 	return &run, resultCount, nil
+}
+
+func parseBugTestResultIDParam(c *fiber.Ctx) (uint, error) {
+	raw := strings.TrimSpace(c.Params("result_id"))
+	id, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || id == 0 {
+		return 0, fmt.Errorf("invalid bug test result id")
+	}
+	return uint(id), nil
+}
+
+// DeleteTargetBugTestRun soft-deletes one bug test run and its results.
+func DeleteTargetBugTestRun(c *fiber.Ctx) error {
+	if err := ensureSafeBugTestingEnabled(c); err != nil {
+		return err
+	}
+
+	targetID, err := parseTargetIDParam(c)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	runID, err := parseBugTestRunIDParam(c)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	var run models.BugTestRun
+	if err := database.DB.Where("id = ? AND target_id = ?", runID, target.ID).First(&run).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "bug test run not found"})
+	}
+
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+
+	var resultCount int64
+	_ = database.DB.Model(&models.BugTestResult{}).
+		Where("run_id = ? AND target_id = ?", run.ID, target.ID).
+		Count(&resultCount).Error
+
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("run_id = ? AND target_id = ?", run.ID, target.ID).
+			Delete(&models.BugTestResult{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&run).Error
+	}); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	entityID := run.ID
+	_ = auditlog.Record(auditlog.Entry{
+		ActorUserID: &uid,
+		Action:      "target.bug_test.run.delete",
+		EntityType:  "bug_test_run",
+		EntityID:    &entityID,
+		TargetID:    &target.ID,
+		IPAddress:   auditlog.ClientIP(c),
+		UserAgent:   auditlog.UserAgent(c),
+		Metadata: map[string]interface{}{
+			"target_id":     target.ID,
+			"root_domain":   target.RootDomain,
+			"profile":       run.Profile,
+			"status":        run.Status,
+			"policy_status": run.PolicyStatus,
+			"result_count":  resultCount,
+			"deleted":       true,
+		},
+	})
+
+	return c.JSON(fiber.Map{"status": "success", "message": "bug test run deleted"})
+}
+
+// DeleteTargetBugTestResult soft-deletes one bug test result.
+func DeleteTargetBugTestResult(c *fiber.Ctx) error {
+	if err := ensureSafeBugTestingEnabled(c); err != nil {
+		return err
+	}
+
+	targetID, err := parseTargetIDParam(c)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	resultID, err := parseBugTestResultIDParam(c)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	var result models.BugTestResult
+	if err := database.DB.Where("id = ? AND target_id = ?", resultID, target.ID).First(&result).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "bug test result not found"})
+	}
+
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+
+	if err := database.DB.Delete(&result).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	entityID := result.ID
+	_ = auditlog.Record(auditlog.Entry{
+		ActorUserID: &uid,
+		Action:      "target.bug_test.result.delete",
+		EntityType:  "bug_test_result",
+		EntityID:    &entityID,
+		TargetID:    &target.ID,
+		IPAddress:   auditlog.ClientIP(c),
+		UserAgent:   auditlog.UserAgent(c),
+		Metadata: map[string]interface{}{
+			"target_id":     target.ID,
+			"root_domain":   target.RootDomain,
+			"run_id":        result.RunID,
+			"bug_type":      result.BugType,
+			"test_name":     result.TestName,
+			"status":        result.Status,
+			"confidence":    result.Confidence,
+			"severity_hint": result.SeverityHint,
+			"deleted":       true,
+		},
+	})
+
+	return c.JSON(fiber.Map{"status": "success", "message": "bug test result deleted"})
 }
