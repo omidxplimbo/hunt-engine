@@ -10,9 +10,11 @@ import {
   RefreshCw,
   ShieldCheck,
   Sparkles,
+  Trash2,
 } from "lucide-react";
 import clsx from "clsx";
 import {
+  deleteTargetAgentRun,
   getTargetAgentRuns,
   runTargetReportAgent,
   runTargetSummaryAgent,
@@ -359,11 +361,33 @@ const ReportOutput = ({ output }: { output: any }) => {
 };
 
 
-const AgentRunDetails = ({ run }: { run: TargetAgentRun }) => {
+const AgentRunDetails = ({
+  run,
+  onDelete,
+  busy = false,
+}: {
+  run: TargetAgentRun;
+  onDelete?: (run: TargetAgentRun) => void;
+  busy?: boolean;
+}) => {
   const output = useMemo(() => parseJSONValue(run.output_json), [run.output_json]);
 
   return (
     <div className="space-y-4">
+      {onDelete && (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => onDelete(run)}
+            disabled={busy}
+            className="border border-hack-danger/60 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-hack-danger disabled:opacity-50"
+            title="Soft-delete this advisory agent run"
+          >
+            <Trash2 className="inline h-3 w-3" /> Delete
+          </button>
+        </div>
+      )}
+
       {run.agent_type === "report" ? (
         <ReportOutput output={output} />
       ) : run.agent_type === "summary" ? (
@@ -403,6 +427,16 @@ const AgentRunsPanel = ({
     queryFn: () => getTargetAgentRuns(targetId, 30),
     enabled: Boolean(targetId) && agentRunsEnabled,
     staleTime: 15_000,
+  });
+
+  const deleteRunMutation = useMutation({
+    mutationFn: (run: TargetAgentRun) => deleteTargetAgentRun(targetId, run.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["target", targetId, "agent-runs"],
+      });
+      setSelectedRunId(null);
+    },
   });
 
   const runs = query.data?.data || [];
@@ -546,6 +580,13 @@ const AgentRunsPanel = ({
         <StatusPill>policy aware</StatusPill>
       </div>
 
+      {deleteRunMutation.isError && (
+        <div className="mb-3 border border-hack-danger/60 bg-hack-danger/10 p-3 font-mono text-sm text-hack-danger">
+          {(deleteRunMutation.error as any)?.response?.data?.message ||
+            "Failed to delete agent run"}
+        </div>
+      )}
+
       {query.isLoading ? (
         <div className="flex items-center gap-2 text-sm text-hack-dim">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading agent runs...
@@ -601,7 +642,17 @@ const AgentRunsPanel = ({
           </div>
 
           <div className="min-w-0">
-            {selectedRun ? <AgentRunDetails run={selectedRun} /> : null}
+            {selectedRun ? (
+              <AgentRunDetails
+                run={selectedRun}
+                busy={deleteRunMutation.isPending}
+                onDelete={(item) => {
+                  if (window.confirm(`Delete agent run #${item.id}? This is a soft delete.`)) {
+                    deleteRunMutation.mutate(item);
+                  }
+                }}
+              />
+            ) : null}
           </div>
         </div>
       )}
