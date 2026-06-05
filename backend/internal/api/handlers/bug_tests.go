@@ -509,3 +509,153 @@ func GetTargetBugTestResults(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{"status": "success", "data": rows, "count": len(rows), "total_count": total, "page": page})
 }
+
+// CreateBugTestRunFromAgentAction executes the safe bug testing engine foundation
+// from an approved agent action. v3.8.0 remains passive/stub-only.
+func CreateBugTestRunFromAgentAction(target *models.Target, action *models.AgentAction, uid uint) (*models.BugTestRun, int, error) {
+	if target == nil || action == nil {
+		return nil, 0, fmt.Errorf("missing target or action")
+	}
+
+	if normalizeAgentActionType(action.ActionType) != models.AgentActionTypeRunSafeBugTests {
+		return nil, 0, fmt.Errorf("agent action type %s is not supported by safe bug testing engine", action.ActionType)
+	}
+
+	input := map[string]interface{}{}
+	if len(action.InputJSON) > 0 {
+		_ = json.Unmarshal(action.InputJSON, &input)
+	}
+
+	bugTypes := make([]string, 0)
+	if raw, ok := input["bug_types"].([]interface{}); ok {
+		for _, item := range raw {
+			bugTypes = append(bugTypes, fmt.Sprint(item))
+		}
+	}
+	if raw, ok := input["bug_types"].([]string); ok {
+		bugTypes = append(bugTypes, raw...)
+	}
+	if len(bugTypes) == 0 {
+		bugTypes = []string{
+			models.BugTypeXSS,
+			models.BugTypeCORS,
+			models.BugTypeOpenRedirect,
+			models.BugTypeSecurityHeaders,
+		}
+	}
+	bugTypes = normalizeBugTypes(bugTypes)
+
+	profile := models.BugTestProfilePassive
+	if rawProfile, ok := input["test_profile"].(string); ok {
+		profile = normalizeBugTestProfile(rawProfile)
+	}
+	if profile != models.BugTestProfilePassive && profile != models.BugTestProfileSafe {
+		profile = models.BugTestProfilePassive
+	}
+
+	safetyLevel := action.SafetyLevel
+	testLevel := action.TestLevel
+	if profile == models.BugTestProfilePassive {
+		safetyLevel = 0
+		testLevel = 0
+	}
+	if profile == models.BugTestProfileSafe {
+		if safetyLevel == 0 {
+			safetyLevel = 1
+		}
+		if testLevel == 0 {
+			testLevel = 1
+		}
+	}
+
+	policyStatus, policyReason, policyCheck := bugTestPolicyCheck(*target, profile, safetyLevel, testLevel, bugTypes)
+
+	now := time.Now().UTC()
+	run := models.BugTestRun{
+		TargetID:        target.ID,
+		CreatedByUserID: &uid,
+		AgentActionID:   &action.ID,
+		Profile:         profile,
+		Status:          models.BugTestRunStatusRunning,
+		PolicyStatus:    policyStatus,
+		SafetyLevel:     safetyLevel,
+		TestLevel:       testLevel,
+		BugTypes:        bugTestJSONArray(bugTypes),
+		OWASPRefs:       bugTestJSONArray([]string{"OWASP-WSTG", "OWASP-ASVS"}),
+		InputJSON: bugTestJSON(map[string]interface{}{
+			"source":             "agent_action_dispatch",
+			"agent_action_id":    action.ID,
+			"agent_action_title": action.Title,
+			"agent_action_input": input,
+			"active_testing":     false,
+		}),
+		PolicyCheckJSON: bugTestJSON(policyCheck),
+		StartedAt:       &now,
+	}
+
+	if policyStatus == models.AgentActionPolicyStatusBlocked {
+		run.Status = models.BugTestRunStatusBlockedByPolicy
+		run.ErrorMessage = policyReason
+		run.CompletedAt = &now
+	}
+
+	if err := database.DB.Create(&run).Error; err != nil {
+		return nil, 0, err
+	}
+
+	resultCount := 0
+	if run.Status == models.BugTestRunStatusRunning {
+		var err error
+		resultCount, err = seedPassiveBugTestResults(&run, target, bugTypes)
+
+		completed := time.Now().UTC()
+		run.CompletedAt = &completed
+		run.Status = models.BugTestRunStatusCompleted
+		run.OutputJSON = bugTestJSON(map[string]interface{}{
+			"runner_version":      "safe-bug-testing-v1",
+			"source":              "agent_action_dispatch",
+			"agent_action_id":     action.ID,
+			"active_testing":      false,
+			"results_created":     resultCount,
+			"manual_validation":   true,
+			"execution_statement": "passive/stub foundation only; no payloads were sent",
+		})
+
+		if err != nil {
+			run.Status = models.BugTestRunStatusFailed
+			run.ErrorMessage = err.Error()
+		}
+
+		if saveErr := database.DB.Save(&run).Error; saveErr != nil {
+			return &run, resultCount, saveErr
+		}
+
+		if err != nil {
+			return &run, resultCount, err
+		}
+	}
+
+	entityID := run.ID
+	_ = auditlog.Record(auditlog.Entry{
+		ActorUserID: &uid,
+		Action:      "target.bug_test.run.create",
+		EntityType:  "bug_test_run",
+		EntityID:    &entityID,
+		TargetID:    &target.ID,
+		Metadata: map[string]interface{}{
+			"target_id":       target.ID,
+			"root_domain":     target.RootDomain,
+			"source":          "agent_action_dispatch",
+			"agent_action_id": action.ID,
+			"profile":         run.Profile,
+			"status":          run.Status,
+			"policy_status":   run.PolicyStatus,
+			"safety_level":    run.SafetyLevel,
+			"test_level":      run.TestLevel,
+			"results_created": resultCount,
+			"active_testing":  false,
+		},
+	})
+
+	return &run, resultCount, nil
+}

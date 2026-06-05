@@ -405,10 +405,16 @@ const AgentActionsPanel = ({ targetId, enabled = true }: Props) => {
       dispatchTargetAgentAction(
         targetId,
         action.id,
-        "dispatcher preview requested from target analysis UI",
+        "dispatcher requested from target analysis UI",
       ),
-    onSuccess: () => {
-      setMessage("Dispatcher preview recorded. Real execution remains disabled.");
+    onSuccess: (data) => {
+      const executed = Boolean(data?.dispatch?.executed);
+      const safeBugTesting = data?.dispatch?.safe_bug_testing;
+      if (executed && safeBugTesting?.bug_test_run_id) {
+        setMessage("Safe bug testing run created. Passive/stub execution completed.");
+      } else {
+        setMessage("Dispatcher preview recorded. Real execution remains disabled for this action class.");
+      }
       refresh();
     },
   });
