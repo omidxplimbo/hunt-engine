@@ -77,18 +77,45 @@ func isHardBlockedDispatcherAction(action models.AgentAction) bool {
 
 func buildDispatchPreview(target models.Target, action models.AgentAction, dryRun bool, note string) map[string]interface{} {
 	hardBlocked := isHardBlockedDispatcherAction(action)
+	class := actionClass(action.ActionType)
+
+	blockedReasons := make([]string, 0)
+	requiredControls := make([]string, 0)
+
+	switch class {
+	case "command_execution":
+		requiredControls = append(requiredControls, "allow_command_execution")
+		blockedReasons = append(blockedReasons, "command execution is disabled in v3.7.0 foundation")
+	case "payload_generation":
+		requiredControls = append(requiredControls, "allow_payload_generation")
+		blockedReasons = append(blockedReasons, "payload generation execution path is disabled in v3.7.0 foundation")
+	case "payload_execution":
+		requiredControls = append(requiredControls, "allow_payload_execution", "can_run_exploit_validation")
+		blockedReasons = append(blockedReasons, "payload execution is blocked until controlled exploit validation is implemented")
+	case "severity_apply":
+		requiredControls = append(requiredControls, "allow_severity_auto_update")
+		blockedReasons = append(blockedReasons, "automatic severity application is disabled")
+	case "report_submission":
+		requiredControls = append(requiredControls, "allow_report_auto_submit")
+		blockedReasons = append(blockedReasons, "automatic report submission is disabled")
+	}
+
+	if hardBlocked && len(blockedReasons) == 0 {
+		blockedReasons = append(blockedReasons, "action class is hard-blocked from execution by default")
+	}
 
 	reason := "dispatcher foundation is active, but real action execution is disabled in this v3.7.0 step"
-	if hardBlocked {
-		reason = "action class is hard-blocked from execution by default and requires future explicit policy/account controls"
+	if len(blockedReasons) > 0 {
+		reason = blockedReasons[0]
 	}
 
 	return map[string]interface{}{
-		"dispatcher_version": "agent-action-dispatcher-v1",
+		"dispatcher_version": "agent-action-dispatcher-v2",
 		"target_id":          target.ID,
 		"root_domain":        target.RootDomain,
 		"action_id":          action.ID,
 		"action_type":        action.ActionType,
+		"action_class":       class,
 		"handler":            dispatcherHandlerName(action.ActionType),
 		"dry_run":            dryRun,
 		"note":               strings.TrimSpace(note),
@@ -101,12 +128,23 @@ func buildDispatchPreview(target models.Target, action models.AgentAction, dryRu
 		"execution_enabled":  false,
 		"executed":           false,
 		"hard_blocked":       hardBlocked,
+		"blocked_reasons":    blockedReasons,
+		"required_controls":  requiredControls,
 		"reason":             reason,
+		"autonomy_controls": map[string]interface{}{
+			"allow_command_execution":    false,
+			"allow_payload_generation":   false,
+			"allow_payload_execution":    false,
+			"allow_severity_auto_update": false,
+			"allow_report_auto_submit":   false,
+			"can_run_exploit_validation": false,
+		},
 		"guardrails": []string{
 			"v3.7.0 dispatcher does not execute commands, payloads, scans, report submission, or severity changes",
 			"approved actions are converted into a dispatcher preview only",
 			"future real execution must be feature-flagged, policy-checked, approval-gated, rate-limited, and audited",
 			"hard-blocked action classes require explicit future controls before any execution path can be enabled",
+			"dispatcher preview is not proof of vulnerability validation or execution",
 		},
 	}
 }

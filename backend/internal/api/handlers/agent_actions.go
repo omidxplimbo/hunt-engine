@@ -167,11 +167,133 @@ func ensureAgentActionsEnabled(c *fiber.Ctx) error {
 	return nil
 }
 
+func jsonStringList(value datatypes.JSON) []string {
+	items := make([]string, 0)
+	if len(value) == 0 {
+		return items
+	}
+
+	if err := json.Unmarshal(value, &items); err == nil {
+		for i := range items {
+			items[i] = strings.ToLower(strings.TrimSpace(items[i]))
+		}
+		return items
+	}
+
+	var raw []interface{}
+	if err := json.Unmarshal(value, &raw); err == nil {
+		for _, item := range raw {
+			text := strings.ToLower(strings.TrimSpace(fmt.Sprint(item)))
+			if text != "" {
+				items = append(items, text)
+			}
+		}
+	}
+
+	return items
+}
+
+func containsPolicyToken(items []string, tokens ...string) bool {
+	for _, item := range items {
+		item = strings.ToLower(strings.TrimSpace(item))
+		if item == "" {
+			continue
+		}
+		for _, token := range tokens {
+			token = strings.ToLower(strings.TrimSpace(token))
+			if token != "" && (item == token || strings.Contains(item, token)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func intensityLevel(value string) int {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "passive", "low", "level0", "level_0", "0":
+		return 0
+	case "safe", "safe_active", "level1", "level_1", "1":
+		return 1
+	case "balanced", "controlled", "controlled_active", "level2", "level_2", "2":
+		return 2
+	case "aggressive", "exploit_validation", "manual", "manual_approved", "level3", "level_3", "3":
+		return 3
+	default:
+		return 1
+	}
+}
+
+func actionClass(actionType string) string {
+	switch normalizeAgentActionType(actionType) {
+	case models.AgentActionTypeRunOWASPChecklist,
+		models.AgentActionTypeReviewEndpoint,
+		models.AgentActionTypeProposeSeverityChange,
+		models.AgentActionTypeGenerateReport:
+		return "advisory"
+	case models.AgentActionTypeRunCrawling,
+		models.AgentActionTypeRunJSIntelligence:
+		return "passive_recon"
+	case models.AgentActionTypeRunNucleiProfile,
+		models.AgentActionTypeGenerateNucleiDraft:
+		return "template_scan"
+	case models.AgentActionTypeRunSafeBugTests:
+		return "safe_bug_test"
+	case models.AgentActionTypeDeepScanAsset:
+		return "deep_scan"
+	case models.AgentActionTypeRunCommandSchema:
+		return "command_execution"
+	case models.AgentActionTypeGeneratePayload:
+		return "payload_generation"
+	case models.AgentActionTypeExecutePayloadTest:
+		return "payload_execution"
+	case models.AgentActionTypeValidateFinding:
+		return "finding_validation"
+	case models.AgentActionTypeApplySeverityChange:
+		return "severity_apply"
+	case models.AgentActionTypeSubmitReport:
+		return "report_submission"
+	default:
+		return "unknown"
+	}
+}
+
+func actionPolicyTokens(actionType string) []string {
+	switch actionClass(actionType) {
+	case "advisory":
+		return []string{"advisory", "passive", "owasp", "report", "severity_review"}
+	case "passive_recon":
+		return []string{"passive", "recon", "crawl", "js", "javascript"}
+	case "template_scan":
+		return []string{"nuclei", "template", "scan", "safe_active"}
+	case "safe_bug_test":
+		return []string{"safe_bug_tests", "xss", "cors", "open_redirect", "security_headers", "safe_active"}
+	case "deep_scan":
+		return []string{"deep_scan", "scan", "controlled_active"}
+	case "command_execution":
+		return []string{"command", "command_execution"}
+	case "payload_generation":
+		return []string{"payload", "payload_generation"}
+	case "payload_execution":
+		return []string{"payload_execution", "exploit_validation"}
+	case "finding_validation":
+		return []string{"finding_validation", "validation"}
+	case "severity_apply":
+		return []string{"severity_apply", "severity_change"}
+	case "report_submission":
+		return []string{"report_submission", "submit_report"}
+	default:
+		return []string{actionType}
+	}
+}
+
 func policyCheckForAgentAction(target *models.Target, req proposeAgentActionRequest) (string, string, map[string]interface{}) {
 	actionType := normalizeAgentActionType(req.ActionType)
 	risk := normalizeAgentRisk(req.RiskLevel)
 	safetyLevel := clampAgentLevel(req.SafetyLevel)
 	testLevel := clampAgentLevel(req.TestLevel)
+	class := actionClass(actionType)
+	tokens := actionPolicyTokens(actionType)
 
 	var policy models.TargetPolicy
 	hasPolicy := database.DB.Where("target_id = ?", target.ID).First(&policy).Error == nil
@@ -180,58 +302,124 @@ func policyCheckForAgentAction(target *models.Target, req proposeAgentActionRequ
 	reason := "action is allowed by baseline guardrails"
 	requiresApproval := true
 
-	if !hasPolicy {
-		status = models.AgentActionPolicyStatusWarning
-		reason = "target policy is missing; manual review is required before execution"
-	}
+	blockedReasons := make([]string, 0)
+	warningReasons := make([]string, 0)
+	requiredControls := make([]string, 0)
 
-	if risk == models.AgentActionRiskHigh || risk == models.AgentActionRiskCritical || testLevel >= 3 || safetyLevel >= 3 {
-		status = models.AgentActionPolicyStatusBlocked
-		reason = "high-risk or exploit-validation action is blocked by default in v3.7.0 foundation"
-	}
+	allowedTypes := make([]string, 0)
+	disallowedTypes := make([]string, 0)
+	maxIntensity := "safe"
+	maxIntensityLevel := 1
 
-	if actionType == models.AgentActionTypeSubmitReport {
-		status = models.AgentActionPolicyStatusBlocked
-		reason = "automatic report submission is blocked until report submission controls are implemented"
-	}
+	if hasPolicy {
+		allowedTypes = jsonStringList(policy.AllowedTestTypes)
+		disallowedTypes = jsonStringList(policy.DisallowedTestTypes)
+		maxIntensity = strings.ToLower(strings.TrimSpace(policy.MaxTestIntensity))
+		maxIntensityLevel = intensityLevel(maxIntensity)
 
-	if actionType == models.AgentActionTypeApplySeverityChange {
-		status = models.AgentActionPolicyStatusWarning
-		reason = "severity changes require explicit human approval and evidence thresholds"
-	}
-
-	if actionType == models.AgentActionTypeRunCommandSchema || actionType == models.AgentActionTypeExecutePayloadTest || actionType == models.AgentActionTypeGeneratePayload {
-		if status == models.AgentActionPolicyStatusAllowed {
-			status = models.AgentActionPolicyStatusWarning
-			reason = "command/payload actions require policy review and approval before execution"
+		if len(disallowedTypes) > 0 && containsPolicyToken(disallowedTypes, tokens...) {
+			blockedReasons = append(blockedReasons, "action class is explicitly disallowed by target policy")
 		}
+
+		if len(allowedTypes) > 0 && !containsPolicyToken(allowedTypes, tokens...) {
+			warningReasons = append(warningReasons, "action class is not explicitly listed in allowed_test_types")
+		}
+
+		if testLevel > maxIntensityLevel || safetyLevel > maxIntensityLevel {
+			blockedReasons = append(blockedReasons, fmt.Sprintf("action level exceeds target max_test_intensity=%s", maxIntensity))
+		}
+
+		if policy.AuthRequired && (class == "deep_scan" || class == "safe_bug_test" || class == "payload_execution") {
+			warningReasons = append(warningReasons, "target policy indicates auth_required; verify authorization/session handling before execution")
+		}
+
+		if strings.TrimSpace(policy.RateLimitNotes) != "" {
+			warningReasons = append(warningReasons, "target policy contains rate limit notes that must be respected")
+		}
+	} else {
+		warningReasons = append(warningReasons, "target policy is missing; manual review is required before execution")
+	}
+
+	if risk == models.AgentActionRiskHigh || risk == models.AgentActionRiskCritical {
+		blockedReasons = append(blockedReasons, "high or critical risk action is blocked by default")
+	}
+
+	if testLevel >= 3 || safetyLevel >= 3 {
+		blockedReasons = append(blockedReasons, "level 3 exploit-validation/manual-approved action is blocked in v3.7.0 foundation")
+	}
+
+	switch class {
+	case "command_execution":
+		requiredControls = append(requiredControls, "allow_command_execution")
+		warningReasons = append(warningReasons, "command execution requires future explicit account and policy controls")
+	case "payload_generation":
+		requiredControls = append(requiredControls, "allow_payload_generation")
+		warningReasons = append(warningReasons, "payload generation requires future explicit account and policy controls")
+	case "payload_execution":
+		requiredControls = append(requiredControls, "allow_payload_execution", "can_run_exploit_validation")
+		blockedReasons = append(blockedReasons, "payload execution is blocked until controlled exploit validation is implemented")
+	case "severity_apply":
+		requiredControls = append(requiredControls, "allow_severity_auto_update")
+		warningReasons = append(warningReasons, "severity changes require evidence thresholds and explicit approval")
+	case "report_submission":
+		requiredControls = append(requiredControls, "allow_report_auto_submit")
+		blockedReasons = append(blockedReasons, "automatic report submission is blocked until submission controls are implemented")
+	}
+
+	if len(blockedReasons) > 0 {
+		status = models.AgentActionPolicyStatusBlocked
+		reason = blockedReasons[0]
+	} else if len(warningReasons) > 0 {
+		status = models.AgentActionPolicyStatusWarning
+		reason = warningReasons[0]
 	}
 
 	check := map[string]interface{}{
-		"target_id":          target.ID,
-		"root_domain":        target.RootDomain,
-		"has_target_policy":  hasPolicy,
-		"action_type":        actionType,
-		"risk_level":         risk,
-		"safety_level":       safetyLevel,
-		"test_level":         testLevel,
-		"requires_approval":  requiresApproval,
-		"policy_status":      status,
-		"reason":             reason,
-		"execution_enabled":  false,
-		"foundation_version": "agent-actions-v1",
+		"target_id":             target.ID,
+		"root_domain":           target.RootDomain,
+		"has_target_policy":     hasPolicy,
+		"action_type":           actionType,
+		"action_class":          class,
+		"policy_tokens":         tokens,
+		"risk_level":            risk,
+		"safety_level":          safetyLevel,
+		"test_level":            testLevel,
+		"requires_approval":     requiresApproval,
+		"policy_status":         status,
+		"reason":                reason,
+		"blocked_reasons":       blockedReasons,
+		"warning_reasons":       warningReasons,
+		"required_controls":     requiredControls,
+		"execution_enabled":     false,
+		"foundation_version":    "agent-actions-policy-v2",
+		"max_test_intensity":    maxIntensity,
+		"max_intensity_level":   maxIntensityLevel,
+		"allowed_test_types":    allowedTypes,
+		"disallowed_test_types": disallowedTypes,
+		"autonomy_controls": map[string]interface{}{
+			"allow_command_execution":    false,
+			"allow_payload_generation":   false,
+			"allow_payload_execution":    false,
+			"allow_severity_auto_update": false,
+			"allow_report_auto_submit":   false,
+			"can_run_exploit_validation": false,
+			"max_test_level":             maxIntensityLevel,
+		},
 		"guardrails": []string{
 			"v3.7.0 action execution is not enabled in this foundation step",
 			"blocked_by_policy actions cannot be approved",
-			"high-risk, destructive, out-of-scope, brute force, DoS, and data extraction actions must remain blocked",
+			"policy max_test_intensity is enforced against safety_level and test_level",
+			"disallowed_test_types takes precedence over allowed_test_types",
+			"high-risk, destructive, out-of-scope, brute force, DoS, and data extraction actions remain blocked",
 			"future execution must be scope-checked, approval-gated, rate-limited, and audited",
 		},
 	}
 
 	if hasPolicy {
-		check["max_test_intensity"] = policy.MaxTestIntensity
 		check["auth_required"] = policy.AuthRequired
 		check["safe_testing_notes"] = policy.SafeTestingNotes
+		check["rate_limit_notes"] = policy.RateLimitNotes
+		check["reporting_preferences"] = policy.ReportingPreferences
 	}
 
 	return status, reason, check
