@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -201,17 +202,177 @@ func bugTestPolicyCheck(target models.Target, profile string, safetyLevel int, t
 	return status, reason, check
 }
 
+func parseStringArrayJSON(value datatypes.JSON) []string {
+	out := make([]string, 0)
+	if len(value) == 0 {
+		return out
+	}
+
+	var raw []string
+	if err := json.Unmarshal(value, &raw); err == nil {
+		for _, item := range raw {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				out = append(out, item)
+			}
+		}
+		return out
+	}
+
+	var anyRaw []interface{}
+	if err := json.Unmarshal(value, &anyRaw); err == nil {
+		for _, item := range anyRaw {
+			text := strings.TrimSpace(fmt.Sprint(item))
+			if text != "" {
+				out = append(out, text)
+			}
+		}
+	}
+
+	return out
+}
+
+func parsePatternMatcher(pattern models.BugPattern) map[string]interface{} {
+	out := map[string]interface{}{}
+	if len(pattern.MatcherJSON) == 0 {
+		return out
+	}
+	_ = json.Unmarshal(pattern.MatcherJSON, &out)
+	return out
+}
+
+func loadRunnableBugPatterns(bugTypes []string) ([]models.BugPattern, error) {
+	q := database.DB.
+		Where("enabled = ?", true).
+		Where("safe_by_default = ?", true).
+		Where("requires_approval = ?", false).
+		Where("mode = ?", "passive").
+		Where("test_level <= ? AND safety_level <= ?", 1, 1)
+
+	if len(bugTypes) > 0 {
+		q = q.Where("bug_type IN ?", bugTypes)
+	}
+
+	rows := make([]models.BugPattern, 0)
+	if err := q.Order("bug_type ASC, key ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	return rows, nil
+}
+
+func queryParamsFromURL(rawURL string) map[string]bool {
+	out := map[string]bool{}
+	parts := strings.SplitN(rawURL, "?", 2)
+	if len(parts) != 2 {
+		return out
+	}
+
+	query := parts[1]
+	if hashIdx := strings.Index(query, "#"); hashIdx >= 0 {
+		query = query[:hashIdx]
+	}
+
+	for _, pair := range strings.Split(query, "&") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		name := pair
+		if eqIdx := strings.Index(pair, "="); eqIdx >= 0 {
+			name = pair[:eqIdx]
+		}
+		name = strings.ToLower(strings.TrimSpace(name))
+		if name != "" {
+			out[name] = true
+		}
+	}
+
+	return out
+}
+
+func matchedPatternParameter(rawURL string, pattern models.BugPattern) string {
+	matcher := parsePatternMatcher(pattern)
+	matcherType := strings.ToLower(strings.TrimSpace(fmt.Sprint(matcher["type"])))
+	if matcherType != "url_query_param_name_contains" {
+		return ""
+	}
+
+	expected := make([]string, 0)
+	switch v := matcher["parameters"].(type) {
+	case []interface{}:
+		for _, item := range v {
+			text := strings.ToLower(strings.TrimSpace(fmt.Sprint(item)))
+			if text != "" {
+				expected = append(expected, text)
+			}
+		}
+	case []string:
+		for _, item := range v {
+			text := strings.ToLower(strings.TrimSpace(item))
+			if text != "" {
+				expected = append(expected, text)
+			}
+		}
+	}
+
+	if len(expected) == 0 {
+		return ""
+	}
+
+	params := queryParamsFromURL(rawURL)
+	for name := range params {
+		for _, candidate := range expected {
+			if name == candidate || strings.Contains(name, candidate) {
+				return name
+			}
+		}
+	}
+
+	return ""
+}
+
+func createBugTestResultFromPattern(run *models.BugTestRun, target *models.Target, pattern models.BugPattern, assetID *uint, urlID *uint, status string, evidence map[string]interface{}) models.BugTestResult {
+	patternID := pattern.ID
+	if status == "" {
+		status = models.BugTestResultStatusCandidate
+	}
+
+	evidence["pattern_id"] = pattern.ID
+	evidence["pattern_key"] = pattern.Key
+	evidence["pattern_name"] = pattern.Name
+	evidence["active_testing"] = false
+	evidence["manual_validation"] = true
+
+	return models.BugTestResult{
+		RunID:        run.ID,
+		TargetID:     target.ID,
+		AssetID:      assetID,
+		URLID:        urlID,
+		PatternID:    &patternID,
+		PatternKey:   pattern.Key,
+		BugType:      pattern.BugType,
+		TestName:     pattern.Key,
+		Status:       status,
+		Confidence:   pattern.ConfidenceDefault,
+		SeverityHint: pattern.SeverityHint,
+		EvidenceJSON: bugTestJSON(evidence),
+		OWASPRefs:    pattern.OWASPRefs,
+		Tags:         pattern.Tags,
+	}
+}
+
 func seedPassiveBugTestResults(run *models.BugTestRun, target *models.Target, bugTypes []string) (int, error) {
 	count := 0
 	now := time.Now().UTC()
 
-	hasType := func(t string) bool {
-		for _, bugType := range bugTypes {
-			if bugType == t || bugType == models.BugTypeUnknown {
-				return true
-			}
-		}
-		return false
+	patterns, err := loadRunnableBugPatterns(bugTypes)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(patterns) == 0 {
+		return 0, nil
 	}
 
 	var assets []models.Asset
@@ -220,101 +381,78 @@ func seedPassiveBugTestResults(run *models.BugTestRun, target *models.Target, bu
 		Limit(20).
 		Find(&assets).Error
 
-	if hasType(models.BugTypeSecurityHeaders) {
-		for _, asset := range assets {
-			evidence := map[string]interface{}{
-				"mode":              "passive_stub",
-				"asset":             asset.Value,
-				"final_url":         asset.FinalURL,
-				"status_code":       asset.StatusCode,
-				"web_server":        asset.WebServer,
-				"active_testing":    false,
-				"manual_validation": true,
-				"note":              "Review security headers manually; v3.8.0 foundation does not send active probes.",
-				"created_at":        now,
-			}
-			row := models.BugTestResult{
-				RunID:        run.ID,
-				TargetID:     target.ID,
-				AssetID:      &asset.ID,
-				BugType:      models.BugTypeSecurityHeaders,
-				TestName:     "passive_security_header_review",
-				Status:       models.BugTestResultStatusNeedsManualValidation,
-				Confidence:   "low",
-				SeverityHint: models.FindingSeverityInfo,
-				EvidenceJSON: bugTestJSON(evidence),
-				OWASPRefs:    bugTestJSONArray([]string{"OWASP-WSTG-CONF", "ASVS-14"}),
-				Tags:         bugTestJSONArray([]string{"passive", "headers", "manual_validation"}),
-			}
-			if err := database.DB.Create(&row).Error; err != nil {
-				return count, err
-			}
-			count++
-		}
-	}
-
 	var urls []models.FoundURL
 	_ = database.DB.Where("target_id = ?", target.ID).
 		Order("id DESC").
 		Limit(50).
 		Find(&urls).Error
 
-	for _, url := range urls {
-		lower := strings.ToLower(url.Value)
-		if hasType(models.BugTypeOpenRedirect) && (strings.Contains(lower, "redirect=") || strings.Contains(lower, "return=") || strings.Contains(lower, "next=") || strings.Contains(lower, "url=")) {
-			evidence := map[string]interface{}{
-				"mode":              "passive_stub",
-				"url":               url.Value,
-				"active_testing":    false,
-				"manual_validation": true,
-				"note":              "Redirect-like parameter observed. No payload was sent.",
-				"created_at":        now,
-			}
-			row := models.BugTestResult{
-				RunID:        run.ID,
-				TargetID:     target.ID,
-				URLID:        &url.ID,
-				BugType:      models.BugTypeOpenRedirect,
-				TestName:     "passive_redirect_parameter_candidate",
-				Status:       models.BugTestResultStatusCandidate,
-				Confidence:   "low",
-				SeverityHint: models.FindingSeverityLow,
-				EvidenceJSON: bugTestJSON(evidence),
-				OWASPRefs:    bugTestJSONArray([]string{"OWASP-WSTG-CLNT-04"}),
-				Tags:         bugTestJSONArray([]string{"passive", "open_redirect", "parameter_candidate"}),
-			}
-			if err := database.DB.Create(&row).Error; err != nil {
-				return count, err
-			}
-			count++
-		}
+	for _, pattern := range patterns {
+		matcher := parsePatternMatcher(pattern)
+		matcherType := strings.ToLower(strings.TrimSpace(fmt.Sprint(matcher["type"])))
 
-		if hasType(models.BugTypeXSS) && (strings.Contains(lower, "q=") || strings.Contains(lower, "search=") || strings.Contains(lower, "query=") || strings.Contains(lower, "s=")) {
-			evidence := map[string]interface{}{
-				"mode":              "passive_stub",
-				"url":               url.Value,
-				"active_testing":    false,
-				"manual_validation": true,
-				"note":              "Reflection-prone parameter name observed. No XSS payload was sent.",
-				"created_at":        now,
+		switch matcherType {
+		case "live_http_asset":
+			for _, asset := range assets {
+				evidence := map[string]interface{}{
+					"mode":        "passive_registry",
+					"asset":       asset.Value,
+					"final_url":   asset.FinalURL,
+					"status_code": asset.StatusCode,
+					"web_server":  asset.WebServer,
+					"note":        pattern.Description,
+					"created_at":  now,
+				}
+
+				row := createBugTestResultFromPattern(
+					run,
+					target,
+					pattern,
+					&asset.ID,
+					nil,
+					models.BugTestResultStatusNeedsManualValidation,
+					evidence,
+				)
+
+				if err := database.DB.Create(&row).Error; err != nil {
+					return count, err
+				}
+				count++
 			}
-			row := models.BugTestResult{
-				RunID:        run.ID,
-				TargetID:     target.ID,
-				URLID:        &url.ID,
-				BugType:      models.BugTypeXSS,
-				TestName:     "passive_xss_parameter_candidate",
-				Status:       models.BugTestResultStatusCandidate,
-				Confidence:   "low",
-				SeverityHint: models.FindingSeverityInfo,
-				EvidenceJSON: bugTestJSON(evidence),
-				OWASPRefs:    bugTestJSONArray([]string{"OWASP-WSTG-INPV-01", "OWASP-WSTG-INPV-02"}),
-				Tags:         bugTestJSONArray([]string{"passive", "xss", "parameter_candidate"}),
+
+		case "url_query_param_name_contains":
+			for _, foundURL := range urls {
+				param := matchedPatternParameter(foundURL.Value, pattern)
+				if param == "" {
+					continue
+				}
+
+				evidence := map[string]interface{}{
+					"mode":       "passive_registry",
+					"url":        foundURL.Value,
+					"parameter":  param,
+					"note":       pattern.Description,
+					"created_at": now,
+				}
+
+				row := createBugTestResultFromPattern(
+					run,
+					target,
+					pattern,
+					nil,
+					&foundURL.ID,
+					models.BugTestResultStatusCandidate,
+					evidence,
+				)
+
+				if err := database.DB.Create(&row).Error; err != nil {
+					return count, err
+				}
+				count++
 			}
-			if err := database.DB.Create(&row).Error; err != nil {
-				return count, err
-			}
-			count++
+
+		default:
+			log.Printf("⚠️ Unsupported bug pattern matcher type %q for pattern %s", matcherType, pattern.Key)
 		}
 	}
 
