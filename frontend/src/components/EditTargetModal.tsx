@@ -41,6 +41,9 @@ type ToolKey =
   | 'use_abusedb'
   | 'use_puredns'
   | 'use_waymore'
+  | 'use_gau'
+  | 'use_katana'
+  | 'use_virustotal'
   | 'use_portscan'
   | 'use_nuclei';
 
@@ -60,6 +63,9 @@ type EditFormData = {
   modules: string[];
   use_alterx: boolean;
   use_waymore: boolean;
+  use_gau: boolean;
+  use_katana: boolean;
+  use_virustotal: boolean;
   use_portscan: boolean;
   use_cero: boolean;
   use_crtsh: boolean;
@@ -116,6 +122,37 @@ const DISCOVERY_TOOLS: ToolConfig[] = [
   },
 ];
 
+const CRAWLING_TOOLS: ToolConfig[] = [
+  {
+    key: 'use_waymore',
+    title: 'WAYMORE',
+    badge: 'ARCHIVE',
+    description: 'Deep historical URL collection during Crawling.',
+    Icon: Database,
+  },
+  {
+    key: 'use_gau',
+    title: 'GAU',
+    badge: 'ARCHIVE',
+    description: 'Fetch known URLs from public archives.',
+    Icon: Database,
+  },
+  {
+    key: 'use_katana',
+    title: 'KATANA',
+    badge: 'CRAWLER',
+    description: 'Crawl live assets and JavaScript paths.',
+    Icon: Globe,
+  },
+  {
+    key: 'use_virustotal',
+    title: 'VIRUSTOTAL',
+    badge: 'INTEL',
+    description: 'Collect URLs from VirusTotal when account API key is configured.',
+    Icon: Shield,
+  },
+];
+
 const EXTENDED_TOOLS: ToolConfig[] = [
   {
     key: 'use_nuclei',
@@ -123,13 +160,6 @@ const EXTENDED_TOOLS: ToolConfig[] = [
     badge: 'SECURITY',
     description: 'Run profile-based Nuclei templates and create structured Findings.',
     Icon: Shield,
-  },
-  {
-    key: 'use_waymore',
-    title: 'WAYMORE',
-    badge: 'CRAWL',
-    description: 'Deep historical URL collection during Crawling.',
-    Icon: Database,
   },
   {
     key: 'use_portscan',
@@ -166,6 +196,9 @@ export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
       modules: existingModules,
       use_alterx: target.use_alterx,
       use_waymore: target.use_waymore,
+      use_gau: target.use_gau ?? true,
+      use_katana: target.use_katana ?? true,
+      use_virustotal: target.use_virustotal ?? false,
       use_portscan: target.use_portscan ?? false,
       use_cero: target.use_cero ?? false,
       use_crtsh: target.use_crtsh ?? false,
@@ -407,6 +440,32 @@ export const EditTargetModal = ({ isOpen, onClose, target }: Props) => {
             <div className="mb-3 font-mono text-sm font-bold uppercase tracking-widest text-hack-primary">
               Extended Modules
             </div>
+
+            <div className="space-y-3">
+              <div>
+                <h4 className="font-mono text-sm uppercase tracking-wider text-hack-primary">
+                  Crawling Tools
+                </h4>
+                <p className="mt-1 text-xs text-hack-dim">
+                  waybackurls runs by default whenever the Crawling module is enabled. The tools below are optional crawling sources.
+                </p>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                {CRAWLING_TOOLS.map(renderToolCard)}
+              </div>
+            </div>
+
+<div className="space-y-3">
+              <div>
+                <h4 className="font-mono text-sm uppercase tracking-wider text-hack-primary">
+                  Security / Extended Tools
+                </h4>
+                <p className="mt-1 text-xs text-hack-dim">
+                  Optional security and infrastructure modules that run outside the core Crawling sources.
+                </p>
+              </div>
+</div>
+
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               {EXTENDED_TOOLS.map(renderToolCard)}
 

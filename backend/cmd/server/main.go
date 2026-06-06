@@ -12,7 +12,8 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/recover"
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/api/handlers"
-	"github.com/omidxplimbo/hunt-engine/backend/internal/api/middleware" // 👈 ایمپورت جدید
+	"github.com/omidxplimbo/hunt-engine/backend/internal/api/middleware"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/bugpatterns" // 👈 ایمپورت جدید
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
@@ -42,6 +43,11 @@ func requestBodyLimitBytes() int {
 
 func main() {
 	database.Connect()
+
+	if err := bugpatterns.SeedCore(); err != nil {
+		log.Printf("Failed to seed core bug patterns: %v\\n", err)
+	}
+
 	database.CleanupZombieScans()
 
 	// 👇👇👇 سید کردن کاربر ادمین اولیه
@@ -151,6 +157,9 @@ func main() {
 	api.Patch("/me", handlers.UpdateMe)
 	api.Post("/me/change-password", handlers.ChangeMyPassword)
 	api.Delete("/me", handlers.DeleteMe)
+	api.Get("/me/virustotal-config", handlers.GetMyVirusTotalConfig)
+	api.Put("/me/virustotal-config", handlers.PutMyVirusTotalConfig)
+	api.Delete("/me/virustotal-config", handlers.DeleteMyVirusTotalConfig)
 	api.Get("/me/telegram-config", handlers.GetMyTelegramConfig)
 	api.Put("/me/telegram-config", handlers.PutMyTelegramConfig)
 	api.Get("/me/llm-providers", handlers.GetMyLLMProviders)
@@ -194,7 +203,18 @@ func main() {
 	api.Post("/targets/:id/agents/summary/run", handlers.RunTargetSummaryAgent)
 	api.Post("/targets/:id/agents/report/run", handlers.RunTargetReportAgent)
 	api.Delete("/targets/:id/agents/runs/:run_id", handlers.DeleteTargetAgentRun)
+	// Safe Bug Testing Routes
+	api.Get("/targets/:id/bug-tests/runs", handlers.GetTargetBugTestRuns)
+	api.Post("/targets/:id/bug-tests/runs", handlers.CreateTargetBugTestRun)
+	api.Get("/targets/:id/bug-tests/results", handlers.GetTargetBugTestResults)
+	api.Delete("/targets/:id/bug-tests/runs/:run_id", handlers.DeleteTargetBugTestRun)
+	api.Delete("/targets/:id/bug-tests/results/:result_id", handlers.DeleteTargetBugTestResult)
+
 	api.Get("/targets/:id/audit-logs", handlers.GetTargetAuditLogs)
+
+	// Bug Pattern Registry Routes
+	api.Get("/bug-patterns", handlers.GetBugPatterns)
+	api.Get("/bug-patterns/:id", handlers.GetBugPattern)
 
 	api.Get("/dashboard/stats", handlers.GetDashboardStats)
 	api.Get("/monitor/stats", handlers.GetMonitorData)

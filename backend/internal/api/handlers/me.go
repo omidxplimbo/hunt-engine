@@ -893,3 +893,136 @@ func isValidLLMProviderName(provider string) bool {
 
 	return true
 }
+
+type virusTotalConfigResponse struct {
+	Enabled      bool   `json:"enabled"`
+	HasAPIKey    bool   `json:"has_api_key"`
+	MaskedAPIKey string `json:"masked_api_key"`
+	Scope        string `json:"scope"`
+	OwnerKey     string `json:"owner_key"`
+}
+
+type putMyVirusTotalConfigRequest struct {
+	Enabled bool   `json:"enabled"`
+	APIKey  string `json:"api_key"`
+}
+
+func maskSecret(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if len(value) <= 8 {
+		return "********"
+	}
+	return value[:4] + strings.Repeat("*", len(value)-8) + value[len(value)-4:]
+}
+
+func getOrDefaultVirusTotalConfig(user models.User) (models.UserVirusTotalConfig, string, string) {
+	ownerKey, scope, ownerUserID := featureflags.OwnerKeyForUser(user)
+
+	var cfg models.UserVirusTotalConfig
+	if err := database.DB.Where("owner_key = ?", ownerKey).First(&cfg).Error; err != nil {
+		cfg = models.UserVirusTotalConfig{
+			UserID:   ownerUserID,
+			OwnerKey: ownerKey,
+			Enabled:  false,
+		}
+	}
+
+	return cfg, ownerKey, scope
+}
+
+func virusTotalConfigDTO(cfg models.UserVirusTotalConfig, ownerKey string, scope string) virusTotalConfigResponse {
+	return virusTotalConfigResponse{
+		Enabled:      cfg.Enabled,
+		HasAPIKey:    strings.TrimSpace(cfg.APIKey) != "",
+		MaskedAPIKey: maskSecret(cfg.APIKey),
+		Scope:        scope,
+		OwnerKey:     ownerKey,
+	}
+}
+
+// GetMyVirusTotalConfig returns the current account-scoped VirusTotal API config.
+func GetMyVirusTotalConfig(c *fiber.Ctx) error {
+	user, err := currentUser(c)
+	if err != nil {
+		return err
+	}
+
+	cfg, ownerKey, scope := getOrDefaultVirusTotalConfig(*user)
+
+	return c.JSON(fiber.Map{
+		"status": "success",
+		"data":   virusTotalConfigDTO(cfg, ownerKey, scope),
+	})
+}
+
+// PutMyVirusTotalConfig creates or updates the current account-scoped VirusTotal API config.
+func PutMyVirusTotalConfig(c *fiber.Ctx) error {
+	user, err := currentUser(c)
+	if err != nil {
+		return err
+	}
+
+	req := new(putMyVirusTotalConfigRequest)
+	if err := c.BodyParser(req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "invalid request body"})
+	}
+
+	apiKey := strings.TrimSpace(req.APIKey)
+	cfg, ownerKey, scope := getOrDefaultVirusTotalConfig(*user)
+	_, _, ownerUserID := featureflags.OwnerKeyForUser(*user)
+
+	updates := map[string]interface{}{
+		"user_id":   ownerUserID,
+		"owner_key": ownerKey,
+		"enabled":   req.Enabled,
+	}
+
+	// Empty api_key means keep existing key. Use DELETE endpoint to remove it.
+	if apiKey != "" {
+		updates["api_key"] = apiKey
+	}
+
+	if cfg.ID == 0 {
+		cfg = models.UserVirusTotalConfig{
+			UserID:   ownerUserID,
+			OwnerKey: ownerKey,
+			Enabled:  req.Enabled,
+			APIKey:   apiKey,
+		}
+		if err := database.DB.Create(&cfg).Error; err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+		}
+	} else {
+		if err := database.DB.Model(&models.UserVirusTotalConfig{}).
+			Where("id = ?", cfg.ID).
+			Updates(updates).Error; err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+		}
+		_ = database.DB.First(&cfg, cfg.ID).Error
+	}
+
+	return c.JSON(fiber.Map{
+		"status": "success",
+		"data":   virusTotalConfigDTO(cfg, ownerKey, scope),
+	})
+}
+
+// DeleteMyVirusTotalConfig removes the current account-scoped VirusTotal API config.
+func DeleteMyVirusTotalConfig(c *fiber.Ctx) error {
+	user, err := currentUser(c)
+	if err != nil {
+		return err
+	}
+
+	ownerKey, _, _ := featureflags.OwnerKeyForUser(*user)
+
+	if err := database.DB.Where("owner_key = ?", ownerKey).
+		Delete(&models.UserVirusTotalConfig{}).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	return c.JSON(fiber.Map{"status": "success", "message": "VirusTotal config deleted"})
+}

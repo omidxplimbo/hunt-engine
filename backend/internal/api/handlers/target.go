@@ -138,13 +138,22 @@ func CreateTarget(c *fiber.Ctx) error {
 	modulesJSON, _ := json.Marshal(req.Modules)
 
 	target := models.Target{
-		CreatedByUserID: uid, Name: req.Name, RootDomain: req.RootDomain, Description: req.Description, InScope: true, Frequency: req.Frequency, ScanModules: string(modulesJSON), Status: "QUEUED", CurrentPhase: "QUEUED", UseAlterx: true, UseWaymore: false, UsePortscan: false, UseCero: false, UseCrtsh: false, UsePuredns: false, UseAbusedb: false, UseAmass: false, UseNuclei: false, NucleiProfile: "safe", PurednsWordlists: "[]"}
+		CreatedByUserID: uid, Name: req.Name, RootDomain: req.RootDomain, Description: req.Description, InScope: true, Frequency: req.Frequency, ScanModules: string(modulesJSON), Status: "QUEUED", CurrentPhase: "QUEUED", UseAlterx: true, UseWaymore: false, UseGau: true, UseKatana: true, UseVirusTotal: false, UsePortscan: false, UseCero: false, UseCrtsh: false, UsePuredns: false, UseAbusedb: false, UseAmass: false, UseNuclei: false, NucleiProfile: "safe", PurednsWordlists: "[]"}
 
 	if req.UseAlterx != nil {
 		target.UseAlterx = *req.UseAlterx
 	}
 	if req.UseWaymore != nil {
 		target.UseWaymore = *req.UseWaymore
+	}
+	if req.UseGau != nil {
+		target.UseGau = *req.UseGau
+	}
+	if req.UseKatana != nil {
+		target.UseKatana = *req.UseKatana
+	}
+	if req.UseVirusTotal != nil {
+		target.UseVirusTotal = *req.UseVirusTotal
 	}
 	if req.UsePortscan != nil {
 		target.UsePortscan = *req.UsePortscan
@@ -230,6 +239,15 @@ func UpdateTarget(c *fiber.Ctx) error {
 	}
 	if req.UseWaymore != nil {
 		target.UseWaymore = *req.UseWaymore
+	}
+	if req.UseGau != nil {
+		target.UseGau = *req.UseGau
+	}
+	if req.UseKatana != nil {
+		target.UseKatana = *req.UseKatana
+	}
+	if req.UseVirusTotal != nil {
+		target.UseVirusTotal = *req.UseVirusTotal
 	}
 	if req.UsePortscan != nil {
 		target.UsePortscan = *req.UsePortscan
@@ -1059,7 +1077,7 @@ func targetOwnerUsername(t models.Target) string {
 
 func toTargetResponse(t models.Target, assetCount int64) dto.TargetResponse {
 	return dto.TargetResponse{
-		OwnerUsername: targetOwnerUsername(t), CreatedByUserID: t.CreatedByUserID, ID: t.ID, Name: t.Name, RootDomain: t.RootDomain, Description: t.Description, InScope: t.InScope, CreatedAt: t.CreatedAt, AssetCount: assetCount, Frequency: t.Frequency, LastScanAt: t.LastScanAt, Status: t.Status, CurrentPhase: t.CurrentPhase, UseAlterx: t.UseAlterx, UseWaymore: t.UseWaymore, UsePortscan: t.UsePortscan, UseCero: t.UseCero, UseCrtsh: t.UseCrtsh, UsePuredns: t.UsePuredns, UseAbusedb: t.UseAbusedb,
+		OwnerUsername: targetOwnerUsername(t), CreatedByUserID: t.CreatedByUserID, ID: t.ID, Name: t.Name, RootDomain: t.RootDomain, Description: t.Description, InScope: t.InScope, CreatedAt: t.CreatedAt, AssetCount: assetCount, Frequency: t.Frequency, LastScanAt: t.LastScanAt, Status: t.Status, CurrentPhase: t.CurrentPhase, UseAlterx: t.UseAlterx, UseWaymore: t.UseWaymore, UseGau: t.UseGau, UseKatana: t.UseKatana, UseVirusTotal: t.UseVirusTotal, UsePortscan: t.UsePortscan, UseCero: t.UseCero, UseCrtsh: t.UseCrtsh, UsePuredns: t.UsePuredns, UseAbusedb: t.UseAbusedb,
 		UseAmass: t.UseAmass, UseNuclei: t.UseNuclei, NucleiProfile: t.NucleiProfile, PurednsWordlists: parseJSONToInterface(t.PurednsWordlists), ScanModules: t.ScanModules}
 }
 
@@ -1189,7 +1207,7 @@ func ExportTarget(c *fiber.Ctx) error {
 		}
 
 		exportItems[i] = dto.TargetExportItem{
-			Name: t.Name, RootDomain: t.RootDomain, Description: t.Description, InScope: t.InScope, Frequency: t.Frequency, Modules: modules, UseAlterx: t.UseAlterx, UseWaymore: t.UseWaymore, UsePortscan: t.UsePortscan, UseCero: t.UseCero, UseCrtsh: t.UseCrtsh, UsePuredns: t.UsePuredns, UseAbusedb: t.UseAbusedb,
+			Name: t.Name, RootDomain: t.RootDomain, Description: t.Description, InScope: t.InScope, Frequency: t.Frequency, Modules: modules, UseAlterx: t.UseAlterx, UseWaymore: t.UseWaymore, UseGau: t.UseGau, UseKatana: t.UseKatana, UseVirusTotal: t.UseVirusTotal, UsePortscan: t.UsePortscan, UseCero: t.UseCero, UseCrtsh: t.UseCrtsh, UsePuredns: t.UsePuredns, UseAbusedb: t.UseAbusedb,
 			UseAmass: t.UseAmass, UseNuclei: t.UseNuclei, NucleiProfile: t.NucleiProfile, PurednsWordlists: wordlists, Assets: assetItems, URLs: urlItems}
 	}
 
@@ -1269,7 +1287,7 @@ func ImportTarget(c *fiber.Ctx) error {
 		// ایجاد تارگت جدید
 		target := models.Target{
 			CreatedByUserID: uid, Name: item.Name, RootDomain: rootDomain, Description: item.Description, InScope: item.InScope, Frequency: item.Frequency, ScanModules: string(modulesJSON), Status: "READY", // تارگت‌های import شده به صورت READY هستند (نه SCANNING)
-			CurrentPhase: "IDLE", UseAlterx: item.UseAlterx, UseWaymore: item.UseWaymore, UsePortscan: item.UsePortscan, UseCero: item.UseCero, UseCrtsh: item.UseCrtsh, UsePuredns: item.UsePuredns, UseAbusedb: item.UseAbusedb, UseAmass: item.UseAmass}
+			CurrentPhase: "IDLE", UseAlterx: item.UseAlterx, UseWaymore: item.UseWaymore, UseGau: item.UseGau, UseKatana: item.UseKatana, UseVirusTotal: item.UseVirusTotal, UsePortscan: item.UsePortscan, UseCero: item.UseCero, UseCrtsh: item.UseCrtsh, UsePuredns: item.UsePuredns, UseAbusedb: item.UseAbusedb, UseAmass: item.UseAmass}
 		// تنظیم PurednsWordlists
 		if len(item.PurednsWordlists) > 0 {
 			wordlistsJSON, _ := json.Marshal(item.PurednsWordlists)

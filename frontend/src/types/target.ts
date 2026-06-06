@@ -12,6 +12,9 @@ export interface Target {
   current_phase?: string;
   use_alterx: boolean;
   use_waymore: boolean;
+  use_gau?: boolean;
+  use_katana?: boolean;
+  use_virustotal?: boolean;
   use_portscan: boolean;
   use_cero?: boolean;
   use_crtsh?: boolean;

@@ -188,13 +188,44 @@ func DispatchTargetAgentAction(c *fiber.Ctx) error {
 	preview := buildDispatchPreview(target, row, dryRun, req.Note)
 	now := time.Now().UTC()
 
+	updateFields := map[string]interface{}{
+		"output_json":   agentActionJSON(preview),
+		"error_message": "execution dispatcher preview recorded; real execution is disabled for this action class",
+		"completed_at":  &now,
+	}
+
+	if row.ActionType == models.AgentActionTypeRunSafeBugTests && !isHardBlockedDispatcherAction(row) {
+		run, resultCount, runErr := CreateBugTestRunFromAgentAction(&target, &row, uid)
+		if runErr != nil {
+			preview["safe_bug_testing"] = map[string]interface{}{
+				"attempted": true,
+				"error":     runErr.Error(),
+			}
+			updateFields["output_json"] = agentActionJSON(preview)
+			updateFields["error_message"] = runErr.Error()
+		} else {
+			preview["execution_enabled"] = true
+			preview["executed"] = true
+			preview["hard_blocked"] = false
+			preview["reason"] = "safe bug testing engine foundation executed passive/stub runner"
+			preview["safe_bug_testing"] = map[string]interface{}{
+				"attempted":         true,
+				"bug_test_run_id":   run.ID,
+				"bug_test_status":   run.Status,
+				"results_created":   resultCount,
+				"active_testing":    false,
+				"manual_validation": true,
+			}
+			updateFields["output_json"] = agentActionJSON(preview)
+			updateFields["error_message"] = ""
+			updateFields["status"] = models.AgentActionStatusExecuted
+			updateFields["executed_at"] = &now
+		}
+	}
+
 	if err := database.DB.Model(&models.AgentAction{}).
 		Where("id = ?", row.ID).
-		Updates(map[string]interface{}{
-			"output_json":   agentActionJSON(preview),
-			"error_message": "execution dispatcher preview recorded; real execution is disabled in v3.7.0 foundation",
-			"completed_at":  &now,
-		}).Error; err != nil {
+		Updates(updateFields).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
 	}
 
@@ -215,8 +246,8 @@ func DispatchTargetAgentAction(c *fiber.Ctx) error {
 			"action_id":         row.ID,
 			"action_type":       row.ActionType,
 			"handler":           dispatcherHandlerName(row.ActionType),
-			"execution_enabled": false,
-			"executed":          false,
+			"execution_enabled": preview["execution_enabled"],
+			"executed":          preview["executed"],
 			"dry_run":           dryRun,
 			"hard_blocked":      preview["hard_blocked"],
 		},

@@ -5,9 +5,11 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/featureflags"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/crawling/tools"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/utils"
 )
@@ -28,6 +30,14 @@ func Run(ctx Context) {
 	if err := database.DB.First(&target, ctx.TargetID).Error; err != nil {
 		log.Printf("❌ Failed to fetch target config in Crawling Phase: %v\n", err)
 		return
+	}
+
+	if target.UseVirusTotal {
+		ownerKey := featureflags.OwnerKeyForUserID(target.CreatedByUserID)
+		var vtCfg models.UserVirusTotalConfig
+		if err := database.DB.Where("owner_key = ?", ownerKey).First(&vtCfg).Error; err == nil && vtCfg.Enabled {
+			ctx.VirusTotalAPIKey = strings.TrimSpace(vtCfg.APIKey)
+		}
 	}
 
 	log.Printf(" Starting PHASE 3 (CRAWLING) for target ID: %d\n", ctx.TargetID)

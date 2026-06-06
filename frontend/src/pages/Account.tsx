@@ -19,6 +19,7 @@ import {
 } from "../api/me";
 import { QueueManager } from "../components/QueueManager";
 import TelegramConfigPanel from "../components/TelegramConfigPanel";
+import VirusTotalConfigPanel from "../components/VirusTotalConfigPanel";
 
 import { LLMProviderConfig } from "../components/LLMProviderConfig";
 import FeatureFlagsConfig from "../components/FeatureFlagsConfig";
@@ -221,6 +222,8 @@ const Account = () => {
 
       <FeatureFlagsConfig />
         <WordlistsConfig />
+
+      <VirusTotalConfigPanel />
 
       <TelegramConfigPanel role={me.role} />
 
