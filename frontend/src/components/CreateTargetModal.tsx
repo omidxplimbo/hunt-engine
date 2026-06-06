@@ -39,6 +39,9 @@ type ToolKey =
   | 'use_abusedb'
   | 'use_puredns'
   | 'use_waymore'
+  | 'use_gau'
+  | 'use_katana'
+  | 'use_virustotal'
   | 'use_portscan'
   | 'use_nuclei';
 
@@ -95,6 +98,37 @@ const DISCOVERY_TOOLS: ToolConfig[] = [
   },
 ];
 
+const CRAWLING_TOOLS: ToolConfig[] = [
+  {
+    key: 'use_waymore',
+    title: 'WAYMORE',
+    badge: 'ARCHIVE',
+    description: 'Deep historical URL collection during Crawling.',
+    Icon: Database,
+  },
+  {
+    key: 'use_gau',
+    title: 'GAU',
+    badge: 'ARCHIVE',
+    description: 'Fetch known URLs from public archives.',
+    Icon: Database,
+  },
+  {
+    key: 'use_katana',
+    title: 'KATANA',
+    badge: 'CRAWLER',
+    description: 'Crawl live assets and JavaScript paths.',
+    Icon: Globe,
+  },
+  {
+    key: 'use_virustotal',
+    title: 'VIRUSTOTAL',
+    badge: 'INTEL',
+    description: 'Collect URLs from VirusTotal when account API key is configured.',
+    Icon: Shield,
+  },
+];
+
 const EXTENDED_TOOLS: ToolConfig[] = [
   {
     key: 'use_nuclei',
@@ -102,13 +136,6 @@ const EXTENDED_TOOLS: ToolConfig[] = [
     badge: 'SECURITY',
     description: 'Run profile-based Nuclei templates and create structured Findings.',
     Icon: Shield,
-  },
-  {
-    key: 'use_waymore',
-    title: 'WAYMORE',
-    badge: 'CRAWL',
-    description: 'Deep historical URL collection during Crawling.',
-    Icon: Database,
   },
   {
     key: 'use_portscan',
@@ -127,6 +154,9 @@ const defaultFormData: CreateTargetPayload = {
   modules: ['DISCOVERY', 'PROBING', 'CRAWLING'],
   use_alterx: true,
   use_waymore: false,
+  use_gau: true,
+  use_katana: true,
+  use_virustotal: false,
   use_portscan: false,
   use_cero: false,
   use_crtsh: false,
@@ -375,6 +405,32 @@ export const CreateTargetModal = ({ isOpen, onClose }: Props) => {
             <div className="mb-3 font-mono text-sm font-bold uppercase tracking-widest text-hack-primary">
               Extended Modules
             </div>
+
+            <div className="space-y-3">
+              <div>
+                <h4 className="font-mono text-sm uppercase tracking-wider text-hack-primary">
+                  Crawling Tools
+                </h4>
+                <p className="mt-1 text-xs text-hack-dim">
+                  waybackurls runs by default whenever the Crawling module is enabled. The tools below are optional crawling sources.
+                </p>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                {CRAWLING_TOOLS.map(renderToolCard)}
+              </div>
+            </div>
+
+<div className="space-y-3">
+              <div>
+                <h4 className="font-mono text-sm uppercase tracking-wider text-hack-primary">
+                  Security / Extended Tools
+                </h4>
+                <p className="mt-1 text-xs text-hack-dim">
+                  Optional security and infrastructure modules that run outside the core Crawling sources.
+                </p>
+              </div>
+</div>
+
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               {EXTENDED_TOOLS.map(renderToolCard)}
 

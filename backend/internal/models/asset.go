@@ -34,7 +34,10 @@ type Target struct {
 
 	UseAlterx bool `gorm:"default:false" json:"use_alterx"`
 	// 👇 فیلد جدید برای Waymore (پیش‌فرض غیرفعال)
-	UseWaymore bool `gorm:"default:false" json:"use_waymore"`
+	UseWaymore    bool `gorm:"default:false" json:"use_waymore"`
+	UseGau        bool `gorm:"default:true" json:"use_gau"`
+	UseKatana     bool `gorm:"default:true" json:"use_katana"`
+	UseVirusTotal bool `gorm:"default:false" json:"use_virustotal"`
 
 	// 👇 Port scan (nmap) in PHASE 1 (optional)
 	UsePortscan bool `gorm:"default:false" json:"use_portscan"`

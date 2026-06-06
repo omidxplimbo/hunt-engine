@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 )
@@ -14,9 +13,9 @@ import (
 func RunVirusTotal(ctx Context, subdomains []string) map[string]string {
 	results := make(map[string]string)
 
-	apiKey := strings.TrimSpace(os.Getenv("VIRUSTOTAL_API_KEY"))
+	apiKey := strings.TrimSpace(ctx.VirusTotalAPIKey)
 	if apiKey == "" {
-		log.Println("⏩ Skipping VirusTotal collection: VIRUSTOTAL_API_KEY is not set")
+		log.Println("⏩ Skipping VirusTotal collection: account VirusTotal API key is not configured or disabled")
 		return results
 	}
 

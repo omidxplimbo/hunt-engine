@@ -57,6 +57,7 @@ func Connect() {
 		&models.TargetPolicy{},
 		&models.SystemConfig{},
 		&models.UserTelegramConfig{},
+		&models.UserVirusTotalConfig{},
 		&models.UserLLMProviderConfig{},
 		&models.UserFeatureFlagConfig{},
 		&models.UserWordlist{},
@@ -86,6 +87,14 @@ func Connect() {
 	_ = DB.Exec("UPDATE users SET is_active = true WHERE is_active IS NULL").Error
 	_ = DB.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS max_concurrent_scans integer DEFAULT 1").Error
 	_ = DB.Exec("UPDATE users SET max_concurrent_scans = 1 WHERE max_concurrent_scans IS NULL OR max_concurrent_scans < 1").Error
+
+	// Crawling tool selection defaults for v3.8.1 hotfix.
+	_ = DB.Exec("ALTER TABLE targets ADD COLUMN IF NOT EXISTS use_gau boolean DEFAULT true").Error
+	_ = DB.Exec("UPDATE targets SET use_gau = true WHERE use_gau IS NULL").Error
+	_ = DB.Exec("ALTER TABLE targets ADD COLUMN IF NOT EXISTS use_katana boolean DEFAULT true").Error
+	_ = DB.Exec("UPDATE targets SET use_katana = true WHERE use_katana IS NULL").Error
+	_ = DB.Exec("ALTER TABLE targets ADD COLUMN IF NOT EXISTS use_virustotal boolean DEFAULT false").Error
+	_ = DB.Exec("UPDATE targets SET use_virustotal = false WHERE use_virustotal IS NULL").Error
 
 	// Per-user PureDNS wordlist quota columns.
 	_ = DB.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS wordlist_max_file_size_bytes bigint DEFAULT 10485760").Error

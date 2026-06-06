@@ -18,7 +18,10 @@ type TargetResponse struct {
 
 	UseAlterx bool `json:"use_alterx"`
 	// 👇 اضافه شد
-	UseWaymore bool `json:"use_waymore"`
+	UseWaymore    bool `json:"use_waymore"`
+	UseGau        bool `json:"use_gau"`
+	UseKatana     bool `json:"use_katana"`
+	UseVirusTotal bool `json:"use_virustotal"`
 	// 👇 optional port scan during discovery
 	UsePortscan bool `json:"use_portscan"`
 	// 👇 ابزارهای جدید برای فاز اول (Discovery)

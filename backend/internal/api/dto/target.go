@@ -9,7 +9,10 @@ type CreateTargetRequest struct {
 	Modules     []string `json:"modules"`
 	UseAlterx   *bool    `json:"use_alterx"`
 	// 👇 اضافه شد
-	UseWaymore *bool `json:"use_waymore"`
+	UseWaymore    *bool `json:"use_waymore"`
+	UseGau        *bool `json:"use_gau"`
+	UseKatana     *bool `json:"use_katana"`
+	UseVirusTotal *bool `json:"use_virustotal"`
 	// 👇 PHASE 1 optional port scan (nmap)
 	UsePortscan *bool `json:"use_portscan"`
 	// 👇 ابزارهای جدید برای فاز اول (Discovery)
@@ -32,7 +35,10 @@ type UpdateTargetRequest struct {
 	Modules     []string `json:"modules"`
 	UseAlterx   *bool    `json:"use_alterx"`
 	// 👇 اضافه شد
-	UseWaymore *bool `json:"use_waymore"`
+	UseWaymore    *bool `json:"use_waymore"`
+	UseGau        *bool `json:"use_gau"`
+	UseKatana     *bool `json:"use_katana"`
+	UseVirusTotal *bool `json:"use_virustotal"`
 	// 👇 PHASE 1 optional port scan (nmap)
 	UsePortscan *bool `json:"use_portscan"`
 	// 👇 ابزارهای جدید برای فاز اول (Discovery)
@@ -65,6 +71,9 @@ type TargetExportItem struct {
 	Modules          []string `json:"modules"`
 	UseAlterx        bool     `json:"use_alterx"`
 	UseWaymore       bool     `json:"use_waymore"`
+	UseGau           bool     `json:"use_gau"`
+	UseKatana        bool     `json:"use_katana"`
+	UseVirusTotal    bool     `json:"use_virustotal"`
 	UsePortscan      bool     `json:"use_portscan"`
 	UseCero          bool     `json:"use_cero"`
 	UseCrtsh         bool     `json:"use_crtsh"`

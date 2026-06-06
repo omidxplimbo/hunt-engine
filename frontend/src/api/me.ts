@@ -339,3 +339,41 @@ export const deleteMyWordlist = async (id: number) => {
   return res.data;
 };
 
+
+// VirusTotal account-scoped API key config
+export interface VirusTotalConfig {
+  enabled: boolean;
+  has_api_key: boolean;
+  masked_api_key: string;
+  scope: string;
+  owner_key: string;
+}
+
+export interface VirusTotalConfigPayload {
+  enabled: boolean;
+  api_key?: string;
+}
+
+export const getMyVirusTotalConfig = async () => {
+  const res = await apiClient.get<{ status: string; data: VirusTotalConfig }>(
+    "/me/virustotal-config",
+  );
+  return res.data.data;
+};
+
+export const putMyVirusTotalConfig = async (
+  payload: VirusTotalConfigPayload,
+) => {
+  const res = await apiClient.put<{ status: string; data: VirusTotalConfig }>(
+    "/me/virustotal-config",
+    payload,
+  );
+  return res.data.data;
+};
+
+export const deleteMyVirusTotalConfig = async () => {
+  const res = await apiClient.delete<{ status: string; message: string }>(
+    "/me/virustotal-config",
+  );
+  return res.data;
+};

@@ -8,8 +8,9 @@ import (
 )
 
 type Context struct {
-	TargetID   uint
-	RootDomain string
+	TargetID         uint
+	RootDomain       string
+	VirusTotalAPIKey string
 
 	CheckStop         func(targetID uint) bool
 	UpdateTargetPhase func(targetID uint, phase string)
@@ -29,6 +30,7 @@ func (c Context) toolContext(tempDir string) tools.Context {
 	return tools.Context{
 		TargetID:            c.TargetID,
 		RootDomain:          c.RootDomain,
+		VirusTotalAPIKey:    c.VirusTotalAPIKey,
 		TempDir:             tempDir,
 		CheckStop:           c.CheckStop,
 		RunCommand:          c.RunCommand,
