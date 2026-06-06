@@ -71,6 +71,7 @@ func Connect() {
 		&models.AgentChatMessage{},
 		&models.BugTestRun{},
 		&models.BugTestResult{},
+		&models.BugPattern{},
 		&models.NucleiTemplate{},
 	)
 
@@ -101,7 +102,6 @@ func Connect() {
 	// harden upgrades from older releases and preserve legacy text evidence.
 	_ = DB.Exec("ALTER TABLE findings ADD COLUMN IF NOT EXISTS evidence_json jsonb DEFAULT '{}'::jsonb").Error
 	_ = DB.Exec("UPDATE findings SET evidence_json = jsonb_build_object('text', evidence) WHERE (evidence_json IS NULL OR evidence_json = '{}'::jsonb) AND evidence IS NOT NULL AND btrim(evidence) <> ''").Error
-
 	log.Println("✅ Auto-migration completed successfully! Tables are ready.")
 }
 

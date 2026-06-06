@@ -12,7 +12,8 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/recover"
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/api/handlers"
-	"github.com/omidxplimbo/hunt-engine/backend/internal/api/middleware" // 👈 ایمپورت جدید
+	"github.com/omidxplimbo/hunt-engine/backend/internal/api/middleware"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/bugpatterns" // 👈 ایمپورت جدید
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
@@ -42,6 +43,11 @@ func requestBodyLimitBytes() int {
 
 func main() {
 	database.Connect()
+
+	if err := bugpatterns.SeedCore(); err != nil {
+		log.Printf("Failed to seed core bug patterns: %v\\n", err)
+	}
+
 	database.CleanupZombieScans()
 
 	// 👇👇👇 سید کردن کاربر ادمین اولیه
@@ -202,6 +208,10 @@ func main() {
 	api.Delete("/targets/:id/bug-tests/results/:result_id", handlers.DeleteTargetBugTestResult)
 
 	api.Get("/targets/:id/audit-logs", handlers.GetTargetAuditLogs)
+
+	// Bug Pattern Registry Routes
+	api.Get("/bug-patterns", handlers.GetBugPatterns)
+	api.Get("/bug-patterns/:id", handlers.GetBugPattern)
 
 	api.Get("/dashboard/stats", handlers.GetDashboardStats)
 	api.Get("/monitor/stats", handlers.GetMonitorData)

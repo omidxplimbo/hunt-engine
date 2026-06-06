@@ -100,3 +100,39 @@ type BugTestResult struct {
 	OWASPRefs    datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"owasp_refs"`
 	Tags         datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"tags"`
 }
+
+// BugPattern stores safe bug testing pattern metadata.
+// v3.8.0 uses a local seeded registry. Feed/update/signing controls belong to v3.9.0.
+type BugPattern struct {
+	ID        uint           `gorm:"primaryKey" json:"id"`
+	CreatedAt time.Time      `gorm:"index" json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+
+	Key         string `gorm:"size:160;not null;uniqueIndex" json:"key"`
+	Name        string `gorm:"size:255;not null" json:"name"`
+	Description string `gorm:"type:text" json:"description"`
+
+	BugType           string `gorm:"size:96;not null;index" json:"bug_type"`
+	SeverityHint      string `gorm:"size:32;not null;default:'info';index" json:"severity_hint"`
+	ConfidenceDefault string `gorm:"size:64;not null;default:'low';index" json:"confidence_default"`
+
+	TestLevel   int `gorm:"not null;default:0;index" json:"test_level"`
+	SafetyLevel int `gorm:"not null;default:0;index" json:"safety_level"`
+
+	Mode             string `gorm:"size:32;not null;default:'passive';index" json:"mode"`
+	SafeByDefault    bool   `gorm:"not null;default:true;index" json:"safe_by_default"`
+	RequiresApproval bool   `gorm:"not null;default:false;index" json:"requires_approval"`
+	Enabled          bool   `gorm:"not null;default:true;index" json:"enabled"`
+
+	Source  string `gorm:"size:64;not null;default:'core';index" json:"source"`
+	Version string `gorm:"size:64;not null;default:'v1'" json:"version"`
+
+	MatcherJSON        datatypes.JSON `gorm:"type:jsonb;default:'{}'" json:"matcher_json"`
+	EvidenceSchemaJSON datatypes.JSON `gorm:"type:jsonb;default:'{}'" json:"evidence_schema_json"`
+	OWASPRefs          datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"owasp_refs"`
+	Tags               datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"tags"`
+}
+
+// BugPattern stores safe bug testing pattern metadata.
+// v3.8.0 uses a local seeded registry. Feed/update/signing controls belong to v3.9.0.

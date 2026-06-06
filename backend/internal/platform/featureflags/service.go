@@ -25,11 +25,12 @@ const (
 	KeyAIReportAgent          = "feature.ai_report_agent"
 	KeyAgentActions           = "feature.agent_actions"
 
-	KeyAgentChat      = "feature.agent_chat"
-	KeySafeBugTesting = "feature.safe_bug_testing"
-	StateInherit      = "inherit"
-	StateEnabled      = "enabled"
-	StateDisabled     = "disabled"
+	KeyAgentChat          = "feature.agent_chat"
+	KeySafeBugTesting     = "feature.safe_bug_testing"
+	KeyBugPatternRegistry = "feature.bug_pattern_registry"
+	StateInherit          = "inherit"
+	StateEnabled          = "enabled"
+	StateDisabled         = "disabled"
 )
 
 const cacheTTL = 60 * time.Second
@@ -119,6 +120,11 @@ var definitions = []Definition{
 		Key:         KeySafeBugTesting,
 		Default:     true,
 		Description: "Enable safe OWASP bug testing engine foundation and passive/safe bug test workflows.",
+	},
+	{
+		Key:         KeyBugPatternRegistry,
+		Default:     true,
+		Description: "Enable bug pattern registry metadata for safe testing patterns.",
 	},
 }
 
