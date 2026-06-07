@@ -25,6 +25,9 @@ const (
 	BugTestResultStatusFailed                = "failed"
 	BugTestResultStatusBlocked               = "blocked"
 	BugTestResultStatusInconclusive          = "inconclusive"
+	BugTestResultStatusValidated             = "validated"
+	BugTestResultStatusFalsePositive         = "false_positive"
+	BugTestResultStatusIgnored               = "ignored"
 
 	BugTypeXSS             = "xss"
 	BugTypeCORS            = "cors"

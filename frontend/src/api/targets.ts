@@ -1199,3 +1199,16 @@ export const updateBugPatternEnabled = async (
 
   return response.data.data;
 };
+
+export const updateTargetBugTestResultStatus = async (
+  targetId: number,
+  resultId: number,
+  status: string,
+) => {
+  const response = await apiClient.patch<{
+    status: string;
+    data: TargetBugTestResult;
+  }>(`/targets/${targetId}/bug-tests/results/${resultId}/status`, { status });
+
+  return response.data.data;
+};

@@ -936,3 +936,95 @@ func DeleteTargetBugTestResult(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{"status": "success", "message": "bug test result deleted"})
 }
+
+type updateBugTestResultStatusRequest struct {
+	Status string `json:"status"`
+}
+
+func normalizeBugTestResultStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case models.BugTestResultStatusCandidate:
+		return models.BugTestResultStatusCandidate
+	case models.BugTestResultStatusNeedsManualValidation:
+		return models.BugTestResultStatusNeedsManualValidation
+	case models.BugTestResultStatusPassed:
+		return models.BugTestResultStatusPassed
+	case models.BugTestResultStatusFailed:
+		return models.BugTestResultStatusFailed
+	case models.BugTestResultStatusBlocked:
+		return models.BugTestResultStatusBlocked
+	case models.BugTestResultStatusInconclusive:
+		return models.BugTestResultStatusInconclusive
+	case models.BugTestResultStatusValidated:
+		return models.BugTestResultStatusValidated
+	case models.BugTestResultStatusFalsePositive:
+		return models.BugTestResultStatusFalsePositive
+	case models.BugTestResultStatusIgnored:
+		return models.BugTestResultStatusIgnored
+	default:
+		return ""
+	}
+}
+
+// UpdateTargetBugTestResultStatus updates triage/validation status for one bug test result.
+func UpdateTargetBugTestResultStatus(c *fiber.Ctx) error {
+	if err := ensureSafeBugTestingEnabled(c); err != nil {
+		return err
+	}
+
+	targetID, err := parseTargetIDParam(c)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	resultID, err := parseBugTestResultIDParam(c)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	req := new(updateBugTestResultStatusRequest)
+	if err := c.BodyParser(req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "invalid request body"})
+	}
+
+	nextStatus := normalizeBugTestResultStatus(req.Status)
+	if nextStatus == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "invalid bug test result status"})
+	}
+
+	var result models.BugTestResult
+	if err := database.DB.Where("id = ? AND target_id = ?", resultID, target.ID).First(&result).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "bug test result not found"})
+	}
+
+	previousStatus := result.Status
+	result.Status = nextStatus
+
+	if err := database.DB.Save(&result).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	uid, _ := currentUserID(c)
+	actorID := uid
+	_ = auditlog.Record(auditlog.Entry{
+		ActorUserID: &actorID,
+		TargetID:    &target.ID,
+		Action:      "target.bug_test.result.status_update",
+		EntityType:  "bug_test_result",
+		EntityID:    &result.ID,
+		Metadata: fiber.Map{
+			"run_id":          result.RunID,
+			"bug_type":        result.BugType,
+			"pattern_key":     result.PatternKey,
+			"previous_status": previousStatus,
+			"new_status":      nextStatus,
+		},
+	})
+
+	return c.JSON(fiber.Map{"status": "success", "data": result})
+}
