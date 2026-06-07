@@ -208,6 +208,7 @@ func main() {
 	api.Post("/targets/:id/bug-tests/runs", handlers.CreateTargetBugTestRun)
 	api.Get("/targets/:id/bug-tests/results", handlers.GetTargetBugTestResults)
 	api.Patch("/targets/:id/bug-tests/results/:result_id/status", handlers.UpdateTargetBugTestResultStatus)
+	api.Post("/targets/:id/bug-tests/results/:result_id/promote", handlers.PromoteTargetBugTestResultToFinding)
 	api.Delete("/targets/:id/bug-tests/runs/:run_id", handlers.DeleteTargetBugTestRun)
 	api.Delete("/targets/:id/bug-tests/results/:result_id", handlers.DeleteTargetBugTestResult)
 

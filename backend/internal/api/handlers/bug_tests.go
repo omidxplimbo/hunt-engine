@@ -1028,3 +1028,182 @@ func UpdateTargetBugTestResultStatus(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{"status": "success", "data": result})
 }
+
+func bugTestResultPromotionSeverity(result models.BugTestResult) string {
+	switch strings.ToLower(strings.TrimSpace(result.SeverityHint)) {
+	case models.FindingSeverityCritical:
+		return models.FindingSeverityCritical
+	case models.FindingSeverityHigh:
+		return models.FindingSeverityHigh
+	case models.FindingSeverityMedium:
+		return models.FindingSeverityMedium
+	case models.FindingSeverityLow:
+		return models.FindingSeverityLow
+	default:
+		return models.FindingSeverityInfo
+	}
+}
+
+func bugTestResultPromotionTitle(result models.BugTestResult) string {
+	switch result.BugType {
+	case models.BugTypeXSS:
+		return "Potential XSS candidate requires manual validation"
+	case models.BugTypeOpenRedirect:
+		return "Potential open redirect candidate requires manual validation"
+	case models.BugTypeSecurityHeaders:
+		return "Security header review candidate"
+	case models.BugTypeCORS:
+		return "Potential CORS misconfiguration candidate"
+	case models.BugTypeAPI:
+		return "API security test candidate"
+	default:
+		return "Safe bug testing candidate requires manual validation"
+	}
+}
+
+func bugTestResultPromotionRecommendation(result models.BugTestResult) string {
+	switch result.BugType {
+	case models.BugTypeXSS:
+		return "Manually validate reflection context and exploitability using program-approved safe testing procedures. Do not submit as confirmed XSS without browser/manual validation evidence."
+	case models.BugTypeOpenRedirect:
+		return "Manually validate redirect behavior with safe inert URLs and confirm impact before reporting. Restrict redirects to allowlisted destinations."
+	case models.BugTypeSecurityHeaders:
+		return "Review response headers manually and add missing hardening headers where appropriate, such as CSP, HSTS, X-Frame-Options or frame-ancestors, and X-Content-Type-Options."
+	case models.BugTypeCORS:
+		return "Validate CORS behavior manually and restrict allowed origins, credentials, and methods to trusted applications only."
+	default:
+		return "Review the candidate manually, collect validation evidence, and keep the finding status open only if impact is confirmed or further review is required."
+	}
+}
+
+func bugTestResultPromotionFingerprint(targetID uint, result models.BugTestResult) string {
+	subject := fmt.Sprintf("asset:%v:url:%v", result.AssetID, result.URLID)
+	return fmt.Sprintf("safe-bug-test:%d:%s:%s", targetID, result.PatternKey, subject)
+}
+
+// PromoteTargetBugTestResultToFinding creates or returns a Finding linked to one bug test result.
+func PromoteTargetBugTestResultToFinding(c *fiber.Ctx) error {
+	if err := ensureSafeBugTestingEnabled(c); err != nil {
+		return err
+	}
+
+	targetID, err := parseTargetIDParam(c)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	resultID, err := parseBugTestResultIDParam(c)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	var result models.BugTestResult
+	if err := database.DB.Where("id = ? AND target_id = ?", resultID, target.ID).First(&result).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "bug test result not found"})
+	}
+
+	if result.Status == models.BugTestResultStatusFalsePositive || result.Status == models.BugTestResultStatusIgnored {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status":  "error",
+			"message": "false_positive or ignored bug test results cannot be promoted to findings",
+		})
+	}
+
+	if result.FindingID != nil {
+		var existing models.Finding
+		if err := database.DB.First(&existing, *result.FindingID).Error; err == nil {
+			return c.JSON(fiber.Map{"status": "success", "data": existing, "bug_test_result": result, "already_promoted": true})
+		}
+	}
+
+	now := time.Now().UTC()
+	fingerprint := bugTestResultPromotionFingerprint(target.ID, result)
+
+	evidence := map[string]interface{}{
+		"source":          "safe_bug_testing",
+		"bug_test_run_id": result.RunID,
+		"bug_test_id":     result.ID,
+		"bug_type":        result.BugType,
+		"test_name":       result.TestName,
+		"pattern_id":      result.PatternID,
+		"pattern_key":     result.PatternKey,
+		"confidence":      result.Confidence,
+		"severity_hint":   result.SeverityHint,
+		"status":          result.Status,
+		"evidence_json":   result.EvidenceJSON,
+		"owasp_refs":      result.OWASPRefs,
+		"tags":            result.Tags,
+		"manual_required": true,
+	}
+
+	finding := models.Finding{
+		TargetID:       target.ID,
+		AssetID:        result.AssetID,
+		URLID:          result.URLID,
+		Title:          bugTestResultPromotionTitle(result),
+		Description:    "This finding was promoted from a Safe Bug Testing candidate. It is not automatically confirmed exploitation evidence and requires human validation before submission or severity escalation.",
+		Severity:       bugTestResultPromotionSeverity(result),
+		Category:       "safe-bug-testing",
+		SourceTool:     "safe_bug_testing",
+		Evidence:       fmt.Sprintf("bug_test_result_id=%d pattern_key=%s confidence=%s", result.ID, result.PatternKey, result.Confidence),
+		EvidenceJSON:   bugTestJSON(evidence),
+		Recommendation: bugTestResultPromotionRecommendation(result),
+		Status:         models.FindingStatusOpen,
+		Fingerprint:    fingerprint,
+		FirstSeen:      now,
+		LastSeen:       now,
+	}
+
+	var existing models.Finding
+	if err := database.DB.Where("target_id = ? AND fingerprint = ?", target.ID, fingerprint).First(&existing).Error; err == nil {
+		result.FindingID = &existing.ID
+		if result.Status == models.BugTestResultStatusCandidate {
+			result.Status = models.BugTestResultStatusNeedsManualValidation
+		}
+		_ = database.DB.Save(&result).Error
+		return c.JSON(fiber.Map{"status": "success", "data": existing, "bug_test_result": result, "already_promoted": true})
+	}
+
+	if err := database.DB.Create(&finding).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	result.FindingID = &finding.ID
+	if result.Status == models.BugTestResultStatusCandidate {
+		result.Status = models.BugTestResultStatusNeedsManualValidation
+	}
+	if err := database.DB.Save(&result).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	uid, _ := currentUserID(c)
+	actorID := uid
+	_ = auditlog.Record(auditlog.Entry{
+		ActorUserID: &actorID,
+		TargetID:    &target.ID,
+		Action:      "target.bug_test.result.promote_to_finding",
+		EntityType:  "finding",
+		EntityID:    &finding.ID,
+		IPAddress:   auditlog.ClientIP(c),
+		UserAgent:   auditlog.UserAgent(c),
+		Metadata: fiber.Map{
+			"bug_test_result_id": result.ID,
+			"bug_test_run_id":    result.RunID,
+			"pattern_key":        result.PatternKey,
+			"bug_type":           result.BugType,
+			"severity":           finding.Severity,
+		},
+	})
+
+	return c.JSON(fiber.Map{
+		"status":           "success",
+		"data":             finding,
+		"bug_test_result":  result,
+		"already_promoted": false,
+	})
+}

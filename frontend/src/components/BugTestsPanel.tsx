@@ -16,6 +16,7 @@ import {
   deleteTargetBugTestResult,
   getTargetBugTestResults,
   getTargetBugTestRuns,
+  promoteBugTestResultToFinding,
   type TargetBugTestResult,
   type TargetBugTestRun,
 } from "../api/targets";
@@ -150,10 +151,12 @@ const ResultCard = ({
   result,
   busy = false,
   onDelete,
+  onPromote,
 }: {
   result: TargetBugTestResult;
   busy?: boolean;
   onDelete?: (result: TargetBugTestResult) => void;
+  onPromote?: (result: TargetBugTestResult) => void;
 }) => {
   const evidence = parseJSONValue(result.evidence_json);
   const tags = asArray(result.tags);
@@ -177,6 +180,26 @@ const ResultCard = ({
           <div className="font-mono text-[10px] text-hack-dim">
             #{result.id}
           </div>
+          {result.finding_id ? (
+            <span className="border border-hack-primary/60 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-hack-primary">
+              Finding #{result.finding_id}
+            </span>
+          ) : (
+            onPromote &&
+            result.status !== "false_positive" &&
+            result.status !== "ignored" && (
+              <button
+                type="button"
+                onClick={() => onPromote(result)}
+                disabled={busy}
+                className="border border-hack-primary/60 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-hack-primary disabled:opacity-50"
+                title="Promote this safe bug test candidate to a Finding"
+              >
+                Promote
+              </button>
+            )
+          )}
+
           {onDelete && (
             <button
               type="button"
@@ -299,6 +322,22 @@ const BugTestsPanel = ({ targetId, enabled = true }: Props) => {
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ["target", targetId, "bug-test-results"],
+      });
+    },
+  });
+
+  const promoteResultMutation = useMutation({
+    mutationFn: (result: TargetBugTestResult) =>
+      promoteBugTestResultToFinding(targetId, result.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["target", targetId, "bug-test-results"],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["target-findings", targetId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["target-findings-stats", targetId],
       });
     },
   });
@@ -480,12 +519,16 @@ const BugTestsPanel = ({ targetId, enabled = true }: Props) => {
               <ResultCard
                 key={result.id}
                 result={result}
-                busy={deleteResultMutation.isPending}
+                busy={
+                  deleteResultMutation.isPending ||
+                  promoteResultMutation.isPending
+                }
                 onDelete={(item) => {
                   if (window.confirm(`Delete bug test result #${item.id}? This is a soft delete.`)) {
                     deleteResultMutation.mutate(item);
                   }
                 }}
+              onPromote={(item) => promoteResultMutation.mutate(item)}
               />
             ))
           )}

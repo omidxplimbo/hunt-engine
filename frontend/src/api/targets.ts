@@ -1212,3 +1212,17 @@ export const updateTargetBugTestResultStatus = async (
 
   return response.data.data;
 };
+
+export const promoteBugTestResultToFinding = async (
+  targetId: number,
+  resultId: number,
+) => {
+  const response = await apiClient.post<{
+    status: string;
+    data: any;
+    bug_test_result: TargetBugTestResult;
+    already_promoted: boolean;
+  }>(`/targets/${targetId}/bug-tests/results/${resultId}/promote`);
+
+  return response.data;
+};
