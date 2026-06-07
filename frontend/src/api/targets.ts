@@ -1226,3 +1226,55 @@ export const promoteBugTestResultToFinding = async (
 
   return response.data;
 };
+
+// -----------------------------
+// Bug Payload Registry - v3.8.3 metadata-only
+// -----------------------------
+export interface BugPayload {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  key: string;
+  name: string;
+  description: string;
+  bug_type: string;
+  safety_class: string;
+  test_level: number;
+  safety_level: number;
+  requires_approval: boolean;
+  enabled: boolean;
+  mode: string;
+  context: string;
+  payload_template: string;
+  source: string;
+  version: string;
+  owasp_refs?: any;
+  tags?: any;
+  metadata?: any;
+}
+
+export interface BugPayloadsResponse {
+  status: string;
+  data: BugPayload[];
+  count: number;
+  total_count: number;
+  page: number;
+}
+
+export const getBugPayloads = async (params?: {
+  bug_type?: string;
+  safety_class?: string;
+  enabled?: string;
+  limit?: number;
+}) => {
+  const response = await apiClient.get<BugPayloadsResponse>("/bug-payloads", {
+    params: {
+      limit: params?.limit ?? 100,
+      bug_type: params?.bug_type || undefined,
+      safety_class: params?.safety_class || undefined,
+      enabled: params?.enabled || undefined,
+    },
+  });
+
+  return response.data;
+};

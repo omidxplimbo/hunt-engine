@@ -218,6 +218,8 @@ func main() {
 	api.Get("/bug-patterns", handlers.GetBugPatterns)
 	api.Get("/bug-patterns/:id", handlers.GetBugPattern)
 	api.Patch("/bug-patterns/:id/enabled", handlers.UpdateBugPatternEnabled)
+	api.Get("/bug-payloads", handlers.GetBugPayloads)
+	api.Get("/bug-payloads/:id", handlers.GetBugPayload)
 
 	api.Get("/dashboard/stats", handlers.GetDashboardStats)
 	api.Get("/monitor/stats", handlers.GetMonitorData)

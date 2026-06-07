@@ -44,10 +44,11 @@ import AgentActionsPanel from "../components/AgentActionsPanel";
 import AgentChatPanel from "../components/AgentChatPanel";
 import BugTestsPanel from "../components/BugTestsPanel";
 import BugPatternRegistryPanel from "../components/BugPatternRegistryPanel";
+import BugPayloadRegistryPanel from "../components/BugPayloadRegistryPanel";
 import TargetPolicyPanel from "../components/TargetPolicyPanel";
 
 type ActiveTab = "assets" | "urls" | "findings" | "analysis" | "policy";
-type AnalysisSection = "overview" | "recommendations" | "agents" | "actions" | "bugtests" | "patterns" | "chat";
+type AnalysisSection = "overview" | "recommendations" | "agents" | "actions" | "bugtests" | "patterns" | "payloads" | "chat";
 
 const KNOWN_ASSET_PROVIDERS = [
   { id: "subfinder", label: "Subfinder" },
@@ -965,6 +966,10 @@ const TargetAssets = () => {
 
           {activeAnalysisSection === "patterns" && (
             <BugPatternRegistryPanel enabled={featureSafeBugTesting} />
+          )}
+
+          {activeAnalysisSection === "payloads" && (
+            <BugPayloadRegistryPanel enabled={featureSafeBugTesting} />
           )}
 
           {activeAnalysisSection === "chat" && (
