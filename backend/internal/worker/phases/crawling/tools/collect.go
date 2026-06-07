@@ -28,6 +28,9 @@ func collectFromCommand(ctx Context, inputFile string, sourceLabel string, cmdNa
 
 	if err != nil {
 		log.Printf("⚠️ Tool %s failed or killed: %v\n", cmdName, err)
+		if len(output) > 0 {
+			log.Printf("⚠️ Tool %s output before failure: %s", cmdName, strings.TrimSpace(string(output)))
+		}
 		return results
 	}
 
@@ -41,6 +44,8 @@ func collectFromCommand(ctx Context, inputFile string, sourceLabel string, cmdNa
 			results[u] = sourceLabel
 		}
 	}
+
+	log.Printf("✅ Tool %s completed with %d URLs", cmdName, len(results))
 
 	return results
 }

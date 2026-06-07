@@ -90,6 +90,10 @@ type BugTestResult struct {
 	FindingID *uint    `gorm:"index" json:"finding_id"`
 	Finding   *Finding `gorm:"foreignKey:FindingID" json:"-"`
 
+	PatternID  *uint       `gorm:"index" json:"pattern_id"`
+	Pattern    *BugPattern `gorm:"foreignKey:PatternID" json:"-"`
+	PatternKey string      `gorm:"size:160;index" json:"pattern_key"`
+
 	BugType      string `gorm:"size:96;not null;index" json:"bug_type"`
 	TestName     string `gorm:"size:160;not null;index" json:"test_name"`
 	Status       string `gorm:"size:64;not null;default:'candidate';index" json:"status"`
@@ -133,6 +137,3 @@ type BugPattern struct {
 	OWASPRefs          datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"owasp_refs"`
 	Tags               datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"tags"`
 }
-
-// BugPattern stores safe bug testing pattern metadata.
-// v3.8.0 uses a local seeded registry. Feed/update/signing controls belong to v3.9.0.

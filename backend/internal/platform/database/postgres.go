@@ -34,7 +34,7 @@ func Connect() {
 
 	// 2. تلاش برای اتصال با استفاده از درایور پستگرس
 	DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info),
+		Logger: logger.Default.LogMode(logger.Warn),
 	})
 
 	if err != nil {
