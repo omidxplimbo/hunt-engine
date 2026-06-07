@@ -87,3 +87,39 @@ func GetBugPattern(c *fiber.Ctx) error {
 		"data":   row,
 	})
 }
+
+type updateBugPatternEnabledRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+func UpdateBugPatternEnabled(c *fiber.Ctx) error {
+	if err := ensureBugPatternRegistryEnabled(c); err != nil {
+		return err
+	}
+
+	raw := strings.TrimSpace(c.Params("id"))
+	id, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || id == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "invalid bug pattern id"})
+	}
+
+	req := new(updateBugPatternEnabledRequest)
+	if err := c.BodyParser(req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "invalid request body"})
+	}
+
+	var row models.BugPattern
+	if err := database.DB.First(&row, uint(id)).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "bug pattern not found"})
+	}
+
+	row.Enabled = req.Enabled
+	if err := database.DB.Save(&row).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	return c.JSON(fiber.Map{
+		"status": "success",
+		"data":   row,
+	})
+}

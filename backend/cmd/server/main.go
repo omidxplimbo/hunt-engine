@@ -215,6 +215,7 @@ func main() {
 	// Bug Pattern Registry Routes
 	api.Get("/bug-patterns", handlers.GetBugPatterns)
 	api.Get("/bug-patterns/:id", handlers.GetBugPattern)
+	api.Patch("/bug-patterns/:id/enabled", handlers.UpdateBugPatternEnabled)
 
 	api.Get("/dashboard/stats", handlers.GetDashboardStats)
 	api.Get("/monitor/stats", handlers.GetMonitorData)
