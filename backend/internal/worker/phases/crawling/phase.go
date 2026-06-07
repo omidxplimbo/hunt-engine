@@ -56,15 +56,46 @@ func Run(ctx Context) {
 		return
 	}
 
-	var liveAssets []string
-	database.DB.Model(&models.Asset{}).
+	var liveAssetRows []models.Asset
+	_ = database.DB.
 		Where("target_id = ? AND is_live = true", ctx.TargetID).
-		Pluck("value", &liveAssets)
+		Order("id DESC").
+		Find(&liveAssetRows).Error
+
+	liveAssets := make([]string, 0, len(liveAssetRows))
+	katanaAssets := make([]string, 0, len(liveAssetRows))
+	for _, asset := range liveAssetRows {
+		value := strings.TrimSpace(asset.Value)
+		if value == "" {
+			continue
+		}
+
+		liveAssets = append(liveAssets, value)
+
+		finalURL := strings.TrimSpace(asset.FinalURL)
+		if finalURL == "" {
+			finalURL = "https://" + value
+		}
+		if !strings.HasPrefix(strings.ToLower(finalURL), "http://") && !strings.HasPrefix(strings.ToLower(finalURL), "https://") {
+			finalURL = "https://" + finalURL
+		}
+		katanaAssets = append(katanaAssets, finalURL)
+	}
+
+	log.Printf("CRAWLING config target=%d waymore=%t gau=%t katana=%t virustotal=%t live_assets=%d", ctx.TargetID, target.UseWaymore, target.UseGau, target.UseKatana, target.UseVirusTotal, len(liveAssets))
 
 	crawlingAssetsFile := filepath.Join(tempDir, "crawling_assets.txt")
 	if len(liveAssets) > 0 {
 		if err := utils.WriteSliceToFile(crawlingAssetsFile, liveAssets); err != nil {
 			log.Printf("❌ Failed to write crawling assets input: %v\n", err)
+			return
+		}
+	}
+
+	katanaAssetsFile := filepath.Join(tempDir, "crawling_katana_assets.txt")
+	if len(katanaAssets) > 0 {
+		if err := utils.WriteSliceToFile(katanaAssetsFile, katanaAssets); err != nil {
+			log.Printf("❌ Failed to write katana assets input: %v\n", err)
 			return
 		}
 	}
@@ -91,7 +122,7 @@ func Run(ctx Context) {
 		ctx.ScanMarkStepDone(ctx.TargetID, "CRAWLING", "WAYBACK")
 	}
 
-	if len(liveAssets) > 0 {
+	if target.UseGau && len(liveAssets) > 0 {
 		if ctx.ScanIsStepDone(ctx.TargetID, "CRAWLING", "GAU") {
 			log.Printf("⏩ Resume: skipping GAU\n")
 		} else {
@@ -106,6 +137,9 @@ func Run(ctx Context) {
 			ctx.ScanMarkStepDone(ctx.TargetID, "CRAWLING", "GAU")
 		}
 	} else {
+		if !target.UseGau {
+			log.Println("⏩ Skipping GAU (Disabled in settings)")
+		}
 		ctx.ScanMarkStepDone(ctx.TargetID, "CRAWLING", "GAU")
 	}
 
@@ -128,7 +162,7 @@ func Run(ctx Context) {
 		ctx.ScanMarkStepDone(ctx.TargetID, "CRAWLING", "WAYMORE")
 	}
 
-	if len(liveAssets) > 0 {
+	if target.UseKatana && len(liveAssets) > 0 {
 		if ctx.ScanIsStepDone(ctx.TargetID, "CRAWLING", "KATANA") {
 			log.Printf("⏩ Resume: skipping KATANA\n")
 		} else {
@@ -137,16 +171,19 @@ func Run(ctx Context) {
 			}
 			ctx.ScanMarkRunning(ctx.TargetID, "CRAWLING", "KATANA")
 			ctx.UpdateTargetPhase(ctx.TargetID, "PHASE 3: RUNNING KATANA")
-			urls := tools.RunKatana(toolCtx, crawlingAssetsFile)
+			urls := tools.RunKatana(toolCtx, katanaAssetsFile)
 			ctx.UpdateTargetPhase(ctx.TargetID, "PHASE 3: SAVING KATANA")
 			SaveURLs(ctx.TargetID, ctx.RootDomain, urls, true)
 			ctx.ScanMarkStepDone(ctx.TargetID, "CRAWLING", "KATANA")
 		}
 	} else {
+		if !target.UseKatana {
+			log.Println("⏩ Skipping Katana (Disabled in settings)")
+		}
 		ctx.ScanMarkStepDone(ctx.TargetID, "CRAWLING", "KATANA")
 	}
 
-	if len(liveAssets) > 0 {
+	if target.UseVirusTotal && len(liveAssets) > 0 {
 		if ctx.ScanIsStepDone(ctx.TargetID, "CRAWLING", "VIRUSTOTAL") {
 			log.Printf("⏩ Resume: skipping VIRUSTOTAL\n")
 		} else {
@@ -162,6 +199,9 @@ func Run(ctx Context) {
 			ctx.ScanMarkStepDone(ctx.TargetID, "CRAWLING", "VIRUSTOTAL")
 		}
 	} else {
+		if !target.UseVirusTotal {
+			log.Println("⏩ Skipping VirusTotal (Disabled in settings)")
+		}
 		ctx.ScanMarkStepDone(ctx.TargetID, "CRAWLING", "VIRUSTOTAL")
 	}
 
@@ -177,6 +217,7 @@ func Run(ctx Context) {
 	}
 
 	_ = os.Remove(crawlingAssetsFile)
+	_ = os.Remove(katanaAssetsFile)
 	_ = os.Remove(crawlingRootFile)
 
 	log.Printf(" PHASE 3 finished for %s.\n", ctx.RootDomain)
