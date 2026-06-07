@@ -29,6 +29,14 @@ func dispatcherHandlerName(actionType string) string {
 		return "js_intelligence_dispatcher"
 	case models.AgentActionTypeRunSafeBugTests:
 		return "safe_bug_test_dispatcher"
+	case models.AgentActionTypeReviewBugTestResults:
+		return "review_bug_test_results_dispatcher"
+	case models.AgentActionTypePromoteBugTestResults:
+		return "promote_bug_test_results_dispatcher"
+	case models.AgentActionTypeInspectBugPatterns:
+		return "inspect_bug_patterns_dispatcher"
+	case models.AgentActionTypeInspectBugPayloads:
+		return "inspect_bug_payloads_dispatcher"
 	case models.AgentActionTypeDeepScanAsset:
 		return "deep_scan_asset_dispatcher"
 	case models.AgentActionTypeReviewEndpoint:
@@ -223,6 +231,33 @@ func DispatchTargetAgentAction(c *fiber.Ctx) error {
 		}
 	}
 
+	if !isHardBlockedDispatcherAction(row) {
+		var bridgeOutput map[string]interface{}
+
+		switch row.ActionType {
+		case models.AgentActionTypeReviewBugTestResults:
+			bridgeOutput = dispatchReviewBugTestResults(target, row)
+		case models.AgentActionTypeInspectBugPatterns:
+			bridgeOutput = dispatchInspectBugPatterns(target, row)
+		case models.AgentActionTypeInspectBugPayloads:
+			bridgeOutput = dispatchInspectBugPayloads(target, row)
+		case models.AgentActionTypePromoteBugTestResults:
+			bridgeOutput = dispatchPromoteBugTestResults(target, row)
+		}
+
+		if bridgeOutput != nil {
+			preview["execution_enabled"] = true
+			preview["executed"] = true
+			preview["hard_blocked"] = false
+			preview["reason"] = "agent bug testing bridge executed a safe metadata/control workflow"
+			preview["bridge_output"] = bridgeOutput
+			updateFields["output_json"] = agentActionJSON(preview)
+			updateFields["error_message"] = ""
+			updateFields["status"] = models.AgentActionStatusExecuted
+			updateFields["executed_at"] = &now
+		}
+	}
+
 	if err := database.DB.Model(&models.AgentAction{}).
 		Where("id = ?", row.ID).
 		Updates(updateFields).Error; err != nil {
@@ -260,4 +295,192 @@ func DispatchTargetAgentAction(c *fiber.Ctx) error {
 			"dispatch": preview,
 		},
 	})
+}
+
+func dispatchReviewBugTestResults(target models.Target, action models.AgentAction) map[string]interface{} {
+	var total int64
+	var candidates int64
+	var needsManual int64
+	var validated int64
+	var falsePositive int64
+	var promoted int64
+
+	_ = database.DB.Model(&models.BugTestResult{}).
+		Where("target_id = ?", target.ID).
+		Count(&total).Error
+	_ = database.DB.Model(&models.BugTestResult{}).
+		Where("target_id = ? AND status = ?", target.ID, models.BugTestResultStatusCandidate).
+		Count(&candidates).Error
+	_ = database.DB.Model(&models.BugTestResult{}).
+		Where("target_id = ? AND status = ?", target.ID, models.BugTestResultStatusNeedsManualValidation).
+		Count(&needsManual).Error
+	_ = database.DB.Model(&models.BugTestResult{}).
+		Where("target_id = ? AND status = ?", target.ID, models.BugTestResultStatusValidated).
+		Count(&validated).Error
+	_ = database.DB.Model(&models.BugTestResult{}).
+		Where("target_id = ? AND status = ?", target.ID, models.BugTestResultStatusFalsePositive).
+		Count(&falsePositive).Error
+	_ = database.DB.Model(&models.BugTestResult{}).
+		Where("target_id = ? AND finding_id IS NOT NULL", target.ID).
+		Count(&promoted).Error
+
+	var byType []struct {
+		BugType string
+		Count   int64
+	}
+	_ = database.DB.Model(&models.BugTestResult{}).
+		Select("bug_type, COUNT(*) as count").
+		Where("target_id = ?", target.ID).
+		Group("bug_type").
+		Order("count DESC").
+		Scan(&byType).Error
+
+	return map[string]interface{}{
+		"review_version":          "bug-test-review-v1",
+		"target_id":               target.ID,
+		"action_id":               action.ID,
+		"total_results":           total,
+		"candidate_results":       candidates,
+		"needs_manual_validation": needsManual,
+		"validated_results":       validated,
+		"false_positive_results":  falsePositive,
+		"promoted_to_findings":    promoted,
+		"by_bug_type":             byType,
+		"recommendation":          "Review candidate and needs_manual_validation results, validate evidence manually, then promote only useful candidates to findings.",
+		"execution_enabled":       true,
+		"executed":                true,
+		"active_testing":          false,
+		"payload_execution":       false,
+		"guardrails": []string{
+			"review is metadata-only",
+			"no payloads are executed",
+			"no exploit validation is performed",
+			"finding promotion remains controlled and audited",
+		},
+	}
+}
+
+func dispatchInspectBugPatterns(target models.Target, action models.AgentAction) map[string]interface{} {
+	var total int64
+	var enabled int64
+	var safePassive int64
+
+	_ = database.DB.Model(&models.BugPattern{}).Count(&total).Error
+	_ = database.DB.Model(&models.BugPattern{}).Where("enabled = ?", true).Count(&enabled).Error
+	_ = database.DB.Model(&models.BugPattern{}).
+		Where("enabled = ? AND safe_by_default = ? AND mode = ?", true, true, "passive").
+		Count(&safePassive).Error
+
+	var byType []struct {
+		BugType string
+		Count   int64
+	}
+	_ = database.DB.Model(&models.BugPattern{}).
+		Select("bug_type, COUNT(*) as count").
+		Group("bug_type").
+		Order("count DESC").
+		Scan(&byType).Error
+
+	return map[string]interface{}{
+		"inspection_version": "bug-pattern-inspection-v1",
+		"target_id":          target.ID,
+		"action_id":          action.ID,
+		"total_patterns":     total,
+		"enabled_patterns":   enabled,
+		"safe_passive":       safePassive,
+		"by_bug_type":        byType,
+		"execution_enabled":  true,
+		"executed":           true,
+		"metadata_only":      true,
+		"guardrails": []string{
+			"pattern inspection is metadata-only",
+			"disabling/enabling patterns remains a separate explicit UI/API action",
+			"no tests or payloads are executed",
+		},
+	}
+}
+
+func dispatchInspectBugPayloads(target models.Target, action models.AgentAction) map[string]interface{} {
+	var total int64
+	var enabled int64
+	var inert int64
+	var safe int64
+
+	_ = database.DB.Model(&models.BugPayload{}).Count(&total).Error
+	_ = database.DB.Model(&models.BugPayload{}).Where("enabled = ?", true).Count(&enabled).Error
+	_ = database.DB.Model(&models.BugPayload{}).Where("safety_class = ?", "inert").Count(&inert).Error
+	_ = database.DB.Model(&models.BugPayload{}).Where("safety_class = ?", "safe").Count(&safe).Error
+
+	var byType []struct {
+		BugType string
+		Count   int64
+	}
+	_ = database.DB.Model(&models.BugPayload{}).
+		Select("bug_type, COUNT(*) as count").
+		Group("bug_type").
+		Order("count DESC").
+		Scan(&byType).Error
+
+	return map[string]interface{}{
+		"inspection_version": "bug-payload-inspection-v1",
+		"target_id":          target.ID,
+		"action_id":          action.ID,
+		"total_payloads":     total,
+		"enabled_payloads":   enabled,
+		"inert_payloads":     inert,
+		"safe_payloads":      safe,
+		"by_bug_type":        byType,
+		"execution_enabled":  true,
+		"executed":           true,
+		"metadata_only":      true,
+		"payload_execution":  false,
+		"guardrails": []string{
+			"payload registry inspection is metadata-only",
+			"payload execution is disabled",
+			"future payload use must be policy-checked, approval-gated, and audited",
+		},
+	}
+}
+
+func dispatchPromoteBugTestResults(target models.Target, action models.AgentAction) map[string]interface{} {
+	limit := 5
+	var results []models.BugTestResult
+
+	err := database.DB.
+		Where("target_id = ? AND finding_id IS NULL AND status IN ?", target.ID, []string{
+			models.BugTestResultStatusValidated,
+			models.BugTestResultStatusNeedsManualValidation,
+		}).
+		Order("CASE WHEN status = 'validated' THEN 0 ELSE 1 END, id DESC").
+		Limit(limit).
+		Find(&results).Error
+
+	if err != nil {
+		return map[string]interface{}{
+			"promotion_version": "bug-test-promotion-v1",
+			"target_id":         target.ID,
+			"action_id":         action.ID,
+			"execution_enabled": false,
+			"executed":          false,
+			"error":             err.Error(),
+		}
+	}
+
+	return map[string]interface{}{
+		"promotion_version": "bug-test-promotion-v1",
+		"target_id":         target.ID,
+		"action_id":         action.ID,
+		"execution_enabled": true,
+		"executed":          true,
+		"promoted_count":    0,
+		"eligible_count":    len(results),
+		"mode":              "review_only_foundation",
+		"recommendation":    "Eligible results were identified, but bulk promotion execution remains review-only in this bridge step. Use individual Promote to Finding or a future explicit bulk endpoint.",
+		"guardrails": []string{
+			"bulk promotion is review-only in this bridge step",
+			"false_positive and ignored results are excluded",
+			"manual validation remains required",
+			"automatic severity escalation is disabled",
+		},
+	}
 }
