@@ -887,6 +887,12 @@ const TargetAssets = () => {
                     description: "safe test rules",
                     enabled: featureSafeBugTesting,
                   },
+                  {
+                    id: "payloads",
+                    label: "Payload Registry",
+                    description: "metadata only",
+                    enabled: featureSafeBugTesting,
+                  },
                 {
                   id: "chat",
                   label: "Attack Surface Chat",
