@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -215,14 +216,23 @@ func DispatchTargetAgentAction(c *fiber.Ctx) error {
 			preview["execution_enabled"] = true
 			preview["executed"] = true
 			preview["hard_blocked"] = false
-			preview["reason"] = "safe bug testing engine foundation executed passive/stub runner"
+			preview["reason"] = "safe bug testing engine executed approved safe bug test workflow"
+
+			runOutput := map[string]interface{}{}
+			if len(run.OutputJSON) > 0 {
+				_ = json.Unmarshal(run.OutputJSON, &runOutput)
+			}
+			activeTesting, _ := runOutput["active_testing"].(bool)
+			safeActiveHeaders, _ := runOutput["safe_active_security_headers_v1"].(bool)
+
 			preview["safe_bug_testing"] = map[string]interface{}{
-				"attempted":         true,
-				"bug_test_run_id":   run.ID,
-				"bug_test_status":   run.Status,
-				"results_created":   resultCount,
-				"active_testing":    false,
-				"manual_validation": true,
+				"attempted":                       true,
+				"bug_test_run_id":                 run.ID,
+				"bug_test_status":                 run.Status,
+				"results_created":                 resultCount,
+				"active_testing":                  activeTesting,
+				"safe_active_security_headers_v1": safeActiveHeaders,
+				"manual_validation":               true,
 			}
 			updateFields["output_json"] = agentActionJSON(preview)
 			updateFields["error_message"] = ""

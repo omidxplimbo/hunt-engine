@@ -271,7 +271,26 @@ func planActionsFromChat(content string) ([]plannedChatAction, string) {
 		}, "payload registry inspection request detected")
 	}
 
-	if strings.Contains(text, "xss") || strings.Contains(text, "cors") || strings.Contains(text, "redirect") || strings.Contains(text, "header") || ((strings.Contains(text, "bug test") || strings.Contains(text, "safe bug test")) && !strings.Contains(text, "bug test result") && !strings.Contains(text, "bug test results")) {
+	if strings.Contains(text, "safe header") || strings.Contains(text, "security header") || strings.Contains(text, "headers safely") || strings.Contains(text, "header check") {
+		add(proposeAgentActionRequest{
+			ActionType:  models.AgentActionTypeRunSafeBugTests,
+			Title:       "Run safe security header checks",
+			Description: "Run level-1 safe active security header checks against live HTTP assets. No payloads, exploitation, brute force, or destructive testing are performed.",
+			RiskLevel:   models.AgentActionRiskMedium,
+			SafetyLevel: 1,
+			TestLevel:   1,
+			InputJSON: map[string]interface{}{
+				"bug_types":                       []string{"security_headers"},
+				"execution_enabled":               false,
+				"test_profile":                    "safe",
+				"safe_active_security_headers_v1": true,
+				"active_testing":                  true,
+				"payload_execution":               false,
+			},
+		}, "safe security header check request detected")
+	}
+
+	if strings.Contains(text, "xss") || strings.Contains(text, "cors") || strings.Contains(text, "redirect") || ((strings.Contains(text, "bug test") || strings.Contains(text, "safe bug test")) && !strings.Contains(text, "bug test result") && !strings.Contains(text, "bug test results")) {
 		bugTypes := []string{}
 		if strings.Contains(text, "xss") {
 			bugTypes = append(bugTypes, "xss")
