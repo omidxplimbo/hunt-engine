@@ -16,6 +16,7 @@ import {
   deleteTargetBugTestResult,
   getTargetBugTestResults,
   getTargetBugTestRuns,
+  promoteBugTestResultToFinding,
   type TargetBugTestResult,
   type TargetBugTestRun,
 } from "../api/targets";
@@ -150,10 +151,12 @@ const ResultCard = ({
   result,
   busy = false,
   onDelete,
+  onPromote,
 }: {
   result: TargetBugTestResult;
   busy?: boolean;
   onDelete?: (result: TargetBugTestResult) => void;
+  onPromote?: (result: TargetBugTestResult) => void;
 }) => {
   const evidence = parseJSONValue(result.evidence_json);
   const tags = asArray(result.tags);
@@ -177,6 +180,26 @@ const ResultCard = ({
           <div className="font-mono text-[10px] text-hack-dim">
             #{result.id}
           </div>
+          {result.finding_id ? (
+            <span className="border border-hack-primary/60 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-hack-primary">
+              Finding #{result.finding_id}
+            </span>
+          ) : (
+            onPromote &&
+            result.status !== "false_positive" &&
+            result.status !== "ignored" && (
+              <button
+                type="button"
+                onClick={() => onPromote(result)}
+                disabled={busy}
+                className="border border-hack-primary/60 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-hack-primary disabled:opacity-50"
+                title="Promote this safe bug test candidate to a Finding"
+              >
+                Promote
+              </button>
+            )
+          )}
+
           {onDelete && (
             <button
               type="button"
@@ -247,6 +270,13 @@ const BugTestsPanel = ({ targetId, enabled = true }: Props) => {
   const selectedRun =
     runs.find((item) => item.id === selectedRunId) || runs[0] || null;
 
+  const selectedRunOutput = parseJSONValue(selectedRun?.output_json);
+  const selectedRunInput = parseJSONValue(selectedRun?.input_json);
+  const selectedRunActiveTesting =
+    selectedRunOutput?.active_testing === true ||
+    selectedRunInput?.active_testing === true ||
+    selectedRunInput?.request?.active_testing === true;
+
   const resultsQuery = useQuery({
     queryKey: ["target", targetId, "bug-test-results", selectedRun?.id || "all"],
     queryFn: () => getTargetBugTestResults(targetId, 80, selectedRun?.id),
@@ -280,6 +310,32 @@ const BugTestsPanel = ({ targetId, enabled = true }: Props) => {
     },
   });
 
+  const createSafeHeaderRunMutation = useMutation({
+    mutationFn: () =>
+      createTargetBugTestRun(targetId, {
+        profile: "safe",
+        bug_types: ["security_headers"],
+        owasp_refs: ["OWASP-WSTG-CONF", "ASVS-14"],
+        safety_level: 1,
+        test_level: 1,
+        input_json: {
+          source: "bug_tests_panel",
+          active_testing: true,
+          safe_active_security_headers_v1: true,
+          payload_execution: false,
+        },
+      }),
+    onSuccess: (run) => {
+      setSelectedRunId(run.id);
+      queryClient.invalidateQueries({
+        queryKey: ["target", targetId, "bug-test-runs"],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["target", targetId, "bug-test-results"],
+      });
+    },
+  });
+
   const deleteRunMutation = useMutation({
     mutationFn: (run: TargetBugTestRun) => deleteTargetBugTestRun(targetId, run.id),
     onSuccess: () => {
@@ -299,6 +355,22 @@ const BugTestsPanel = ({ targetId, enabled = true }: Props) => {
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ["target", targetId, "bug-test-results"],
+      });
+    },
+  });
+
+  const promoteResultMutation = useMutation({
+    mutationFn: (result: TargetBugTestResult) =>
+      promoteBugTestResultToFinding(targetId, result.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["target", targetId, "bug-test-results"],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["target-findings", targetId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["target-findings-stats", targetId],
       });
     },
   });
@@ -357,6 +429,21 @@ const BugTestsPanel = ({ targetId, enabled = true }: Props) => {
                 <PlayCircle className="h-4 w-4" />
               )}
               Run Passive Bug Test
+            </button>
+
+            <button
+              type="button"
+              onClick={() => createSafeHeaderRunMutation.mutate()}
+              disabled={createSafeHeaderRunMutation.isPending}
+              className="hack-btn border border-hack-warning px-3 py-2 text-xs uppercase tracking-wider text-hack-warning disabled:opacity-50"
+              title="Runs level-1 safe active security header checks only. No payloads or exploit validation."
+            >
+              {createSafeHeaderRunMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <ShieldCheck className="h-4 w-4" />
+              )}
+              Run Safe Header Check
             </button>
           </div>
         </div>
@@ -448,7 +535,9 @@ const BugTestsPanel = ({ targetId, enabled = true }: Props) => {
                   policy: {selectedRun.policy_status}
                 </Pill>
                 <Pill>profile: {selectedRun.profile}</Pill>
-                <Pill>active_testing: false</Pill>
+                <Pill tone={selectedRunActiveTesting ? "warning" : "neutral"}>
+          active_testing: {selectedRunActiveTesting ? "true" : "false"}
+        </Pill>
               </div>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="font-mono text-xs text-hack-dim">
@@ -480,12 +569,16 @@ const BugTestsPanel = ({ targetId, enabled = true }: Props) => {
               <ResultCard
                 key={result.id}
                 result={result}
-                busy={deleteResultMutation.isPending}
+                busy={
+                  deleteResultMutation.isPending ||
+                  promoteResultMutation.isPending
+                }
                 onDelete={(item) => {
                   if (window.confirm(`Delete bug test result #${item.id}? This is a soft delete.`)) {
                     deleteResultMutation.mutate(item);
                   }
                 }}
+              onPromote={(item) => promoteResultMutation.mutate(item)}
               />
             ))
           )}

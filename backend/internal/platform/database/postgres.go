@@ -73,6 +73,7 @@ func Connect() {
 		&models.BugTestRun{},
 		&models.BugTestResult{},
 		&models.BugPattern{},
+		&models.BugPayload{},
 		&models.NucleiTemplate{},
 	)
 

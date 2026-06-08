@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -183,9 +186,9 @@ func bugTestPolicyCheck(target models.Target, profile string, safetyLevel int, t
 		"blocked_reasons":    blockedReasons,
 		"warning_reasons":    warningReasons,
 		"execution_enabled":  false,
-		"active_testing":     false,
+		"active_testing":     safetyLevel >= 1 || testLevel >= 1,
 		"guardrails": []string{
-			"v3.8.0 foundation runner is passive/stub-only",
+			"v3.8.3 runner supports passive checks and level-1 safe active security header checks",
 			"no exploit payloads are executed",
 			"results are candidates and need manual validation",
 			"level 2+ controlled active checks require future explicit approval and policy controls",
@@ -459,6 +462,238 @@ func seedPassiveBugTestResults(run *models.BugTestRun, target *models.Target, bu
 	return count, nil
 }
 
+func bugTypesInclude(bugTypes []string, wanted string) bool {
+	wanted = normalizeBugType(wanted)
+	if wanted == "" || wanted == models.BugTypeUnknown {
+		return false
+	}
+	for _, item := range bugTypes {
+		if normalizeBugType(item) == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func safeHeaderCheckURL(asset models.Asset) string {
+	raw := strings.TrimSpace(asset.FinalURL)
+	if raw == "" {
+		raw = strings.TrimSpace(asset.Value)
+	}
+	if raw == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(raw)
+	if err == nil && parsed.Scheme != "" && parsed.Host != "" {
+		return raw
+	}
+
+	if strings.Contains(raw, "://") {
+		return ""
+	}
+
+	return "https://" + raw
+}
+
+func selectedSecurityHeaders(headers http.Header) map[string]string {
+	names := []string{
+		"Strict-Transport-Security",
+		"Content-Security-Policy",
+		"X-Content-Type-Options",
+		"X-Frame-Options",
+		"Referrer-Policy",
+		"Permissions-Policy",
+		"Cross-Origin-Opener-Policy",
+		"Cross-Origin-Resource-Policy",
+		"Cross-Origin-Embedder-Policy",
+	}
+
+	out := map[string]string{}
+	for _, name := range names {
+		value := strings.TrimSpace(headers.Get(name))
+		if value != "" {
+			out[name] = value
+		}
+	}
+	return out
+}
+
+func missingSecurityHeaders(rawURL string, headers http.Header) []string {
+	missing := make([]string, 0)
+
+	parsed, _ := url.Parse(rawURL)
+	isHTTPS := parsed != nil && strings.EqualFold(parsed.Scheme, "https")
+
+	if isHTTPS && strings.TrimSpace(headers.Get("Strict-Transport-Security")) == "" {
+		missing = append(missing, "Strict-Transport-Security")
+	}
+	if strings.TrimSpace(headers.Get("Content-Security-Policy")) == "" {
+		missing = append(missing, "Content-Security-Policy")
+	}
+	if strings.TrimSpace(headers.Get("X-Content-Type-Options")) == "" {
+		missing = append(missing, "X-Content-Type-Options")
+	}
+	if strings.TrimSpace(headers.Get("X-Frame-Options")) == "" {
+		missing = append(missing, "X-Frame-Options")
+	}
+	if strings.TrimSpace(headers.Get("Referrer-Policy")) == "" {
+		missing = append(missing, "Referrer-Policy")
+	}
+	if strings.TrimSpace(headers.Get("Permissions-Policy")) == "" {
+		missing = append(missing, "Permissions-Policy")
+	}
+
+	return missing
+}
+
+func safeHeaderHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 5 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+}
+
+func fetchSecurityHeaders(rawURL string) (string, int, http.Header, string, error) {
+	client := safeHeaderHTTPClient()
+
+	doReq := func(method string) (*http.Response, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		req, err := http.NewRequestWithContext(ctx, method, rawURL, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("User-Agent", "HuntEngine-SafeHeaderCheck/1.0")
+		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/json,text/plain,*/*;q=0.8")
+
+		return client.Do(req)
+	}
+
+	resp, err := doReq(http.MethodHead)
+	method := http.MethodHead
+
+	if err == nil && resp != nil && (resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusForbidden) {
+		_ = resp.Body.Close()
+		resp, err = doReq(http.MethodGet)
+		method = http.MethodGet
+	}
+
+	if err != nil {
+		return method, 0, http.Header{}, "", err
+	}
+	if resp == nil {
+		return method, 0, http.Header{}, "", fmt.Errorf("empty HTTP response")
+	}
+	defer resp.Body.Close()
+
+	finalURL := rawURL
+	if resp.Request != nil && resp.Request.URL != nil {
+		finalURL = resp.Request.URL.String()
+	}
+
+	return method, resp.StatusCode, resp.Header.Clone(), finalURL, nil
+}
+
+func runSafeSecurityHeaderChecks(run *models.BugTestRun, target *models.Target) (int, error) {
+	if run == nil || target == nil {
+		return 0, fmt.Errorf("missing run or target")
+	}
+
+	var assets []models.Asset
+	if err := database.DB.
+		Where("target_id = ? AND is_live = ?", target.ID, true).
+		Where("(final_url IS NOT NULL AND final_url <> '') OR value <> ''").
+		Order("status_code DESC, id DESC").
+		Limit(20).
+		Find(&assets).Error; err != nil {
+		return 0, err
+	}
+
+	count := 0
+	now := time.Now().UTC()
+
+	for _, asset := range assets {
+		rawURL := safeHeaderCheckURL(asset)
+		if rawURL == "" {
+			continue
+		}
+
+		method, statusCode, headers, finalURL, err := fetchSecurityHeaders(rawURL)
+
+		status := models.BugTestResultStatusCandidate
+		confidence := "medium"
+		severity := models.FindingSeverityLow
+		note := "Safe active security header check completed. Manual validation is required."
+
+		observed := map[string]string{}
+		missing := []string{}
+
+		if err != nil {
+			status = models.BugTestResultStatusInconclusive
+			confidence = "low"
+			severity = models.FindingSeverityInfo
+			note = err.Error()
+		} else {
+			observed = selectedSecurityHeaders(headers)
+			missing = missingSecurityHeaders(finalURL, headers)
+			if len(missing) == 0 {
+				status = models.BugTestResultStatusPassed
+				confidence = "medium"
+				severity = models.FindingSeverityInfo
+				note = "Core security headers were observed by the safe active check."
+			}
+		}
+
+		evidence := map[string]interface{}{
+			"mode":              "safe_active_security_headers_v1",
+			"asset":             asset.Value,
+			"input_url":         rawURL,
+			"final_url":         finalURL,
+			"method":            method,
+			"status_code":       statusCode,
+			"observed_headers":  observed,
+			"missing_headers":   missing,
+			"active_testing":    true,
+			"payload_execution": false,
+			"manual_validation": true,
+			"safety_level":      1,
+			"test_level":        1,
+			"timeout_ms":        5000,
+			"created_at":        now,
+			"note":              note,
+		}
+
+		row := models.BugTestResult{
+			RunID:        run.ID,
+			TargetID:     target.ID,
+			AssetID:      &asset.ID,
+			BugType:      models.BugTypeSecurityHeaders,
+			TestName:     "safe.active.security_headers.v1",
+			Status:       status,
+			Confidence:   confidence,
+			SeverityHint: severity,
+			EvidenceJSON: bugTestJSON(evidence),
+			OWASPRefs:    bugTestJSONArray([]string{"OWASP-WSTG-CONF", "ASVS-14"}),
+			Tags:         bugTestJSONArray([]string{"safe_active", "security_headers", "headers", "manual_validation"}),
+		}
+
+		if err := database.DB.Create(&row).Error; err != nil {
+			return count, err
+		}
+		count++
+	}
+
+	return count, nil
+}
+
 func GetTargetBugTestRuns(c *fiber.Ctx) error {
 	if err := ensureSafeBugTestingEnabled(c); err != nil {
 		return err
@@ -566,16 +801,35 @@ func CreateTargetBugTestRun(c *fiber.Ctx) error {
 
 	resultCount := 0
 	if run.Status == models.BugTestRunStatusRunning {
-		resultCount, err = seedPassiveBugTestResults(&run, target, bugTypes)
+		passiveCount, passiveErr := seedPassiveBugTestResults(&run, target, bugTypes)
+		resultCount = passiveCount
+		activeCount := 0
+		activeTesting := false
+
+		if passiveErr != nil {
+			err = passiveErr
+		}
+
+		if err == nil && profile == models.BugTestProfileSafe && testLevel >= 1 && bugTypesInclude(bugTypes, models.BugTypeSecurityHeaders) {
+			activeTesting = true
+			activeCount, err = runSafeSecurityHeaderChecks(&run, target)
+			resultCount += activeCount
+		}
+
 		completed := time.Now().UTC()
 		run.Status = models.BugTestRunStatusCompleted
 		run.CompletedAt = &completed
 		run.OutputJSON = bugTestJSON(map[string]interface{}{
-			"runner_version":      "safe-bug-testing-v1",
-			"active_testing":      false,
-			"results_created":     resultCount,
-			"manual_validation":   true,
-			"execution_statement": "passive/stub foundation only; no payloads were sent",
+			"runner_version":                  "safe-bug-testing-v1",
+			"active_testing":                  activeTesting,
+			"passive_results_created":         passiveCount,
+			"safe_active_results_created":     activeCount,
+			"results_created":                 resultCount,
+			"manual_validation":               true,
+			"execution_statement":             "safe bug testing completed with passive checks and optional level-1 safe active security header checks; no payloads were sent",
+			"payload_execution":               false,
+			"exploit_validation":              false,
+			"safe_active_security_headers_v1": activeTesting,
 		})
 		if err != nil {
 			run.Status = models.BugTestRunStatusFailed
@@ -745,19 +999,37 @@ func CreateBugTestRunFromAgentAction(target *models.Target, action *models.Agent
 	resultCount := 0
 	if run.Status == models.BugTestRunStatusRunning {
 		var err error
-		resultCount, err = seedPassiveBugTestResults(&run, target, bugTypes)
+		passiveCount, passiveErr := seedPassiveBugTestResults(&run, target, bugTypes)
+		resultCount = passiveCount
+		activeCount := 0
+		activeTesting := false
+
+		if passiveErr != nil {
+			err = passiveErr
+		}
+
+		if err == nil && profile == models.BugTestProfileSafe && testLevel >= 1 && bugTypesInclude(bugTypes, models.BugTypeSecurityHeaders) {
+			activeTesting = true
+			activeCount, err = runSafeSecurityHeaderChecks(&run, target)
+			resultCount += activeCount
+		}
 
 		completed := time.Now().UTC()
 		run.CompletedAt = &completed
 		run.Status = models.BugTestRunStatusCompleted
 		run.OutputJSON = bugTestJSON(map[string]interface{}{
-			"runner_version":      "safe-bug-testing-v1",
-			"source":              "agent_action_dispatch",
-			"agent_action_id":     action.ID,
-			"active_testing":      false,
-			"results_created":     resultCount,
-			"manual_validation":   true,
-			"execution_statement": "passive/stub foundation only; no payloads were sent",
+			"runner_version":                  "safe-bug-testing-v1",
+			"source":                          "agent_action_dispatch",
+			"agent_action_id":                 action.ID,
+			"active_testing":                  activeTesting,
+			"passive_results_created":         passiveCount,
+			"safe_active_results_created":     activeCount,
+			"results_created":                 resultCount,
+			"manual_validation":               true,
+			"execution_statement":             "safe bug testing completed with passive checks and optional level-1 safe active security header checks; no payloads were sent",
+			"payload_execution":               false,
+			"exploit_validation":              false,
+			"safe_active_security_headers_v1": activeTesting,
 		})
 
 		if err != nil {
@@ -935,4 +1207,275 @@ func DeleteTargetBugTestResult(c *fiber.Ctx) error {
 	})
 
 	return c.JSON(fiber.Map{"status": "success", "message": "bug test result deleted"})
+}
+
+type updateBugTestResultStatusRequest struct {
+	Status string `json:"status"`
+}
+
+func normalizeBugTestResultStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case models.BugTestResultStatusCandidate:
+		return models.BugTestResultStatusCandidate
+	case models.BugTestResultStatusNeedsManualValidation:
+		return models.BugTestResultStatusNeedsManualValidation
+	case models.BugTestResultStatusPassed:
+		return models.BugTestResultStatusPassed
+	case models.BugTestResultStatusFailed:
+		return models.BugTestResultStatusFailed
+	case models.BugTestResultStatusBlocked:
+		return models.BugTestResultStatusBlocked
+	case models.BugTestResultStatusInconclusive:
+		return models.BugTestResultStatusInconclusive
+	case models.BugTestResultStatusValidated:
+		return models.BugTestResultStatusValidated
+	case models.BugTestResultStatusFalsePositive:
+		return models.BugTestResultStatusFalsePositive
+	case models.BugTestResultStatusIgnored:
+		return models.BugTestResultStatusIgnored
+	default:
+		return ""
+	}
+}
+
+// UpdateTargetBugTestResultStatus updates triage/validation status for one bug test result.
+func UpdateTargetBugTestResultStatus(c *fiber.Ctx) error {
+	if err := ensureSafeBugTestingEnabled(c); err != nil {
+		return err
+	}
+
+	targetID, err := parseTargetIDParam(c)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	resultID, err := parseBugTestResultIDParam(c)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	req := new(updateBugTestResultStatusRequest)
+	if err := c.BodyParser(req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "invalid request body"})
+	}
+
+	nextStatus := normalizeBugTestResultStatus(req.Status)
+	if nextStatus == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "invalid bug test result status"})
+	}
+
+	var result models.BugTestResult
+	if err := database.DB.Where("id = ? AND target_id = ?", resultID, target.ID).First(&result).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "bug test result not found"})
+	}
+
+	previousStatus := result.Status
+	result.Status = nextStatus
+
+	if err := database.DB.Save(&result).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	uid, _ := currentUserID(c)
+	actorID := uid
+	_ = auditlog.Record(auditlog.Entry{
+		ActorUserID: &actorID,
+		TargetID:    &target.ID,
+		Action:      "target.bug_test.result.status_update",
+		EntityType:  "bug_test_result",
+		EntityID:    &result.ID,
+		Metadata: fiber.Map{
+			"run_id":          result.RunID,
+			"bug_type":        result.BugType,
+			"pattern_key":     result.PatternKey,
+			"previous_status": previousStatus,
+			"new_status":      nextStatus,
+		},
+	})
+
+	return c.JSON(fiber.Map{"status": "success", "data": result})
+}
+
+func bugTestResultPromotionSeverity(result models.BugTestResult) string {
+	switch strings.ToLower(strings.TrimSpace(result.SeverityHint)) {
+	case models.FindingSeverityCritical:
+		return models.FindingSeverityCritical
+	case models.FindingSeverityHigh:
+		return models.FindingSeverityHigh
+	case models.FindingSeverityMedium:
+		return models.FindingSeverityMedium
+	case models.FindingSeverityLow:
+		return models.FindingSeverityLow
+	default:
+		return models.FindingSeverityInfo
+	}
+}
+
+func bugTestResultPromotionTitle(result models.BugTestResult) string {
+	switch result.BugType {
+	case models.BugTypeXSS:
+		return "Potential XSS candidate requires manual validation"
+	case models.BugTypeOpenRedirect:
+		return "Potential open redirect candidate requires manual validation"
+	case models.BugTypeSecurityHeaders:
+		return "Security header review candidate"
+	case models.BugTypeCORS:
+		return "Potential CORS misconfiguration candidate"
+	case models.BugTypeAPI:
+		return "API security test candidate"
+	default:
+		return "Safe bug testing candidate requires manual validation"
+	}
+}
+
+func bugTestResultPromotionRecommendation(result models.BugTestResult) string {
+	switch result.BugType {
+	case models.BugTypeXSS:
+		return "Manually validate reflection context and exploitability using program-approved safe testing procedures. Do not submit as confirmed XSS without browser/manual validation evidence."
+	case models.BugTypeOpenRedirect:
+		return "Manually validate redirect behavior with safe inert URLs and confirm impact before reporting. Restrict redirects to allowlisted destinations."
+	case models.BugTypeSecurityHeaders:
+		return "Review response headers manually and add missing hardening headers where appropriate, such as CSP, HSTS, X-Frame-Options or frame-ancestors, and X-Content-Type-Options."
+	case models.BugTypeCORS:
+		return "Validate CORS behavior manually and restrict allowed origins, credentials, and methods to trusted applications only."
+	default:
+		return "Review the candidate manually, collect validation evidence, and keep the finding status open only if impact is confirmed or further review is required."
+	}
+}
+
+func bugTestResultPromotionFingerprint(targetID uint, result models.BugTestResult) string {
+	subject := fmt.Sprintf("asset:%v:url:%v", result.AssetID, result.URLID)
+	return fmt.Sprintf("safe-bug-test:%d:%s:%s", targetID, result.PatternKey, subject)
+}
+
+// PromoteTargetBugTestResultToFinding creates or returns a Finding linked to one bug test result.
+func PromoteTargetBugTestResultToFinding(c *fiber.Ctx) error {
+	if err := ensureSafeBugTestingEnabled(c); err != nil {
+		return err
+	}
+
+	targetID, err := parseTargetIDParam(c)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	resultID, err := parseBugTestResultIDParam(c)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	var result models.BugTestResult
+	if err := database.DB.Where("id = ? AND target_id = ?", resultID, target.ID).First(&result).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "bug test result not found"})
+	}
+
+	if result.Status == models.BugTestResultStatusFalsePositive || result.Status == models.BugTestResultStatusIgnored {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status":  "error",
+			"message": "false_positive or ignored bug test results cannot be promoted to findings",
+		})
+	}
+
+	if result.FindingID != nil {
+		var existing models.Finding
+		if err := database.DB.First(&existing, *result.FindingID).Error; err == nil {
+			return c.JSON(fiber.Map{"status": "success", "data": existing, "bug_test_result": result, "already_promoted": true})
+		}
+	}
+
+	now := time.Now().UTC()
+	fingerprint := bugTestResultPromotionFingerprint(target.ID, result)
+
+	evidence := map[string]interface{}{
+		"source":          "safe_bug_testing",
+		"bug_test_run_id": result.RunID,
+		"bug_test_id":     result.ID,
+		"bug_type":        result.BugType,
+		"test_name":       result.TestName,
+		"pattern_id":      result.PatternID,
+		"pattern_key":     result.PatternKey,
+		"confidence":      result.Confidence,
+		"severity_hint":   result.SeverityHint,
+		"status":          result.Status,
+		"evidence_json":   result.EvidenceJSON,
+		"owasp_refs":      result.OWASPRefs,
+		"tags":            result.Tags,
+		"manual_required": true,
+	}
+
+	finding := models.Finding{
+		TargetID:       target.ID,
+		AssetID:        result.AssetID,
+		URLID:          result.URLID,
+		Title:          bugTestResultPromotionTitle(result),
+		Description:    "This finding was promoted from a Safe Bug Testing candidate. It is not automatically confirmed exploitation evidence and requires human validation before submission or severity escalation.",
+		Severity:       bugTestResultPromotionSeverity(result),
+		Category:       "safe-bug-testing",
+		SourceTool:     "safe_bug_testing",
+		Evidence:       fmt.Sprintf("bug_test_result_id=%d pattern_key=%s confidence=%s", result.ID, result.PatternKey, result.Confidence),
+		EvidenceJSON:   bugTestJSON(evidence),
+		Recommendation: bugTestResultPromotionRecommendation(result),
+		Status:         models.FindingStatusOpen,
+		Fingerprint:    fingerprint,
+		FirstSeen:      now,
+		LastSeen:       now,
+	}
+
+	var existing models.Finding
+	if err := database.DB.Where("target_id = ? AND fingerprint = ?", target.ID, fingerprint).First(&existing).Error; err == nil {
+		result.FindingID = &existing.ID
+		if result.Status == models.BugTestResultStatusCandidate {
+			result.Status = models.BugTestResultStatusNeedsManualValidation
+		}
+		_ = database.DB.Save(&result).Error
+		return c.JSON(fiber.Map{"status": "success", "data": existing, "bug_test_result": result, "already_promoted": true})
+	}
+
+	if err := database.DB.Create(&finding).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	result.FindingID = &finding.ID
+	if result.Status == models.BugTestResultStatusCandidate {
+		result.Status = models.BugTestResultStatusNeedsManualValidation
+	}
+	if err := database.DB.Save(&result).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	uid, _ := currentUserID(c)
+	actorID := uid
+	_ = auditlog.Record(auditlog.Entry{
+		ActorUserID: &actorID,
+		TargetID:    &target.ID,
+		Action:      "target.bug_test.result.promote_to_finding",
+		EntityType:  "finding",
+		EntityID:    &finding.ID,
+		IPAddress:   auditlog.ClientIP(c),
+		UserAgent:   auditlog.UserAgent(c),
+		Metadata: fiber.Map{
+			"bug_test_result_id": result.ID,
+			"bug_test_run_id":    result.RunID,
+			"pattern_key":        result.PatternKey,
+			"bug_type":           result.BugType,
+			"severity":           finding.Severity,
+		},
+	})
+
+	return c.JSON(fiber.Map{
+		"status":           "success",
+		"data":             finding,
+		"bug_test_result":  result,
+		"already_promoted": false,
+	})
 }

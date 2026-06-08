@@ -207,6 +207,8 @@ func main() {
 	api.Get("/targets/:id/bug-tests/runs", handlers.GetTargetBugTestRuns)
 	api.Post("/targets/:id/bug-tests/runs", handlers.CreateTargetBugTestRun)
 	api.Get("/targets/:id/bug-tests/results", handlers.GetTargetBugTestResults)
+	api.Patch("/targets/:id/bug-tests/results/:result_id/status", handlers.UpdateTargetBugTestResultStatus)
+	api.Post("/targets/:id/bug-tests/results/:result_id/promote", handlers.PromoteTargetBugTestResultToFinding)
 	api.Delete("/targets/:id/bug-tests/runs/:run_id", handlers.DeleteTargetBugTestRun)
 	api.Delete("/targets/:id/bug-tests/results/:result_id", handlers.DeleteTargetBugTestResult)
 
@@ -215,6 +217,9 @@ func main() {
 	// Bug Pattern Registry Routes
 	api.Get("/bug-patterns", handlers.GetBugPatterns)
 	api.Get("/bug-patterns/:id", handlers.GetBugPattern)
+	api.Patch("/bug-patterns/:id/enabled", handlers.UpdateBugPatternEnabled)
+	api.Get("/bug-payloads", handlers.GetBugPayloads)
+	api.Get("/bug-payloads/:id", handlers.GetBugPayload)
 
 	api.Get("/dashboard/stats", handlers.GetDashboardStats)
 	api.Get("/monitor/stats", handlers.GetMonitorData)

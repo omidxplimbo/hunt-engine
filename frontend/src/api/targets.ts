@@ -1045,6 +1045,8 @@ export interface TargetBugTestResult {
   asset_id?: number | null;
   url_id?: number | null;
   finding_id?: number | null;
+  pattern_id?: number | null;
+  pattern_key?: string;
   bug_type: string;
   test_name: string;
   status: string;
@@ -1131,4 +1133,148 @@ export const deleteTargetBugTestResult = async (
   resultId: number,
 ) => {
   await apiClient.delete(`/targets/${targetId}/bug-tests/results/${resultId}`);
+};
+
+// -----------------------------
+// Bug Pattern Registry - v3.8.3
+// -----------------------------
+export interface BugPattern {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  key: string;
+  name: string;
+  description: string;
+  bug_type: string;
+  severity_hint: string;
+  confidence_default: string;
+  test_level: number;
+  safety_level: number;
+  mode: string;
+  safe_by_default: boolean;
+  requires_approval: boolean;
+  enabled: boolean;
+  source: string;
+  version: string;
+  matcher_json?: any;
+  evidence_schema_json?: any;
+  owasp_refs?: any;
+  tags?: any;
+}
+
+export interface BugPatternsResponse {
+  status: string;
+  data: BugPattern[];
+  count: number;
+  total_count: number;
+  page: number;
+}
+
+export const getBugPatterns = async (params?: {
+  bug_type?: string;
+  mode?: string;
+  enabled?: string;
+  limit?: number;
+}) => {
+  const response = await apiClient.get<BugPatternsResponse>("/bug-patterns", {
+    params: {
+      limit: params?.limit ?? 100,
+      bug_type: params?.bug_type || undefined,
+      mode: params?.mode || undefined,
+      enabled: params?.enabled || undefined,
+    },
+  });
+
+  return response.data;
+};
+
+export const updateBugPatternEnabled = async (
+  patternId: number,
+  enabled: boolean,
+) => {
+  const response = await apiClient.patch<{
+    status: string;
+    data: BugPattern;
+  }>(`/bug-patterns/${patternId}/enabled`, { enabled });
+
+  return response.data.data;
+};
+
+export const updateTargetBugTestResultStatus = async (
+  targetId: number,
+  resultId: number,
+  status: string,
+) => {
+  const response = await apiClient.patch<{
+    status: string;
+    data: TargetBugTestResult;
+  }>(`/targets/${targetId}/bug-tests/results/${resultId}/status`, { status });
+
+  return response.data.data;
+};
+
+export const promoteBugTestResultToFinding = async (
+  targetId: number,
+  resultId: number,
+) => {
+  const response = await apiClient.post<{
+    status: string;
+    data: any;
+    bug_test_result: TargetBugTestResult;
+    already_promoted: boolean;
+  }>(`/targets/${targetId}/bug-tests/results/${resultId}/promote`);
+
+  return response.data;
+};
+
+// -----------------------------
+// Bug Payload Registry - v3.8.3 metadata-only
+// -----------------------------
+export interface BugPayload {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  key: string;
+  name: string;
+  description: string;
+  bug_type: string;
+  safety_class: string;
+  test_level: number;
+  safety_level: number;
+  requires_approval: boolean;
+  enabled: boolean;
+  mode: string;
+  context: string;
+  payload_template: string;
+  source: string;
+  version: string;
+  owasp_refs?: any;
+  tags?: any;
+  metadata?: any;
+}
+
+export interface BugPayloadsResponse {
+  status: string;
+  data: BugPayload[];
+  count: number;
+  total_count: number;
+  page: number;
+}
+
+export const getBugPayloads = async (params?: {
+  bug_type?: string;
+  safety_class?: string;
+  enabled?: string;
+  limit?: number;
+}) => {
+  const response = await apiClient.get<BugPayloadsResponse>("/bug-payloads", {
+    params: {
+      limit: params?.limit ?? 100,
+      bug_type: params?.bug_type || undefined,
+      safety_class: params?.safety_class || undefined,
+      enabled: params?.enabled || undefined,
+    },
+  });
+
+  return response.data;
 };

@@ -207,7 +207,90 @@ func planActionsFromChat(content string) ([]plannedChatAction, string) {
 		}, "JavaScript intelligence request detected")
 	}
 
-	if strings.Contains(text, "xss") || strings.Contains(text, "cors") || strings.Contains(text, "redirect") || strings.Contains(text, "header") || strings.Contains(text, "bug test") {
+	if strings.Contains(text, "review bug") || strings.Contains(text, "bug result") || strings.Contains(text, "نتایج باگ") || strings.Contains(text, "بررسی نتیجه") {
+		add(proposeAgentActionRequest{
+			ActionType:  models.AgentActionTypeReviewBugTestResults,
+			Title:       "Review safe bug test results",
+			Description: "Review Safe Bug Testing results, summarize candidate/validated/manual-validation items, and identify what should be manually validated next.",
+			RiskLevel:   models.AgentActionRiskLow,
+			SafetyLevel: 0,
+			TestLevel:   0,
+			InputJSON: map[string]interface{}{
+				"source":            "agent_chat",
+				"review_scope":      "bug_test_results",
+				"active_testing":    false,
+				"payload_execution": false,
+			},
+		}, "bug test result review request detected")
+	}
+
+	if strings.Contains(text, "promote") || strings.Contains(text, "finding کن") || strings.Contains(text, "تبدیل به finding") || strings.Contains(text, "فایندینگ کن") {
+		add(proposeAgentActionRequest{
+			ActionType:  models.AgentActionTypePromoteBugTestResults,
+			Title:       "Review bug test candidates for finding promotion",
+			Description: "Identify validated/manual-validation Safe Bug Testing candidates that may be promoted to Findings. Bulk promotion remains guarded and review-only in this bridge step.",
+			RiskLevel:   models.AgentActionRiskMedium,
+			SafetyLevel: 0,
+			TestLevel:   0,
+			InputJSON: map[string]interface{}{
+				"source":              "agent_chat",
+				"promotion_mode":      "review_only_foundation",
+				"auto_severity_apply": false,
+			},
+		}, "finding promotion request detected")
+	}
+
+	if strings.Contains(text, "pattern registry") || strings.Contains(text, "patternها") || strings.Contains(text, "پترن") {
+		add(proposeAgentActionRequest{
+			ActionType:  models.AgentActionTypeInspectBugPatterns,
+			Title:       "Inspect bug pattern registry",
+			Description: "Inspect enabled/safe bug testing patterns and summarize registry coverage. This is metadata-only.",
+			RiskLevel:   models.AgentActionRiskLow,
+			SafetyLevel: 0,
+			TestLevel:   0,
+			InputJSON: map[string]interface{}{
+				"source":        "agent_chat",
+				"metadata_only": true,
+			},
+		}, "pattern registry inspection request detected")
+	}
+
+	if strings.Contains(text, "payload registry") || strings.Contains(text, "payloadها") || strings.Contains(text, "پیلود") {
+		add(proposeAgentActionRequest{
+			ActionType:  models.AgentActionTypeInspectBugPayloads,
+			Title:       "Inspect bug payload registry",
+			Description: "Inspect payload registry metadata and safety classes. Payload execution remains disabled.",
+			RiskLevel:   models.AgentActionRiskLow,
+			SafetyLevel: 0,
+			TestLevel:   0,
+			InputJSON: map[string]interface{}{
+				"source":            "agent_chat",
+				"metadata_only":     true,
+				"payload_execution": false,
+			},
+		}, "payload registry inspection request detected")
+	}
+
+	if strings.Contains(text, "safe header") || strings.Contains(text, "security header") || strings.Contains(text, "headers safely") || strings.Contains(text, "header check") {
+		add(proposeAgentActionRequest{
+			ActionType:  models.AgentActionTypeRunSafeBugTests,
+			Title:       "Run safe security header checks",
+			Description: "Run level-1 safe active security header checks against live HTTP assets. No payloads, exploitation, brute force, or destructive testing are performed.",
+			RiskLevel:   models.AgentActionRiskMedium,
+			SafetyLevel: 1,
+			TestLevel:   1,
+			InputJSON: map[string]interface{}{
+				"bug_types":                       []string{"security_headers"},
+				"execution_enabled":               false,
+				"test_profile":                    "safe",
+				"safe_active_security_headers_v1": true,
+				"active_testing":                  true,
+				"payload_execution":               false,
+			},
+		}, "safe security header check request detected")
+	}
+
+	if strings.Contains(text, "xss") || strings.Contains(text, "cors") || strings.Contains(text, "redirect") || ((strings.Contains(text, "bug test") || strings.Contains(text, "safe bug test")) && !strings.Contains(text, "bug test result") && !strings.Contains(text, "bug test results")) {
 		bugTypes := []string{}
 		if strings.Contains(text, "xss") {
 			bugTypes = append(bugTypes, "xss")
@@ -240,7 +323,7 @@ func planActionsFromChat(content string) ([]plannedChatAction, string) {
 		}, "safe bug testing request detected")
 	}
 
-	if strings.Contains(text, "payload") || strings.Contains(text, "exploit") || strings.Contains(text, "validate") || strings.Contains(text, "نفوذ") || strings.Contains(text, "پیلود") {
+	if (strings.Contains(text, "payload") && !strings.Contains(text, "payload registry")) || strings.Contains(text, "exploit") || strings.Contains(text, "validate") {
 		add(proposeAgentActionRequest{
 			ActionType:  models.AgentActionTypeGeneratePayload,
 			Title:       "Prepare controlled payload generation plan",
@@ -298,7 +381,7 @@ func planActionsFromChat(content string) ([]plannedChatAction, string) {
 		}, "fallback planning action")
 	}
 
-	response := "I converted your request into approval-gated agent action proposals. Execution is disabled in this foundation step; approved actions will be used by later v3.7/v3.8 executors."
+	response := "I converted your request into approval-gated agent action proposals. Safe metadata workflows and approved Safe Bug Testing actions can be dispatched through the controlled Agent Actions workflow; payload execution, exploit validation, destructive testing, and out-of-scope testing remain blocked."
 	return actions, response
 }
 

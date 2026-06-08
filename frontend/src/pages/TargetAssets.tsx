@@ -43,10 +43,12 @@ import AgentRunsPanel from "../components/AgentRunsPanel";
 import AgentActionsPanel from "../components/AgentActionsPanel";
 import AgentChatPanel from "../components/AgentChatPanel";
 import BugTestsPanel from "../components/BugTestsPanel";
+import BugPatternRegistryPanel from "../components/BugPatternRegistryPanel";
+import BugPayloadRegistryPanel from "../components/BugPayloadRegistryPanel";
 import TargetPolicyPanel from "../components/TargetPolicyPanel";
 
 type ActiveTab = "assets" | "urls" | "findings" | "analysis" | "policy";
-type AnalysisSection = "overview" | "recommendations" | "agents" | "actions" | "bugtests" | "chat";
+type AnalysisSection = "overview" | "recommendations" | "agents" | "actions" | "bugtests" | "patterns" | "payloads" | "chat";
 
 const KNOWN_ASSET_PROVIDERS = [
   { id: "subfinder", label: "Subfinder" },
@@ -879,6 +881,18 @@ const TargetAssets = () => {
                   description: "safe passive checks",
                   enabled: featureSafeBugTesting,
                 },
+                  {
+                    id: "patterns",
+                    label: "Pattern Registry",
+                    description: "safe test rules",
+                    enabled: featureSafeBugTesting,
+                  },
+                  {
+                    id: "payloads",
+                    label: "Payload Registry",
+                    description: "metadata only",
+                    enabled: featureSafeBugTesting,
+                  },
                 {
                   id: "chat",
                   label: "Attack Surface Chat",
@@ -954,6 +968,14 @@ const TargetAssets = () => {
               targetId={targetId}
               enabled={featureSafeBugTesting}
             />
+          )}
+
+          {activeAnalysisSection === "patterns" && (
+            <BugPatternRegistryPanel enabled={featureSafeBugTesting} />
+          )}
+
+          {activeAnalysisSection === "payloads" && (
+            <BugPayloadRegistryPanel enabled={featureSafeBugTesting} />
           )}
 
           {activeAnalysisSection === "chat" && (

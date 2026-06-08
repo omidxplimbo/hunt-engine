@@ -61,6 +61,10 @@ func normalizeAgentActionType(value string) string {
 		models.AgentActionTypeGenerateNucleiDraft,
 		models.AgentActionTypeRunJSIntelligence,
 		models.AgentActionTypeRunSafeBugTests,
+		models.AgentActionTypeReviewBugTestResults,
+		models.AgentActionTypePromoteBugTestResults,
+		models.AgentActionTypeInspectBugPatterns,
+		models.AgentActionTypeInspectBugPayloads,
 		models.AgentActionTypeDeepScanAsset,
 		models.AgentActionTypeReviewEndpoint,
 		models.AgentActionTypeRunCommandSchema,
@@ -239,6 +243,13 @@ func actionClass(actionType string) string {
 		return "template_scan"
 	case models.AgentActionTypeRunSafeBugTests:
 		return "safe_bug_test"
+	case models.AgentActionTypeReviewBugTestResults:
+		return "bug_test_review"
+	case models.AgentActionTypePromoteBugTestResults:
+		return "finding_promotion"
+	case models.AgentActionTypeInspectBugPatterns,
+		models.AgentActionTypeInspectBugPayloads:
+		return "registry_inspection"
 	case models.AgentActionTypeDeepScanAsset:
 		return "deep_scan"
 	case models.AgentActionTypeRunCommandSchema:

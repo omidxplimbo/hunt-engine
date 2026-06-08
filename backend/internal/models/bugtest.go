@@ -25,6 +25,9 @@ const (
 	BugTestResultStatusFailed                = "failed"
 	BugTestResultStatusBlocked               = "blocked"
 	BugTestResultStatusInconclusive          = "inconclusive"
+	BugTestResultStatusValidated             = "validated"
+	BugTestResultStatusFalsePositive         = "false_positive"
+	BugTestResultStatusIgnored               = "ignored"
 
 	BugTypeXSS             = "xss"
 	BugTypeCORS            = "cors"
@@ -136,4 +139,37 @@ type BugPattern struct {
 	EvidenceSchemaJSON datatypes.JSON `gorm:"type:jsonb;default:'{}'" json:"evidence_schema_json"`
 	OWASPRefs          datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"owasp_refs"`
 	Tags               datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"tags"`
+}
+
+// BugPayload stores payload metadata for future safe/approved testing.
+// v3.8.3 is metadata-only: payloads are not executed by the engine.
+type BugPayload struct {
+	ID        uint           `gorm:"primaryKey" json:"id"`
+	CreatedAt time.Time      `gorm:"index" json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+
+	Key         string `gorm:"size:180;not null;uniqueIndex" json:"key"`
+	Name        string `gorm:"size:255;not null" json:"name"`
+	Description string `gorm:"type:text" json:"description"`
+
+	BugType string `gorm:"size:96;not null;index" json:"bug_type"`
+
+	SafetyClass      string `gorm:"size:64;not null;default:'inert';index" json:"safety_class"`
+	TestLevel        int    `gorm:"not null;default:0;index" json:"test_level"`
+	SafetyLevel      int    `gorm:"not null;default:0;index" json:"safety_level"`
+	RequiresApproval bool   `gorm:"not null;default:false;index" json:"requires_approval"`
+	Enabled          bool   `gorm:"not null;default:true;index" json:"enabled"`
+
+	Mode    string `gorm:"size:32;not null;default:'metadata';index" json:"mode"`
+	Context string `gorm:"size:96;not null;default:'generic';index" json:"context"`
+
+	PayloadTemplate string `gorm:"type:text" json:"payload_template"`
+
+	Source  string `gorm:"size:64;not null;default:'core';index" json:"source"`
+	Version string `gorm:"size:64;not null;default:'v1'" json:"version"`
+
+	OWASPRefs datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"owasp_refs"`
+	Tags      datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"tags"`
+	Metadata  datatypes.JSON `gorm:"type:jsonb;default:'{}'" json:"metadata"`
 }
