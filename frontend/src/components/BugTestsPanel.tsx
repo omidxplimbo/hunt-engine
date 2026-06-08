@@ -270,6 +270,13 @@ const BugTestsPanel = ({ targetId, enabled = true }: Props) => {
   const selectedRun =
     runs.find((item) => item.id === selectedRunId) || runs[0] || null;
 
+  const selectedRunOutput = parseJSONValue(selectedRun?.output_json);
+  const selectedRunInput = parseJSONValue(selectedRun?.input_json);
+  const selectedRunActiveTesting =
+    selectedRunOutput?.active_testing === true ||
+    selectedRunInput?.active_testing === true ||
+    selectedRunInput?.request?.active_testing === true;
+
   const resultsQuery = useQuery({
     queryKey: ["target", targetId, "bug-test-results", selectedRun?.id || "all"],
     queryFn: () => getTargetBugTestResults(targetId, 80, selectedRun?.id),
@@ -290,6 +297,32 @@ const BugTestsPanel = ({ targetId, enabled = true }: Props) => {
         input_json: {
           source: "bug_tests_panel",
           active_testing: false,
+        },
+      }),
+    onSuccess: (run) => {
+      setSelectedRunId(run.id);
+      queryClient.invalidateQueries({
+        queryKey: ["target", targetId, "bug-test-runs"],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["target", targetId, "bug-test-results"],
+      });
+    },
+  });
+
+  const createSafeHeaderRunMutation = useMutation({
+    mutationFn: () =>
+      createTargetBugTestRun(targetId, {
+        profile: "safe",
+        bug_types: ["security_headers"],
+        owasp_refs: ["OWASP-WSTG-CONF", "ASVS-14"],
+        safety_level: 1,
+        test_level: 1,
+        input_json: {
+          source: "bug_tests_panel",
+          active_testing: true,
+          safe_active_security_headers_v1: true,
+          payload_execution: false,
         },
       }),
     onSuccess: (run) => {
@@ -397,6 +430,21 @@ const BugTestsPanel = ({ targetId, enabled = true }: Props) => {
               )}
               Run Passive Bug Test
             </button>
+
+            <button
+              type="button"
+              onClick={() => createSafeHeaderRunMutation.mutate()}
+              disabled={createSafeHeaderRunMutation.isPending}
+              className="hack-btn border border-hack-warning px-3 py-2 text-xs uppercase tracking-wider text-hack-warning disabled:opacity-50"
+              title="Runs level-1 safe active security header checks only. No payloads or exploit validation."
+            >
+              {createSafeHeaderRunMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <ShieldCheck className="h-4 w-4" />
+              )}
+              Run Safe Header Check
+            </button>
           </div>
         </div>
 
@@ -487,7 +535,9 @@ const BugTestsPanel = ({ targetId, enabled = true }: Props) => {
                   policy: {selectedRun.policy_status}
                 </Pill>
                 <Pill>profile: {selectedRun.profile}</Pill>
-                <Pill>active_testing: false</Pill>
+                <Pill tone={selectedRunActiveTesting ? "warning" : "neutral"}>
+          active_testing: {selectedRunActiveTesting ? "true" : "false"}
+        </Pill>
               </div>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="font-mono text-xs text-hack-dim">

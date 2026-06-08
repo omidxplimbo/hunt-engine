@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -183,9 +186,9 @@ func bugTestPolicyCheck(target models.Target, profile string, safetyLevel int, t
 		"blocked_reasons":    blockedReasons,
 		"warning_reasons":    warningReasons,
 		"execution_enabled":  false,
-		"active_testing":     false,
+		"active_testing":     safetyLevel >= 1 || testLevel >= 1,
 		"guardrails": []string{
-			"v3.8.0 foundation runner is passive/stub-only",
+			"v3.8.3 runner supports passive checks and level-1 safe active security header checks",
 			"no exploit payloads are executed",
 			"results are candidates and need manual validation",
 			"level 2+ controlled active checks require future explicit approval and policy controls",
@@ -459,6 +462,238 @@ func seedPassiveBugTestResults(run *models.BugTestRun, target *models.Target, bu
 	return count, nil
 }
 
+func bugTypesInclude(bugTypes []string, wanted string) bool {
+	wanted = normalizeBugType(wanted)
+	if wanted == "" || wanted == models.BugTypeUnknown {
+		return false
+	}
+	for _, item := range bugTypes {
+		if normalizeBugType(item) == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func safeHeaderCheckURL(asset models.Asset) string {
+	raw := strings.TrimSpace(asset.FinalURL)
+	if raw == "" {
+		raw = strings.TrimSpace(asset.Value)
+	}
+	if raw == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(raw)
+	if err == nil && parsed.Scheme != "" && parsed.Host != "" {
+		return raw
+	}
+
+	if strings.Contains(raw, "://") {
+		return ""
+	}
+
+	return "https://" + raw
+}
+
+func selectedSecurityHeaders(headers http.Header) map[string]string {
+	names := []string{
+		"Strict-Transport-Security",
+		"Content-Security-Policy",
+		"X-Content-Type-Options",
+		"X-Frame-Options",
+		"Referrer-Policy",
+		"Permissions-Policy",
+		"Cross-Origin-Opener-Policy",
+		"Cross-Origin-Resource-Policy",
+		"Cross-Origin-Embedder-Policy",
+	}
+
+	out := map[string]string{}
+	for _, name := range names {
+		value := strings.TrimSpace(headers.Get(name))
+		if value != "" {
+			out[name] = value
+		}
+	}
+	return out
+}
+
+func missingSecurityHeaders(rawURL string, headers http.Header) []string {
+	missing := make([]string, 0)
+
+	parsed, _ := url.Parse(rawURL)
+	isHTTPS := parsed != nil && strings.EqualFold(parsed.Scheme, "https")
+
+	if isHTTPS && strings.TrimSpace(headers.Get("Strict-Transport-Security")) == "" {
+		missing = append(missing, "Strict-Transport-Security")
+	}
+	if strings.TrimSpace(headers.Get("Content-Security-Policy")) == "" {
+		missing = append(missing, "Content-Security-Policy")
+	}
+	if strings.TrimSpace(headers.Get("X-Content-Type-Options")) == "" {
+		missing = append(missing, "X-Content-Type-Options")
+	}
+	if strings.TrimSpace(headers.Get("X-Frame-Options")) == "" {
+		missing = append(missing, "X-Frame-Options")
+	}
+	if strings.TrimSpace(headers.Get("Referrer-Policy")) == "" {
+		missing = append(missing, "Referrer-Policy")
+	}
+	if strings.TrimSpace(headers.Get("Permissions-Policy")) == "" {
+		missing = append(missing, "Permissions-Policy")
+	}
+
+	return missing
+}
+
+func safeHeaderHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 5 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+}
+
+func fetchSecurityHeaders(rawURL string) (string, int, http.Header, string, error) {
+	client := safeHeaderHTTPClient()
+
+	doReq := func(method string) (*http.Response, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		req, err := http.NewRequestWithContext(ctx, method, rawURL, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("User-Agent", "HuntEngine-SafeHeaderCheck/1.0")
+		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/json,text/plain,*/*;q=0.8")
+
+		return client.Do(req)
+	}
+
+	resp, err := doReq(http.MethodHead)
+	method := http.MethodHead
+
+	if err == nil && resp != nil && (resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusForbidden) {
+		_ = resp.Body.Close()
+		resp, err = doReq(http.MethodGet)
+		method = http.MethodGet
+	}
+
+	if err != nil {
+		return method, 0, http.Header{}, "", err
+	}
+	if resp == nil {
+		return method, 0, http.Header{}, "", fmt.Errorf("empty HTTP response")
+	}
+	defer resp.Body.Close()
+
+	finalURL := rawURL
+	if resp.Request != nil && resp.Request.URL != nil {
+		finalURL = resp.Request.URL.String()
+	}
+
+	return method, resp.StatusCode, resp.Header.Clone(), finalURL, nil
+}
+
+func runSafeSecurityHeaderChecks(run *models.BugTestRun, target *models.Target) (int, error) {
+	if run == nil || target == nil {
+		return 0, fmt.Errorf("missing run or target")
+	}
+
+	var assets []models.Asset
+	if err := database.DB.
+		Where("target_id = ? AND is_live = ?", target.ID, true).
+		Where("(final_url IS NOT NULL AND final_url <> '') OR value <> ''").
+		Order("status_code DESC, id DESC").
+		Limit(20).
+		Find(&assets).Error; err != nil {
+		return 0, err
+	}
+
+	count := 0
+	now := time.Now().UTC()
+
+	for _, asset := range assets {
+		rawURL := safeHeaderCheckURL(asset)
+		if rawURL == "" {
+			continue
+		}
+
+		method, statusCode, headers, finalURL, err := fetchSecurityHeaders(rawURL)
+
+		status := models.BugTestResultStatusCandidate
+		confidence := "medium"
+		severity := models.FindingSeverityLow
+		note := "Safe active security header check completed. Manual validation is required."
+
+		observed := map[string]string{}
+		missing := []string{}
+
+		if err != nil {
+			status = models.BugTestResultStatusInconclusive
+			confidence = "low"
+			severity = models.FindingSeverityInfo
+			note = err.Error()
+		} else {
+			observed = selectedSecurityHeaders(headers)
+			missing = missingSecurityHeaders(finalURL, headers)
+			if len(missing) == 0 {
+				status = models.BugTestResultStatusPassed
+				confidence = "medium"
+				severity = models.FindingSeverityInfo
+				note = "Core security headers were observed by the safe active check."
+			}
+		}
+
+		evidence := map[string]interface{}{
+			"mode":              "safe_active_security_headers_v1",
+			"asset":             asset.Value,
+			"input_url":         rawURL,
+			"final_url":         finalURL,
+			"method":            method,
+			"status_code":       statusCode,
+			"observed_headers":  observed,
+			"missing_headers":   missing,
+			"active_testing":    true,
+			"payload_execution": false,
+			"manual_validation": true,
+			"safety_level":      1,
+			"test_level":        1,
+			"timeout_ms":        5000,
+			"created_at":        now,
+			"note":              note,
+		}
+
+		row := models.BugTestResult{
+			RunID:        run.ID,
+			TargetID:     target.ID,
+			AssetID:      &asset.ID,
+			BugType:      models.BugTypeSecurityHeaders,
+			TestName:     "safe.active.security_headers.v1",
+			Status:       status,
+			Confidence:   confidence,
+			SeverityHint: severity,
+			EvidenceJSON: bugTestJSON(evidence),
+			OWASPRefs:    bugTestJSONArray([]string{"OWASP-WSTG-CONF", "ASVS-14"}),
+			Tags:         bugTestJSONArray([]string{"safe_active", "security_headers", "headers", "manual_validation"}),
+		}
+
+		if err := database.DB.Create(&row).Error; err != nil {
+			return count, err
+		}
+		count++
+	}
+
+	return count, nil
+}
+
 func GetTargetBugTestRuns(c *fiber.Ctx) error {
 	if err := ensureSafeBugTestingEnabled(c); err != nil {
 		return err
@@ -566,16 +801,35 @@ func CreateTargetBugTestRun(c *fiber.Ctx) error {
 
 	resultCount := 0
 	if run.Status == models.BugTestRunStatusRunning {
-		resultCount, err = seedPassiveBugTestResults(&run, target, bugTypes)
+		passiveCount, passiveErr := seedPassiveBugTestResults(&run, target, bugTypes)
+		resultCount = passiveCount
+		activeCount := 0
+		activeTesting := false
+
+		if passiveErr != nil {
+			err = passiveErr
+		}
+
+		if err == nil && profile == models.BugTestProfileSafe && testLevel >= 1 && bugTypesInclude(bugTypes, models.BugTypeSecurityHeaders) {
+			activeTesting = true
+			activeCount, err = runSafeSecurityHeaderChecks(&run, target)
+			resultCount += activeCount
+		}
+
 		completed := time.Now().UTC()
 		run.Status = models.BugTestRunStatusCompleted
 		run.CompletedAt = &completed
 		run.OutputJSON = bugTestJSON(map[string]interface{}{
-			"runner_version":      "safe-bug-testing-v1",
-			"active_testing":      false,
-			"results_created":     resultCount,
-			"manual_validation":   true,
-			"execution_statement": "passive/stub foundation only; no payloads were sent",
+			"runner_version":                  "safe-bug-testing-v1",
+			"active_testing":                  activeTesting,
+			"passive_results_created":         passiveCount,
+			"safe_active_results_created":     activeCount,
+			"results_created":                 resultCount,
+			"manual_validation":               true,
+			"execution_statement":             "safe bug testing completed with passive checks and optional level-1 safe active security header checks; no payloads were sent",
+			"payload_execution":               false,
+			"exploit_validation":              false,
+			"safe_active_security_headers_v1": activeTesting,
 		})
 		if err != nil {
 			run.Status = models.BugTestRunStatusFailed
@@ -745,19 +999,37 @@ func CreateBugTestRunFromAgentAction(target *models.Target, action *models.Agent
 	resultCount := 0
 	if run.Status == models.BugTestRunStatusRunning {
 		var err error
-		resultCount, err = seedPassiveBugTestResults(&run, target, bugTypes)
+		passiveCount, passiveErr := seedPassiveBugTestResults(&run, target, bugTypes)
+		resultCount = passiveCount
+		activeCount := 0
+		activeTesting := false
+
+		if passiveErr != nil {
+			err = passiveErr
+		}
+
+		if err == nil && profile == models.BugTestProfileSafe && testLevel >= 1 && bugTypesInclude(bugTypes, models.BugTypeSecurityHeaders) {
+			activeTesting = true
+			activeCount, err = runSafeSecurityHeaderChecks(&run, target)
+			resultCount += activeCount
+		}
 
 		completed := time.Now().UTC()
 		run.CompletedAt = &completed
 		run.Status = models.BugTestRunStatusCompleted
 		run.OutputJSON = bugTestJSON(map[string]interface{}{
-			"runner_version":      "safe-bug-testing-v1",
-			"source":              "agent_action_dispatch",
-			"agent_action_id":     action.ID,
-			"active_testing":      false,
-			"results_created":     resultCount,
-			"manual_validation":   true,
-			"execution_statement": "passive/stub foundation only; no payloads were sent",
+			"runner_version":                  "safe-bug-testing-v1",
+			"source":                          "agent_action_dispatch",
+			"agent_action_id":                 action.ID,
+			"active_testing":                  activeTesting,
+			"passive_results_created":         passiveCount,
+			"safe_active_results_created":     activeCount,
+			"results_created":                 resultCount,
+			"manual_validation":               true,
+			"execution_statement":             "safe bug testing completed with passive checks and optional level-1 safe active security header checks; no payloads were sent",
+			"payload_execution":               false,
+			"exploit_validation":              false,
+			"safe_active_security_headers_v1": activeTesting,
 		})
 
 		if err != nil {
