@@ -1138,6 +1138,57 @@ export const deleteTargetBugTestResult = async (
 // -----------------------------
 // Bug Pattern Registry - v3.8.3
 // -----------------------------
+export interface BugPatternPack {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  key: string;
+  name: string;
+  description: string;
+  source: string;
+  version: string;
+  trust_level: string;
+  checksum: string;
+  signature: string;
+  published_at?: string | null;
+  enabled: boolean;
+  locked: boolean;
+  update_mode: string;
+  pattern_count: number;
+  safety_score: number;
+  quality_score: number;
+  noise_score: number;
+  false_positive_rate: number;
+  metadata?: any;
+}
+
+export interface BugPatternPacksResponse {
+  status: string;
+  data: BugPatternPack[];
+  count: number;
+  total_count: number;
+  page: number;
+}
+
+export const getBugPatternPacks = async (params?: {
+  enabled?: string;
+  source?: string;
+  limit?: number;
+}) => {
+  const response = await apiClient.get<BugPatternPacksResponse>(
+    "/bug-pattern-packs",
+    {
+      params: {
+        limit: params?.limit ?? 50,
+        enabled: params?.enabled || undefined,
+        source: params?.source || undefined,
+      },
+    },
+  );
+
+  return response.data;
+};
+
 export interface BugPattern {
   id: number;
   created_at: string;
@@ -1230,6 +1281,57 @@ export const promoteBugTestResultToFinding = async (
 // -----------------------------
 // Bug Payload Registry - v3.8.3 metadata-only
 // -----------------------------
+export interface BugPayloadPack {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  key: string;
+  name: string;
+  description: string;
+  source: string;
+  version: string;
+  trust_level: string;
+  checksum: string;
+  signature: string;
+  published_at?: string | null;
+  enabled: boolean;
+  locked: boolean;
+  update_mode: string;
+  payload_count: number;
+  safety_score: number;
+  quality_score: number;
+  noise_score: number;
+  false_positive_rate: number;
+  metadata?: any;
+}
+
+export interface BugPayloadPacksResponse {
+  status: string;
+  data: BugPayloadPack[];
+  count: number;
+  total_count: number;
+  page: number;
+}
+
+export const getBugPayloadPacks = async (params?: {
+  enabled?: string;
+  source?: string;
+  limit?: number;
+}) => {
+  const response = await apiClient.get<BugPayloadPacksResponse>(
+    "/bug-payload-packs",
+    {
+      params: {
+        limit: params?.limit ?? 50,
+        enabled: params?.enabled || undefined,
+        source: params?.source || undefined,
+      },
+    },
+  );
+
+  return response.data;
+};
+
 export interface BugPayload {
   id: number;
   created_at: string;

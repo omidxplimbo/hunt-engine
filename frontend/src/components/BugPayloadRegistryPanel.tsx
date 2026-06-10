@@ -3,8 +3,10 @@ import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Database, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
 import {
+  getBugPayloadPacks,
   getBugPayloads,
   type BugPayload,
+  type BugPayloadPack,
 } from "../api/targets";
 
 const parseJSONValue = (value: any) => {
@@ -44,6 +46,47 @@ const Pill = ({
     >
       {children}
     </span>
+  );
+};
+
+const PackCard = ({ pack }: { pack: BugPayloadPack }) => {
+  const metadata = parseJSONValue(pack.metadata);
+
+  return (
+    <div className="border border-hack-border bg-black/30 p-3">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <Database className="h-4 w-4 text-hack-primary" />
+        <span className="font-mono text-xs uppercase tracking-wider text-white">
+          {pack.name}
+        </span>
+        <Pill tone={pack.enabled ? "primary" : "danger"}>
+          {pack.enabled ? "enabled" : "disabled"}
+        </Pill>
+        <Pill>{pack.version}</Pill>
+        <Pill tone={pack.trust_level === "trusted_core" ? "primary" : "warning"}>
+          {pack.trust_level}
+        </Pill>
+        {pack.locked && <Pill>locked</Pill>}
+      </div>
+
+      <div className="mb-2 break-all font-mono text-[11px] text-hack-primary">
+        {pack.key}
+      </div>
+
+      <p className="mb-3 text-xs text-hack-dim">{pack.description}</p>
+
+      <div className="flex flex-wrap gap-2">
+        <Pill>payloads {pack.payload_count}</Pill>
+        <Pill>safety {pack.safety_score}</Pill>
+        <Pill>quality {pack.quality_score}</Pill>
+        <Pill>noise {pack.noise_score}</Pill>
+        <Pill>false positive {pack.false_positive_rate}%</Pill>
+        <Pill>{pack.update_mode}</Pill>
+        {metadata?.rollback_ready && <Pill tone="primary">rollback ready</Pill>}
+        {metadata?.metadata_only && <Pill tone="primary">metadata only</Pill>}
+        {metadata?.payload_execution === false && <Pill>no execution</Pill>}
+      </div>
+    </div>
   );
 };
 
@@ -124,6 +167,13 @@ const BugPayloadRegistryPanel = ({ enabled = true }: { enabled?: boolean }) => {
   const [enabledFilter, setEnabledFilter] = useState("");
   const [search, setSearch] = useState("");
 
+  const packsQuery = useQuery({
+    queryKey: ["bug-payload-packs"],
+    queryFn: () => getBugPayloadPacks({ limit: 50 }),
+    enabled,
+    staleTime: 60_000,
+  });
+
   const query = useQuery({
     queryKey: ["bug-payloads", bugType, safetyClass, enabledFilter],
     queryFn: () =>
@@ -137,6 +187,7 @@ const BugPayloadRegistryPanel = ({ enabled = true }: { enabled?: boolean }) => {
     staleTime: 20_000,
   });
 
+  const payloadPacks = packsQuery.data?.data || [];
   const payloads = query.data?.data || [];
 
   const filteredPayloads = useMemo(() => {
@@ -197,6 +248,19 @@ const BugPayloadRegistryPanel = ({ enabled = true }: { enabled?: boolean }) => {
           Refresh
         </button>
       </div>
+
+      {payloadPacks.length > 0 && (
+        <div className="space-y-2">
+          <div className="font-mono text-[10px] uppercase tracking-wider text-hack-dim">
+            Payload Packs
+          </div>
+          <div className="grid gap-3 xl:grid-cols-2">
+            {payloadPacks.map((pack) => (
+              <PackCard key={pack.id} pack={pack} />
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-3 md:grid-cols-4">
         <input
