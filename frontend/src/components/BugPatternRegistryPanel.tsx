@@ -6,6 +6,7 @@ import {
   getBugPatternPacks,
   getBugPatterns,
   updateBugPatternEnabled,
+  updateBugPatternPackEnabled,
   type BugPattern,
   type BugPatternPack,
 } from "../api/targets";
@@ -50,7 +51,15 @@ const Pill = ({
   );
 };
 
-const PackCard = ({ pack }: { pack: BugPatternPack }) => {
+const PackCard = ({
+  pack,
+  busy,
+  onToggle,
+}: {
+  pack: BugPatternPack;
+  busy: boolean;
+  onToggle: (pack: BugPatternPack) => void;
+}) => {
   const metadata = parseJSONValue(pack.metadata);
 
   return (
@@ -68,6 +77,25 @@ const PackCard = ({ pack }: { pack: BugPatternPack }) => {
           {pack.trust_level}
         </Pill>
         {pack.locked && <Pill>locked</Pill>}
+
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onToggle(pack)}
+          className={clsx(
+            "ml-auto flex items-center gap-2 border px-2 py-1 font-mono text-[10px] uppercase tracking-wider disabled:opacity-50",
+            pack.enabled
+              ? "border-hack-danger/60 text-hack-danger"
+              : "border-hack-primary/60 text-hack-primary",
+          )}
+        >
+          {pack.enabled ? (
+            <ToggleRight className="h-3 w-3" />
+          ) : (
+            <ToggleLeft className="h-3 w-3" />
+          )}
+          {pack.enabled ? "Disable Pack" : "Enable Pack"}
+        </button>
       </div>
 
       <div className="mb-2 break-all font-mono text-[11px] text-hack-primary">
@@ -203,6 +231,16 @@ const BugPatternRegistryPanel = ({ enabled = true }: { enabled?: boolean }) => {
     staleTime: 20_000,
   });
 
+  const packToggleMutation = useMutation({
+    mutationFn: (pack: BugPatternPack) =>
+      updateBugPatternPackEnabled(pack.id, !pack.enabled),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bug-pattern-packs"] });
+      queryClient.invalidateQueries({ queryKey: ["bug-patterns"] });
+      queryClient.invalidateQueries({ queryKey: ["target"] });
+    },
+  });
+
   const toggleMutation = useMutation({
     mutationFn: (pattern: BugPattern) =>
       updateBugPatternEnabled(pattern.id, !pattern.enabled),
@@ -279,7 +317,12 @@ const BugPatternRegistryPanel = ({ enabled = true }: { enabled?: boolean }) => {
           </div>
           <div className="grid gap-3 xl:grid-cols-2">
             {patternPacks.map((pack) => (
-              <PackCard key={pack.id} pack={pack} />
+              <PackCard
+                key={pack.id}
+                pack={pack}
+                busy={packToggleMutation.isPending}
+                onToggle={(item) => packToggleMutation.mutate(item)}
+              />
             ))}
           </div>
         </div>

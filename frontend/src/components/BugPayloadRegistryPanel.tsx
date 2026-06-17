@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Database, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
+import { Database, Loader2, RefreshCw, ShieldCheck, ToggleLeft, ToggleRight } from "lucide-react";
 import {
   getBugPayloadPacks,
   getBugPayloads,
+  updateBugPayloadPackEnabled,
   type BugPayload,
   type BugPayloadPack,
 } from "../api/targets";
@@ -49,7 +50,15 @@ const Pill = ({
   );
 };
 
-const PackCard = ({ pack }: { pack: BugPayloadPack }) => {
+const PackCard = ({
+  pack,
+  busy,
+  onToggle,
+}: {
+  pack: BugPayloadPack;
+  busy: boolean;
+  onToggle: (pack: BugPayloadPack) => void;
+}) => {
   const metadata = parseJSONValue(pack.metadata);
 
   return (
@@ -67,6 +76,25 @@ const PackCard = ({ pack }: { pack: BugPayloadPack }) => {
           {pack.trust_level}
         </Pill>
         {pack.locked && <Pill>locked</Pill>}
+
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onToggle(pack)}
+          className={clsx(
+            "ml-auto flex items-center gap-2 border px-2 py-1 font-mono text-[10px] uppercase tracking-wider disabled:opacity-50",
+            pack.enabled
+              ? "border-hack-danger/60 text-hack-danger"
+              : "border-hack-primary/60 text-hack-primary",
+          )}
+        >
+          {pack.enabled ? (
+            <ToggleRight className="h-3 w-3" />
+          ) : (
+            <ToggleLeft className="h-3 w-3" />
+          )}
+          {pack.enabled ? "Disable Pack" : "Enable Pack"}
+        </button>
       </div>
 
       <div className="mb-2 break-all font-mono text-[11px] text-hack-primary">
@@ -162,6 +190,7 @@ const PayloadCard = ({ payload }: { payload: BugPayload }) => {
 };
 
 const BugPayloadRegistryPanel = ({ enabled = true }: { enabled?: boolean }) => {
+  const queryClient = useQueryClient();
   const [bugType, setBugType] = useState("");
   const [safetyClass, setSafetyClass] = useState("");
   const [enabledFilter, setEnabledFilter] = useState("");
@@ -172,6 +201,16 @@ const BugPayloadRegistryPanel = ({ enabled = true }: { enabled?: boolean }) => {
     queryFn: () => getBugPayloadPacks({ limit: 50 }),
     enabled,
     staleTime: 60_000,
+  });
+
+  const packToggleMutation = useMutation({
+    mutationFn: (pack: BugPayloadPack) =>
+      updateBugPayloadPackEnabled(pack.id, !pack.enabled),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bug-payload-packs"] });
+      queryClient.invalidateQueries({ queryKey: ["bug-payloads"] });
+      queryClient.invalidateQueries({ queryKey: ["target"] });
+    },
   });
 
   const query = useQuery({
@@ -256,7 +295,12 @@ const BugPayloadRegistryPanel = ({ enabled = true }: { enabled?: boolean }) => {
           </div>
           <div className="grid gap-3 xl:grid-cols-2">
             {payloadPacks.map((pack) => (
-              <PackCard key={pack.id} pack={pack} />
+              <PackCard
+                key={pack.id}
+                pack={pack}
+                busy={packToggleMutation.isPending}
+                onToggle={(item) => packToggleMutation.mutate(item)}
+              />
             ))}
           </div>
         </div>

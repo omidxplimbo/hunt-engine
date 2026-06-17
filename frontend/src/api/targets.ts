@@ -1221,6 +1221,18 @@ export interface BugPatternsResponse {
   page: number;
 }
 
+export const updateBugPatternPackEnabled = async (
+  packId: number,
+  enabled: boolean,
+) => {
+  const response = await apiClient.patch<{
+    status: string;
+    data: BugPatternPack;
+  }>(`/bug-pattern-packs/${packId}/enabled`, { enabled });
+
+  return response.data.data;
+};
+
 export const getBugPatterns = async (params?: {
   bug_type?: string;
   mode?: string;
@@ -1362,6 +1374,18 @@ export interface BugPayloadsResponse {
   total_count: number;
   page: number;
 }
+
+export const updateBugPayloadPackEnabled = async (
+  packId: number,
+  enabled: boolean,
+) => {
+  const response = await apiClient.patch<{
+    status: string;
+    data: BugPayloadPack;
+  }>(`/bug-payload-packs/${packId}/enabled`, { enabled });
+
+  return response.data.data;
+};
 
 export const getBugPayloads = async (params?: {
   bug_type?: string;

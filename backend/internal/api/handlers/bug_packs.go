@@ -6,6 +6,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/auditlog"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 )
 
@@ -109,6 +110,121 @@ func GetBugPayloadPack(c *fiber.Ctx) error {
 	if err := database.DB.First(&row, uint(id)).Error; err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "bug payload pack not found"})
 	}
+
+	return c.JSON(fiber.Map{"status": "success", "data": row})
+}
+
+type updateBugPackEnabledRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+func UpdateBugPatternPackEnabled(c *fiber.Ctx) error {
+	if err := ensureBugPatternRegistryEnabled(c); err != nil {
+		return err
+	}
+
+	actor, _, actorName, _, err := currentAccountOwner(c)
+	if err != nil {
+		return err
+	}
+	actorID := actor.ID
+
+	id, err := strconv.ParseUint(strings.TrimSpace(c.Params("id")), 10, 64)
+	if err != nil || id == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "invalid bug pattern pack id"})
+	}
+
+	req := new(updateBugPackEnabledRequest)
+	if err := c.BodyParser(req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "invalid request body"})
+	}
+
+	var row models.BugPatternPack
+	if err := database.DB.First(&row, uint(id)).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "bug pattern pack not found"})
+	}
+
+	previous := row.Enabled
+	row.Enabled = req.Enabled
+	if err := database.DB.Save(&row).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	_ = auditlog.Record(auditlog.Entry{
+		ActorUserID: &actorID,
+		ActorName:   actorName,
+		Action:      "bug_pattern_pack.enabled_update",
+		EntityType:  "bug_pattern_pack",
+		EntityID:    &row.ID,
+		IPAddress:   auditlog.ClientIP(c),
+		UserAgent:   auditlog.UserAgent(c),
+		Metadata: map[string]interface{}{
+			"pack_key":         row.Key,
+			"previous_enabled": previous,
+			"enabled":          row.Enabled,
+			"source":           row.Source,
+			"version":          row.Version,
+			"trust_level":      row.TrustLevel,
+			"locked":           row.Locked,
+			"v3_9_foundation":  true,
+		},
+	})
+
+	return c.JSON(fiber.Map{"status": "success", "data": row})
+}
+
+func UpdateBugPayloadPackEnabled(c *fiber.Ctx) error {
+	if err := ensureBugPayloadRegistryEnabled(c); err != nil {
+		return err
+	}
+
+	actor, _, actorName, _, err := currentAccountOwner(c)
+	if err != nil {
+		return err
+	}
+	actorID := actor.ID
+
+	id, err := strconv.ParseUint(strings.TrimSpace(c.Params("id")), 10, 64)
+	if err != nil || id == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "invalid bug payload pack id"})
+	}
+
+	req := new(updateBugPackEnabledRequest)
+	if err := c.BodyParser(req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "invalid request body"})
+	}
+
+	var row models.BugPayloadPack
+	if err := database.DB.First(&row, uint(id)).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"status": "error", "message": "bug payload pack not found"})
+	}
+
+	previous := row.Enabled
+	row.Enabled = req.Enabled
+	if err := database.DB.Save(&row).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	_ = auditlog.Record(auditlog.Entry{
+		ActorUserID: &actorID,
+		ActorName:   actorName,
+		Action:      "bug_payload_pack.enabled_update",
+		EntityType:  "bug_payload_pack",
+		EntityID:    &row.ID,
+		IPAddress:   auditlog.ClientIP(c),
+		UserAgent:   auditlog.UserAgent(c),
+		Metadata: map[string]interface{}{
+			"pack_key":          row.Key,
+			"previous_enabled":  previous,
+			"enabled":           row.Enabled,
+			"source":            row.Source,
+			"version":           row.Version,
+			"trust_level":       row.TrustLevel,
+			"locked":            row.Locked,
+			"payload_execution": false,
+			"v3_9_foundation":   true,
+		},
+	})
 
 	return c.JSON(fiber.Map{"status": "success", "data": row})
 }
