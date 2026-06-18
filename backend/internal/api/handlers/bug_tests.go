@@ -246,18 +246,21 @@ func parsePatternMatcher(pattern models.BugPattern) map[string]interface{} {
 
 func loadRunnableBugPatterns(bugTypes []string) ([]models.BugPattern, error) {
 	q := database.DB.
-		Where("enabled = ?", true).
-		Where("safe_by_default = ?", true).
-		Where("requires_approval = ?", false).
-		Where("mode = ?", "passive").
-		Where("test_level <= ? AND safety_level <= ?", 1, 1)
+		Model(&models.BugPattern{}).
+		Joins("LEFT JOIN bug_pattern_packs ON bug_pattern_packs.id = bug_patterns.pack_id AND bug_pattern_packs.deleted_at IS NULL").
+		Where("bug_patterns.enabled = ?", true).
+		Where("bug_patterns.safe_by_default = ?", true).
+		Where("bug_patterns.requires_approval = ?", false).
+		Where("bug_patterns.mode = ?", "passive").
+		Where("bug_patterns.test_level <= ? AND bug_patterns.safety_level <= ?", 1, 1).
+		Where("(bug_patterns.pack_id IS NULL OR bug_pattern_packs.enabled = ?)", true)
 
 	if len(bugTypes) > 0 {
-		q = q.Where("bug_type IN ?", bugTypes)
+		q = q.Where("bug_patterns.bug_type IN ?", bugTypes)
 	}
 
 	rows := make([]models.BugPattern, 0)
-	if err := q.Order("bug_type ASC, key ASC").Find(&rows).Error; err != nil {
+	if err := q.Order("bug_patterns.bug_type ASC, bug_patterns.key ASC").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 
@@ -336,6 +339,12 @@ func matchedPatternParameter(rawURL string, pattern models.BugPattern) string {
 }
 
 func createBugTestResultFromPattern(run *models.BugTestRun, target *models.Target, pattern models.BugPattern, assetID *uint, urlID *uint, status string, evidence map[string]interface{}) models.BugTestResult {
+	evidence["pattern_key"] = pattern.Key
+	evidence["pattern_source"] = pattern.Source
+	evidence["pattern_version"] = pattern.Version
+	evidence["pattern_pack_id"] = pattern.PackID
+	evidence["pattern_pack_key"] = pattern.PackageKey
+	evidence["pack_aware_filtering"] = true
 	patternID := pattern.ID
 	if status == "" {
 		status = models.BugTestResultStatusCandidate

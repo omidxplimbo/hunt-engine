@@ -215,9 +215,15 @@ func main() {
 	api.Get("/targets/:id/audit-logs", handlers.GetTargetAuditLogs)
 
 	// Bug Pattern Registry Routes
+	api.Get("/bug-pattern-packs", handlers.GetBugPatternPacks)
+	api.Get("/bug-pattern-packs/:id", handlers.GetBugPatternPack)
+	api.Patch("/bug-pattern-packs/:id/enabled", handlers.UpdateBugPatternPackEnabled)
 	api.Get("/bug-patterns", handlers.GetBugPatterns)
 	api.Get("/bug-patterns/:id", handlers.GetBugPattern)
 	api.Patch("/bug-patterns/:id/enabled", handlers.UpdateBugPatternEnabled)
+	api.Get("/bug-payload-packs", handlers.GetBugPayloadPacks)
+	api.Get("/bug-payload-packs/:id", handlers.GetBugPayloadPack)
+	api.Patch("/bug-payload-packs/:id/enabled", handlers.UpdateBugPayloadPackEnabled)
 	api.Get("/bug-payloads", handlers.GetBugPayloads)
 	api.Get("/bug-payloads/:id", handlers.GetBugPayload)
 

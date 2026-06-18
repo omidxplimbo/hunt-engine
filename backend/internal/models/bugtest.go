@@ -108,6 +108,40 @@ type BugTestResult struct {
 	Tags         datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"tags"`
 }
 
+// BugPatternPack stores versioned/trusted pattern pack metadata.
+// v3.9.0 foundation is local/update-ready: external feed import, signing verification,
+// and rollback workflows are added on top of this data layer.
+type BugPatternPack struct {
+	ID        uint           `gorm:"primaryKey" json:"id"`
+	CreatedAt time.Time      `gorm:"index" json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+
+	Key         string `gorm:"size:160;not null;uniqueIndex" json:"key"`
+	Name        string `gorm:"size:255;not null" json:"name"`
+	Description string `gorm:"type:text" json:"description"`
+
+	Source      string     `gorm:"size:64;not null;default:'core';index" json:"source"`
+	Version     string     `gorm:"size:64;not null;default:'v1';index" json:"version"`
+	TrustLevel  string     `gorm:"size:64;not null;default:'trusted_core';index" json:"trust_level"`
+	Checksum    string     `gorm:"size:128;index" json:"checksum"`
+	Signature   string     `gorm:"type:text" json:"signature"`
+	PublishedAt *time.Time `gorm:"index" json:"published_at"`
+
+	Enabled    bool   `gorm:"not null;default:true;index" json:"enabled"`
+	Locked     bool   `gorm:"not null;default:true;index" json:"locked"`
+	UpdateMode string `gorm:"size:64;not null;default:'manual';index" json:"update_mode"`
+
+	PatternCount int `gorm:"not null;default:0" json:"pattern_count"`
+
+	SafetyScore       int `gorm:"not null;default:100;index" json:"safety_score"`
+	QualityScore      int `gorm:"not null;default:80;index" json:"quality_score"`
+	NoiseScore        int `gorm:"not null;default:0;index" json:"noise_score"`
+	FalsePositiveRate int `gorm:"not null;default:0;index" json:"false_positive_rate"`
+
+	Metadata datatypes.JSON `gorm:"type:jsonb;default:'{}'" json:"metadata"`
+}
+
 // BugPattern stores safe bug testing pattern metadata.
 // v3.8.0 uses a local seeded registry. Feed/update/signing controls belong to v3.9.0.
 type BugPattern struct {
@@ -135,10 +169,47 @@ type BugPattern struct {
 	Source  string `gorm:"size:64;not null;default:'core';index" json:"source"`
 	Version string `gorm:"size:64;not null;default:'v1'" json:"version"`
 
+	PackID     *uint           `gorm:"index" json:"pack_id"`
+	Pack       *BugPatternPack `gorm:"foreignKey:PackID" json:"-"`
+	PackageKey string          `gorm:"size:160;index" json:"package_key"`
+
 	MatcherJSON        datatypes.JSON `gorm:"type:jsonb;default:'{}'" json:"matcher_json"`
 	EvidenceSchemaJSON datatypes.JSON `gorm:"type:jsonb;default:'{}'" json:"evidence_schema_json"`
 	OWASPRefs          datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"owasp_refs"`
 	Tags               datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"tags"`
+}
+
+// BugPayloadPack stores versioned/trusted payload pack metadata.
+// v3.9.0 remains metadata-only for payloads: payload execution is not enabled.
+type BugPayloadPack struct {
+	ID        uint           `gorm:"primaryKey" json:"id"`
+	CreatedAt time.Time      `gorm:"index" json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+
+	Key         string `gorm:"size:160;not null;uniqueIndex" json:"key"`
+	Name        string `gorm:"size:255;not null" json:"name"`
+	Description string `gorm:"type:text" json:"description"`
+
+	Source      string     `gorm:"size:64;not null;default:'core';index" json:"source"`
+	Version     string     `gorm:"size:64;not null;default:'v1';index" json:"version"`
+	TrustLevel  string     `gorm:"size:64;not null;default:'trusted_core';index" json:"trust_level"`
+	Checksum    string     `gorm:"size:128;index" json:"checksum"`
+	Signature   string     `gorm:"type:text" json:"signature"`
+	PublishedAt *time.Time `gorm:"index" json:"published_at"`
+
+	Enabled    bool   `gorm:"not null;default:true;index" json:"enabled"`
+	Locked     bool   `gorm:"not null;default:true;index" json:"locked"`
+	UpdateMode string `gorm:"size:64;not null;default:'manual';index" json:"update_mode"`
+
+	PayloadCount int `gorm:"not null;default:0" json:"payload_count"`
+
+	SafetyScore       int `gorm:"not null;default:100;index" json:"safety_score"`
+	QualityScore      int `gorm:"not null;default:80;index" json:"quality_score"`
+	NoiseScore        int `gorm:"not null;default:0;index" json:"noise_score"`
+	FalsePositiveRate int `gorm:"not null;default:0;index" json:"false_positive_rate"`
+
+	Metadata datatypes.JSON `gorm:"type:jsonb;default:'{}'" json:"metadata"`
 }
 
 // BugPayload stores payload metadata for future safe/approved testing.
@@ -168,6 +239,10 @@ type BugPayload struct {
 
 	Source  string `gorm:"size:64;not null;default:'core';index" json:"source"`
 	Version string `gorm:"size:64;not null;default:'v1'" json:"version"`
+
+	PackID     *uint           `gorm:"index" json:"pack_id"`
+	Pack       *BugPayloadPack `gorm:"foreignKey:PackID" json:"-"`
+	PackageKey string          `gorm:"size:160;index" json:"package_key"`
 
 	OWASPRefs datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"owasp_refs"`
 	Tags      datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"tags"`

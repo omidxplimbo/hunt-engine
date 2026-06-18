@@ -6,85 +6,80 @@ The platform combines deterministic scanner logic with structured evidence, acco
 
 ---
 
-## Current release focus: v3.7.0
+## Current release focus: v3.9.0
 
-v3.7.0 extends Hunt Engine from policy-aware advisory agents into a human-approved attack-surface workflow layer. It introduces target-scoped Agent Actions, an Attack Surface Chat interface, deterministic chat-to-action planning, policy/autonomy guardrails, dispatch previews, duplicate proposal prevention, and cleanup controls for generated analysis data.
+v3.9.0 introduces the Pattern/Payload Pack Foundation and closes the current pre-operator registry workstream. It prepares Hunt Engine for the new RAG-backed LLM Pentest Operator roadmap while keeping execution policy-aware, approval-gated, and safe-by-default.
 
-### Core v3.7.0 scope
+The main strategic shift in this release is that the Analysis workspace is being refocused toward a professional Operator Workspace: RAG-backed target memory, LLM-driven Attack Surface Chat, OWASP-aware test planning, approval-gated real testing, evidence feedback, finding labeling, and report drafting.
 
-- **Human-approved Agent Actions**
-  - Target-scoped `agent_actions` records for proposed, approved, rejected, blocked, failed, and future executed workflow actions.
-  - Supported action types include OWASP checklist planning, crawling, Nuclei profile runs, JS intelligence, safe bug-test planning, endpoint review, payload planning, severity review, report generation, and report submission planning.
-  - Actions remain policy-aware and approval-gated.
-  - Real command execution, payload execution, scan execution from actions, severity auto-apply, and report auto-submit remain disabled in the v3.7.0 foundation.
+### Core v3.9.0 scope
 
-- **Agent Action Approval Workflow**
-  - Users can approve or reject proposed actions from Target Analysis.
-  - Human decisions are stored in `agent_action_approvals`.
-  - Approval/rejection activity is audit logged.
-  - Blocked-by-policy actions cannot be approved.
+- **Pattern Pack Foundation**
+  - Added `bug_pattern_packs` metadata for versioned, trusted, source-aware pattern packs.
+  - Pack metadata includes source, version, trust level, checksum, signature placeholder, enabled/locked state, update mode, pattern count, safety score, quality score, noise score, false-positive rate, and metadata JSON.
+  - Core safe/passive patterns are linked to the seeded core Pattern Pack.
 
-- **Attack Surface Chat**
-  - Target Analysis includes an Attack Surface Chat workspace.
-  - Users can write natural-language requests such as OWASP coverage planning, safe XSS/CORS/open redirect checks, JS review, report preparation, or severity review.
-  - The chat agent uses existing target context and deterministically converts intent into proposed agent actions.
-  - Chat creates action plans only; it does not execute commands, payloads, scans, or submissions.
+- **Payload Pack Foundation**
+  - Added `bug_payload_packs` metadata for future payload intelligence and controlled operator workflows.
+  - Payload packs are metadata-only in v3.9.0.
+  - Payload execution remains disabled.
+  - Core inert/safe payload metadata is linked to the seeded core Payload Pack.
 
-- **Chat Sessions and Messages**
-  - Persistent `agent_chat_sessions` and `agent_chat_messages` tables.
-  - Sessions are target-scoped and user-owned.
-  - Assistant responses can include action-plan metadata and proposed action IDs.
-  - Chat sessions/messages can be soft-deleted from the UI.
+- **Pattern/Payload Pack APIs**
+  - Added read-only APIs for listing and inspecting Pattern Packs and Payload Packs.
+  - Added enable/disable APIs for pack-level controls.
+  - Pack control updates are owner-scoped and audit logged.
 
-- **Agent Action Dispatcher Foundation**
-  - Approved actions can be sent to Dispatch Preview.
-  - Dispatcher preview records output JSON, handler name, action class, guardrails, required controls, hard-block reasons, and execution-disabled status.
-  - `agent-action-dispatcher-v2` does not execute commands, payloads, scans, severity changes, or report submissions.
-  - Dispatcher actions are audit logged with `target.agent_action.dispatch`.
+- **Pattern/Payload Pack UI**
+  - Target Analysis Registry views now show Pattern Pack and Payload Pack summaries.
+  - UI displays pack key, source, version, trust level, enabled/locked state, update mode, safety score, quality score, noise score, false-positive rate, rollback/update metadata, and pack counts.
+  - UI supports enable/disable controls for pack-level management.
 
-- **Policy Checker v2 and Autonomy Controls Foundation**
-  - `policy_check_json` now uses `agent-actions-policy-v2`.
-  - Action classes are classified into advisory, passive recon, template scan, safe bug test, deep scan, command execution, payload generation, payload execution, finding validation, severity apply, and report submission.
-  - Policy checker emits policy tokens, blocked reasons, warning reasons, required controls, autonomy controls, max-test-intensity enforcement, allowed/disallowed test type handling, auth warnings, and rate-limit warnings.
-  - High/critical risk, level-3 exploit validation, payload execution, report submission, and dangerous future action classes are blocked by default.
+- **Pack-aware Safe Bug Testing**
+  - The Safe Bug Testing runner now enforces enabled Pattern Packs.
+  - Disabled Pattern Packs prevent linked patterns from being used by the runner.
+  - Bug test evidence records pack-aware metadata such as pattern pack key and pack-aware filtering status.
 
-- **Duplicate Action Proposal Prevention**
-  - Similar active actions are not repeatedly created for the same target.
-  - Proposed, approved, and blocked-by-policy actions are considered active duplicates.
-  - Duplicate proposal attempts are audit logged with `target.agent_action.propose_duplicate`.
+- **Pack-aware Registry Inspection**
+  - Agent Action registry inspection now includes Pattern Pack and Payload Pack intelligence.
+  - Inspection output includes pack summaries, trust metadata, scoring, update-plan foundation metadata, and safety guardrails.
+  - Inspection remains metadata-only and does not import feeds, execute payloads, or perform exploit validation.
 
-- **Target Analysis Workspace Reorganization**
-  - The Target Analysis tab now uses a single-active-section workspace.
-  - Sections include AI Analysis, Recommendations, Advisory Agents, Agent Actions, and Attack Surface Chat.
-  - Only one section is rendered at a time, reducing page length, clutter, and unnecessary frontend workload.
+- **RAG-backed LLM Pentest Operator Roadmap**
+  - Added the new operator roadmap under `docs/roadmaps/`.
+  - The roadmap deprecates standalone Analysis features that do not directly support RAG, LLM operator workflows, real OWASP-style testing, evidence feedback, finding promotion, and report drafting.
+  - Future development prioritizes per-target/project RAG memory, LLM-powered Attack Surface Chat, approved real test execution, iterative pentest loops, and controlled operator runtime.
 
-- **Analysis Workspace Cleanup Controls**
-  - Users can soft-delete generated AI analyses, AI recommendations, advisory agent runs, agent actions, and chat sessions/messages.
-  - Backend deletion is owner-scoped, target-scoped, and audit logged.
-  - Executed agent actions are protected from UI deletion to preserve security/audit trail integrity.
-  - Audit actions include `target.ai_analysis.delete`, `target.ai_recommendation.delete`, `target.agent_run.delete`, `target.agent_action.delete`, and `target.agent_chat.session.delete`.
+### v3.9.0 guardrail status
 
-- **LLM Provider Secret Cache Fix**
-  - LLM provider configs containing API keys are no longer cached in Redis in a way that strips secrets through JSON serialization.
-  - This prevents false fallback errors such as "LLM provider has no API key saved" after a key is correctly stored.
-  - Deterministic fallback behavior remains safe when provider calls fail.
+v3.9.0 is a foundation release. It intentionally does **not** enable uncontrolled execution.
 
-### v3.7.0 guardrail status
+Disabled by design in v3.9.0:
 
-v3.7.0 is a foundation release for human-approved workflow orchestration. It intentionally does **not** enable real autonomous execution.
-
-Disabled by design in v3.7.0:
-
-- Direct command execution.
-- Payload execution.
-- Automated exploit validation.
-- Scan execution from agent actions.
-- Automatic severity changes.
+- Direct uncontrolled command execution.
+- Payload execution without approval and policy checks.
+- Automated exploit validation without explicit controls.
+- Destructive testing.
+- Out-of-scope testing.
+- Data extraction workflows.
+- Brute force or credential attacks.
 - Automatic report submission.
-- Out-of-scope or destructive testing.
-- Uncontrolled AI-driven hacking workflows.
 
-Future versions may enable selected execution paths only behind explicit account controls, target policy checks, feature flags, human approval, rate limits, audit logs, and evidence requirements.
+Pattern and payload packs are metadata/control foundations. Real operator-driven testing will be introduced through the RAG-backed LLM Pentest Operator roadmap with target policy checks, scope validation, approval gates, safety classification, rate limits, audit logs, and evidence requirements.
+
+### New strategic direction
+
+Hunt Engine is being refocused toward a real, controlled, RAG-backed LLM Pentest Operator:
+
+- `v3.10.0`: RAG Memory Foundation.
+- `v3.11.0`: LLM Pentest Operator MVP.
+- `v3.12.0`: Approved Real OWASP Test Execution.
+- `v4.0.0`: Iterative Pentest Loop v1.
+- `v4.1.0`: Controlled Operator Runtime Expansion.
+- `v4.2.0`: Operator-driven Findings and Report Drafting.
+- `v4.3.0`: Automation and Memory-driven Learning.
+
+Every future feature that affects the LLM Pentest Operator must include a small, low-token LLM smoke test in addition to normal backend/frontend tests.
 
 
 ## Guardrail principles
@@ -148,7 +143,7 @@ Hunt Engine is built around strict commercial-grade security product guardrails:
 - Optional LLM-assisted narrative generation with deterministic guardrails.
 - Deterministic target recommendations.
 - v3.6.0 advisory agent outputs in PDF reports.
-- v3.7.0 human-approved Agent Actions, Attack Surface Chat, policy/autonomy checks, dispatcher previews, and cleanup controls.
+- v3.9.0 Pattern/Payload Pack Foundation, pack-aware Safe Bug Testing, registry inspection intelligence, and the RAG-backed LLM Pentest Operator roadmap.
 
 ### Account-scoped configuration
 
@@ -685,6 +680,21 @@ v3.6.0 PDF reports include advisory outputs from the latest completed Summary, T
 ---
 
 ## Release history
+
+### v3.9.0
+
+Pattern/Payload Pack Foundation and RAG-backed LLM Pentest Operator roadmap.
+
+- Added Pattern Pack and Payload Pack data models.
+- Added seeded core Pattern/Payload Packs with trust, source, version, scoring, and metadata.
+- Added Pattern/Payload Pack APIs and UI summaries.
+- Added enable/disable controls and audit logs for packs.
+- Enforced enabled Pattern Packs in the Safe Bug Testing runner.
+- Added pack-aware bug test evidence metadata.
+- Added pack intelligence to registry inspection agent actions.
+- Added the new RAG-backed LLM Pentest Operator roadmap.
+- Refocused future Analysis work toward Operator Workspace, per-target RAG memory, LLM chat, real OWASP-style testing, iterative evidence feedback, finding labels, finding promotion, and report drafting.
+
 
 ### v3.7.0
 

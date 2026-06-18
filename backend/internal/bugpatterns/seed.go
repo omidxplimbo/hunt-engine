@@ -35,6 +35,60 @@ func jsonArray(values []string) datatypes.JSON {
 	return datatypes.JSON(b)
 }
 
+func seedPatternPackIfMissing(pack models.BugPatternPack) error {
+	var existing models.BugPatternPack
+	err := database.DB.Where("key = ?", pack.Key).First(&existing).Error
+	if err == nil {
+		updates := map[string]interface{}{
+			"name":                pack.Name,
+			"description":         pack.Description,
+			"source":              pack.Source,
+			"version":             pack.Version,
+			"trust_level":         pack.TrustLevel,
+			"checksum":            pack.Checksum,
+			"signature":           pack.Signature,
+			"enabled":             pack.Enabled,
+			"locked":              pack.Locked,
+			"update_mode":         pack.UpdateMode,
+			"pattern_count":       pack.PatternCount,
+			"safety_score":        pack.SafetyScore,
+			"quality_score":       pack.QualityScore,
+			"noise_score":         pack.NoiseScore,
+			"false_positive_rate": pack.FalsePositiveRate,
+			"metadata":            pack.Metadata,
+		}
+		return database.DB.Model(&existing).Updates(updates).Error
+	}
+	return database.DB.Create(&pack).Error
+}
+
+func seedPayloadPackIfMissing(pack models.BugPayloadPack) error {
+	var existing models.BugPayloadPack
+	err := database.DB.Where("key = ?", pack.Key).First(&existing).Error
+	if err == nil {
+		updates := map[string]interface{}{
+			"name":                pack.Name,
+			"description":         pack.Description,
+			"source":              pack.Source,
+			"version":             pack.Version,
+			"trust_level":         pack.TrustLevel,
+			"checksum":            pack.Checksum,
+			"signature":           pack.Signature,
+			"enabled":             pack.Enabled,
+			"locked":              pack.Locked,
+			"update_mode":         pack.UpdateMode,
+			"payload_count":       pack.PayloadCount,
+			"safety_score":        pack.SafetyScore,
+			"quality_score":       pack.QualityScore,
+			"noise_score":         pack.NoiseScore,
+			"false_positive_rate": pack.FalsePositiveRate,
+			"metadata":            pack.Metadata,
+		}
+		return database.DB.Model(&existing).Updates(updates).Error
+	}
+	return database.DB.Create(&pack).Error
+}
+
 func seedIfMissing(pattern models.BugPattern) error {
 	var existing models.BugPattern
 	err := database.DB.Where("key = ?", pattern.Key).First(&existing).Error
@@ -56,6 +110,8 @@ func seedIfMissing(pattern models.BugPattern) error {
 			"evidence_schema_json": pattern.EvidenceSchemaJSON,
 			"owasp_refs":           pattern.OWASPRefs,
 			"tags":                 pattern.Tags,
+			"pack_id":              pattern.PackID,
+			"package_key":          pattern.PackageKey,
 		}
 		return database.DB.Model(&existing).Updates(updates).Error
 	}
@@ -176,6 +232,62 @@ func seedCorePayloads() error {
 // SeedCore seeds local core safe-testing patterns.
 // It is idempotent and local-only in v3.8.0.
 func SeedCore() error {
+	corePatternPack := models.BugPatternPack{
+		Key:               "core.safe-passive-patterns",
+		Name:              "Core Safe Passive Bug Patterns",
+		Description:       "Built-in safe passive registry patterns shipped with Hunt Engine.",
+		Source:            "core",
+		Version:           "v1",
+		TrustLevel:        "trusted_core",
+		Enabled:           true,
+		Locked:            true,
+		UpdateMode:        "manual",
+		PatternCount:      3,
+		SafetyScore:       100,
+		QualityScore:      80,
+		NoiseScore:        10,
+		FalsePositiveRate: 0,
+		Metadata: jsonObject(map[string]interface{}{
+			"v3_9_foundation": true,
+			"external_update": false,
+			"rollback_ready":  true,
+		}),
+	}
+	if err := seedPatternPackIfMissing(corePatternPack); err != nil {
+		return err
+	}
+
+	corePayloadPack := models.BugPayloadPack{
+		Key:               "core.metadata-payloads",
+		Name:              "Core Metadata-only Payload Registry",
+		Description:       "Built-in inert/safe payload metadata shipped with Hunt Engine. Payload execution remains disabled.",
+		Source:            "core",
+		Version:           "v1",
+		TrustLevel:        "trusted_core",
+		Enabled:           true,
+		Locked:            true,
+		UpdateMode:        "manual",
+		PayloadCount:      3,
+		SafetyScore:       100,
+		QualityScore:      75,
+		NoiseScore:        5,
+		FalsePositiveRate: 0,
+		Metadata: jsonObject(map[string]interface{}{
+			"v3_9_foundation":   true,
+			"metadata_only":     true,
+			"payload_execution": false,
+			"rollback_ready":    true,
+		}),
+	}
+	if err := seedPayloadPackIfMissing(corePayloadPack); err != nil {
+		return err
+	}
+
+	var patternPack models.BugPatternPack
+	_ = database.DB.Where("key = ?", corePatternPack.Key).First(&patternPack).Error
+	var payloadPack models.BugPayloadPack
+	_ = database.DB.Where("key = ?", corePayloadPack.Key).First(&payloadPack).Error
+
 	patterns := []models.BugPattern{
 		{
 			Key:               "core.passive.xss.parameter_candidate.v1",
@@ -192,6 +304,8 @@ func SeedCore() error {
 			Enabled:           true,
 			Source:            "core",
 			Version:           "v1",
+			PackID:            &patternPack.ID,
+			PackageKey:        corePatternPack.Key,
 			MatcherJSON: jsonObject(map[string]interface{}{
 				"type":       "url_query_param_name_contains",
 				"parameters": []string{"q", "s", "search", "query"},
@@ -217,6 +331,8 @@ func SeedCore() error {
 			Enabled:           true,
 			Source:            "core",
 			Version:           "v1",
+			PackID:            &patternPack.ID,
+			PackageKey:        corePatternPack.Key,
 			MatcherJSON: jsonObject(map[string]interface{}{
 				"type":       "url_query_param_name_contains",
 				"parameters": []string{"redirect", "return", "next", "url"},
@@ -242,6 +358,8 @@ func SeedCore() error {
 			Enabled:           true,
 			Source:            "core",
 			Version:           "v1",
+			PackID:            &patternPack.ID,
+			PackageKey:        corePatternPack.Key,
 			MatcherJSON: jsonObject(map[string]interface{}{
 				"type": "live_http_asset",
 			}),
