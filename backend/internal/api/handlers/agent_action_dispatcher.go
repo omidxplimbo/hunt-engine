@@ -373,39 +373,72 @@ func dispatchReviewBugTestResults(target models.Target, action models.AgentActio
 func dispatchInspectBugPatterns(target models.Target, action models.AgentAction) map[string]interface{} {
 	var total int64
 	var enabled int64
-	var safePassive int64
+	var passive int64
+	var safeDefault int64
+	var packTotal int64
+	var packEnabled int64
 
 	_ = database.DB.Model(&models.BugPattern{}).Count(&total).Error
 	_ = database.DB.Model(&models.BugPattern{}).Where("enabled = ?", true).Count(&enabled).Error
-	_ = database.DB.Model(&models.BugPattern{}).
-		Where("enabled = ? AND safe_by_default = ? AND mode = ?", true, true, "passive").
-		Count(&safePassive).Error
+	_ = database.DB.Model(&models.BugPattern{}).Where("mode = ?", "passive").Count(&passive).Error
+	_ = database.DB.Model(&models.BugPattern{}).Where("safe_by_default = ?", true).Count(&safeDefault).Error
+	_ = database.DB.Model(&models.BugPatternPack{}).Count(&packTotal).Error
+	_ = database.DB.Model(&models.BugPatternPack{}).Where("enabled = ?", true).Count(&packEnabled).Error
 
-	var byType []struct {
-		BugType string
-		Count   int64
+	packs := make([]models.BugPatternPack, 0)
+	_ = database.DB.Model(&models.BugPatternPack{}).
+		Order("source ASC, key ASC").
+		Limit(10).
+		Find(&packs).Error
+
+	packSummaries := make([]map[string]interface{}, 0, len(packs))
+	for _, pack := range packs {
+		packSummaries = append(packSummaries, map[string]interface{}{
+			"id":                  pack.ID,
+			"key":                 pack.Key,
+			"name":                pack.Name,
+			"source":              pack.Source,
+			"version":             pack.Version,
+			"trust_level":         pack.TrustLevel,
+			"enabled":             pack.Enabled,
+			"locked":              pack.Locked,
+			"update_mode":         pack.UpdateMode,
+			"pattern_count":       pack.PatternCount,
+			"safety_score":        pack.SafetyScore,
+			"quality_score":       pack.QualityScore,
+			"noise_score":         pack.NoiseScore,
+			"false_positive_rate": pack.FalsePositiveRate,
+			"checksum_present":    pack.Checksum != "",
+			"signature_present":   pack.Signature != "",
+			"metadata":            pack.Metadata,
+		})
 	}
-	_ = database.DB.Model(&models.BugPattern{}).
-		Select("bug_type, COUNT(*) as count").
-		Group("bug_type").
-		Order("count DESC").
-		Scan(&byType).Error
 
 	return map[string]interface{}{
-		"inspection_version": "bug-pattern-inspection-v1",
-		"target_id":          target.ID,
-		"action_id":          action.ID,
-		"total_patterns":     total,
-		"enabled_patterns":   enabled,
-		"safe_passive":       safePassive,
-		"by_bug_type":        byType,
-		"execution_enabled":  true,
-		"executed":           true,
-		"metadata_only":      true,
+		"handler":                "inspect_bug_patterns",
+		"inspection_version":     "pattern-pack-inspection-v1",
+		"target_id":              target.ID,
+		"action_id":              action.ID,
+		"total_patterns":         total,
+		"enabled_patterns":       enabled,
+		"passive_patterns":       passive,
+		"safe_by_default":        safeDefault,
+		"total_pattern_packs":    packTotal,
+		"enabled_pattern_packs":  packEnabled,
+		"pattern_pack_summaries": packSummaries,
+		"update_plan_foundation": map[string]interface{}{
+			"external_update_enabled": false,
+			"auto_import_enabled":     false,
+			"rollback_ready":          true,
+			"requires_approval":       true,
+			"v3_9_foundation":         true,
+		},
+		"recommendation": "Review enabled trusted packs first. Keep external/community packs disabled until checksum, signature, safety score, and policy controls are reviewed.",
 		"guardrails": []string{
-			"pattern inspection is metadata-only",
-			"disabling/enabling patterns remains a separate explicit UI/API action",
-			"no tests or payloads are executed",
+			"Pattern inspection is metadata-only.",
+			"Inspection does not import external feeds.",
+			"Inspection does not execute payloads or exploit validation.",
+			"Pattern use remains constrained by enabled pack controls, target policy, and approval controls.",
 		},
 	}
 }
@@ -415,39 +448,71 @@ func dispatchInspectBugPayloads(target models.Target, action models.AgentAction)
 	var enabled int64
 	var inert int64
 	var safe int64
+	var packTotal int64
+	var packEnabled int64
 
 	_ = database.DB.Model(&models.BugPayload{}).Count(&total).Error
 	_ = database.DB.Model(&models.BugPayload{}).Where("enabled = ?", true).Count(&enabled).Error
 	_ = database.DB.Model(&models.BugPayload{}).Where("safety_class = ?", "inert").Count(&inert).Error
 	_ = database.DB.Model(&models.BugPayload{}).Where("safety_class = ?", "safe").Count(&safe).Error
+	_ = database.DB.Model(&models.BugPayloadPack{}).Count(&packTotal).Error
+	_ = database.DB.Model(&models.BugPayloadPack{}).Where("enabled = ?", true).Count(&packEnabled).Error
 
-	var byType []struct {
-		BugType string
-		Count   int64
+	packs := make([]models.BugPayloadPack, 0)
+	_ = database.DB.Model(&models.BugPayloadPack{}).
+		Order("source ASC, key ASC").
+		Limit(10).
+		Find(&packs).Error
+
+	packSummaries := make([]map[string]interface{}, 0, len(packs))
+	for _, pack := range packs {
+		packSummaries = append(packSummaries, map[string]interface{}{
+			"id":                  pack.ID,
+			"key":                 pack.Key,
+			"name":                pack.Name,
+			"source":              pack.Source,
+			"version":             pack.Version,
+			"trust_level":         pack.TrustLevel,
+			"enabled":             pack.Enabled,
+			"locked":              pack.Locked,
+			"update_mode":         pack.UpdateMode,
+			"payload_count":       pack.PayloadCount,
+			"safety_score":        pack.SafetyScore,
+			"quality_score":       pack.QualityScore,
+			"noise_score":         pack.NoiseScore,
+			"false_positive_rate": pack.FalsePositiveRate,
+			"checksum_present":    pack.Checksum != "",
+			"signature_present":   pack.Signature != "",
+			"metadata":            pack.Metadata,
+		})
 	}
-	_ = database.DB.Model(&models.BugPayload{}).
-		Select("bug_type, COUNT(*) as count").
-		Group("bug_type").
-		Order("count DESC").
-		Scan(&byType).Error
 
 	return map[string]interface{}{
-		"inspection_version": "bug-payload-inspection-v1",
-		"target_id":          target.ID,
-		"action_id":          action.ID,
-		"total_payloads":     total,
-		"enabled_payloads":   enabled,
-		"inert_payloads":     inert,
-		"safe_payloads":      safe,
-		"by_bug_type":        byType,
-		"execution_enabled":  true,
-		"executed":           true,
-		"metadata_only":      true,
-		"payload_execution":  false,
+		"handler":                "inspect_bug_payloads",
+		"inspection_version":     "payload-pack-inspection-v1",
+		"target_id":              target.ID,
+		"action_id":              action.ID,
+		"total_payloads":         total,
+		"enabled_payloads":       enabled,
+		"inert_payloads":         inert,
+		"safe_payloads":          safe,
+		"total_payload_packs":    packTotal,
+		"enabled_payload_packs":  packEnabled,
+		"payload_pack_summaries": packSummaries,
+		"update_plan_foundation": map[string]interface{}{
+			"external_update_enabled": false,
+			"auto_import_enabled":     false,
+			"rollback_ready":          true,
+			"requires_approval":       true,
+			"payload_execution":       false,
+			"v3_9_foundation":         true,
+		},
+		"recommendation": "Treat payload packs as metadata-only until a safe/approved execution path exists. External packs must be reviewed for safety class, checksum, signature, and policy fit.",
 		"guardrails": []string{
-			"payload registry inspection is metadata-only",
-			"payload execution is disabled",
-			"future payload use must be policy-checked, approval-gated, and audited",
+			"Payload registry inspection is metadata-only.",
+			"Inspection does not import external payload feeds.",
+			"Payload execution remains disabled.",
+			"Payload use must require target policy, approval controls, and safety class checks.",
 		},
 	}
 }
