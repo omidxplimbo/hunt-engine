@@ -75,6 +75,9 @@ func Connect() {
 		&models.BugPatternPack{},
 		&models.BugPattern{},
 		&models.BugPayloadPack{},
+		models.TargetMemoryItem{},
+		models.TargetMemoryChunk{},
+		models.TargetMemoryEvent{},
 		&models.BugPayload{},
 		&models.NucleiTemplate{},
 	)
