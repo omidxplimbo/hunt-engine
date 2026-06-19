@@ -212,6 +212,14 @@ func main() {
 	api.Delete("/targets/:id/bug-tests/runs/:run_id", handlers.DeleteTargetBugTestRun)
 	api.Delete("/targets/:id/bug-tests/results/:result_id", handlers.DeleteTargetBugTestResult)
 
+	api.Get("/targets/:id/memory", handlers.ListTargetMemory)
+	api.Post("/targets/:id/memory", handlers.CreateTargetMemory)
+	api.Post("/targets/:id/memory/ingest", handlers.IngestTargetMemory)
+	api.Get("/targets/:id/memory/context", handlers.GetTargetMemoryContext)
+	api.Get("/targets/:id/memory/retrieve", handlers.RetrieveTargetMemory)
+	api.Get("/targets/:id/memory/:memory_id", handlers.GetTargetMemory)
+	api.Delete("/targets/:id/memory/:memory_id", handlers.DeleteTargetMemory)
+
 	api.Get("/targets/:id/audit-logs", handlers.GetTargetAuditLogs)
 
 	// Bug Pattern Registry Routes
