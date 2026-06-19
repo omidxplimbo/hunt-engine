@@ -731,7 +731,7 @@ export const runTargetReportAgent = async (targetId: number) => {
 };
 
 // -----------------------------
-// Agent Actions - v3.7.0 foundation
+// Agent Actions - v3.11.0 Operator workflow
 // -----------------------------
 export type AgentActionStatus =
   | "proposed"
@@ -950,7 +950,7 @@ export const createTargetAgentChatMessage = async (
   return response.data.data;
 };
 
-// Agent Action Dispatcher - v3.7.0 foundation
+// Agent Action Dispatcher - v3.11.0 controlled preview/runtime
 export const dispatchTargetAgentAction = async (
   targetId: number,
   actionId: number,

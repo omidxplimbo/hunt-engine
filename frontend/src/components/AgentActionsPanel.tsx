@@ -310,7 +310,7 @@ const ActionCard = ({
           onClick={() => onDispatch(action)}
           disabled={!canDispatch || busy}
           className="hack-btn-ghost border border-hack-warning/70 px-3 py-1 text-[10px] uppercase tracking-wider text-hack-warning disabled:opacity-50"
-          title="Record dispatcher preview. Real execution is disabled in v3.7.0."
+          title="Record dispatcher preview. Real execution requires controlled runtime approval."
         >
           <PlayCircle className="h-3 w-3" /> Dispatch Preview
         </button>
@@ -363,7 +363,7 @@ const AgentActionsPanel = ({ targetId, enabled = true }: Props) => {
         action_type: "run_owasp_checklist",
         title: "OWASP passive checklist proposal",
         description:
-          "Foundation action proposal for v3.7.0. This creates an approval-gated passive OWASP checklist action without executing tests.",
+          "Operator action proposal. This creates an approval-gated passive OWASP checklist action without executing tests.",
         risk_level: "low",
         safety_level: 0,
         test_level: 0,
@@ -446,7 +446,7 @@ const AgentActionsPanel = ({ targetId, enabled = true }: Props) => {
             <ShieldAlert className="h-5 w-5" /> Agent Actions
           </h2>
           <p className="mt-1 max-w-4xl text-sm text-hack-dim">
-            v3.7.0 foundation for proposed, approved, rejected, and
+            v3.11.0 operator workflow for proposed, approved, rejected, and
             policy-blocked actions. Execution is intentionally disabled in this
             first step; this panel validates the approval workflow and audit
             chain.

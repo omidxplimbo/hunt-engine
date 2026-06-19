@@ -667,7 +667,7 @@ func loadAccessibleAgentAction(c *fiber.Ctx) (models.Target, models.AgentAction,
 }
 
 // ApproveTargetAgentAction marks a proposed/warning/allowed action as approved.
-// Execution is intentionally not performed in this v3.7.0 data-layer step.
+// Execution is intentionally gated behind approval, policy checks, and controlled runtime support.
 func ApproveTargetAgentAction(c *fiber.Ctx) error {
 	if err := ensureAgentActionsEnabled(c); err != nil {
 		return err

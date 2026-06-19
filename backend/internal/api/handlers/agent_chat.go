@@ -329,7 +329,7 @@ func planActionsFromChat(content string) ([]plannedChatAction, string) {
 		add(proposeAgentActionRequest{
 			ActionType:  models.AgentActionTypeGeneratePayload,
 			Title:       "Prepare controlled payload generation plan",
-			Description: "Prepare a policy-aware payload generation plan. Payload execution remains approval-gated and disabled in the v3.7.0 foundation.",
+			Description: "Prepare a policy-aware payload generation plan. Payload execution remains approval-gated and requires controlled runtime support.",
 			RiskLevel:   models.AgentActionRiskMedium,
 			SafetyLevel: 2,
 			TestLevel:   2,

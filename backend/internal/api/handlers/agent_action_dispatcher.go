@@ -94,10 +94,10 @@ func buildDispatchPreview(target models.Target, action models.AgentAction, dryRu
 	switch class {
 	case "command_execution":
 		requiredControls = append(requiredControls, "allow_command_execution")
-		blockedReasons = append(blockedReasons, "command execution is disabled in v3.7.0 foundation")
+		blockedReasons = append(blockedReasons, "command execution requires a controlled runtime and is not enabled for this action")
 	case "payload_generation":
 		requiredControls = append(requiredControls, "allow_payload_generation")
-		blockedReasons = append(blockedReasons, "payload generation execution path is disabled in v3.7.0 foundation")
+		blockedReasons = append(blockedReasons, "payload generation execution requires a controlled runtime and policy approval")
 	case "payload_execution":
 		requiredControls = append(requiredControls, "allow_payload_execution", "can_run_exploit_validation")
 		blockedReasons = append(blockedReasons, "payload execution is blocked until controlled exploit validation is implemented")
@@ -113,7 +113,7 @@ func buildDispatchPreview(target models.Target, action models.AgentAction, dryRu
 		blockedReasons = append(blockedReasons, "action class is hard-blocked from execution by default")
 	}
 
-	reason := "dispatcher foundation is active, but real action execution is disabled in this v3.7.0 step"
+	reason := "dispatcher preview is active; real execution requires the approved controlled operator runtime"
 	if len(blockedReasons) > 0 {
 		reason = blockedReasons[0]
 	}
@@ -149,7 +149,7 @@ func buildDispatchPreview(target models.Target, action models.AgentAction, dryRu
 			"can_run_exploit_validation": false,
 		},
 		"guardrails": []string{
-			"v3.7.0 dispatcher does not execute commands, payloads, scans, report submission, or severity changes",
+			"dispatcher preview does not execute commands, payloads, scans, report submission, or severity changes without controlled runtime approval",
 			"approved actions are converted into a dispatcher preview only",
 			"future real execution must be feature-flagged, policy-checked, approval-gated, rate-limited, and audited",
 			"hard-blocked action classes require explicit future controls before any execution path can be enabled",
@@ -159,7 +159,7 @@ func buildDispatchPreview(target models.Target, action models.AgentAction, dryRu
 }
 
 // DispatchTargetAgentAction records a dispatcher preview for an approved action.
-// This intentionally does not execute real commands/payloads/scans in v3.7.0.
+// This intentionally does not execute real commands/payloads/scans without controlled runtime approval.
 func DispatchTargetAgentAction(c *fiber.Ctx) error {
 	if err := ensureAgentActionsEnabled(c); err != nil {
 		return err
