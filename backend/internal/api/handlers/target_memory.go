@@ -370,3 +370,212 @@ func DeleteTargetMemory(c *fiber.Ctx) error {
 		},
 	})
 }
+
+func memoryItemBrief(item models.TargetMemoryItem) map[string]interface{} {
+	text := strings.TrimSpace(item.Summary)
+	if text == "" {
+		text = strings.TrimSpace(item.Content)
+	}
+	runes := []rune(text)
+	if len(runes) > 420 {
+		text = string(runes[:420]) + "..."
+	}
+
+	return map[string]interface{}{
+		"id":          item.ID,
+		"memory_type": item.MemoryType,
+		"source_type": item.SourceType,
+		"source_id":   item.SourceID,
+		"title":       item.Title,
+		"summary":     text,
+		"importance":  item.Importance,
+		"confidence":  item.Confidence,
+		"tags":        item.Tags,
+		"updated_at":  item.UpdatedAt,
+	}
+}
+
+func estimateContextTokens(value string) int {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	return len([]rune(value)) / 4
+}
+
+func GetTargetMemoryContext(c *fiber.Ctx) error {
+	targetID, err := parseUintParam(c, "id")
+	if err != nil {
+		return err
+	}
+
+	user, target, err := targetMemoryOwner(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	maxItems := c.QueryInt("max_items", 18)
+	if maxItems <= 0 || maxItems > 50 {
+		maxItems = 18
+	}
+
+	tokenBudget := c.QueryInt("token_budget", 1800)
+	if tokenBudget <= 300 || tokenBudget > 6000 {
+		tokenBudget = 1800
+	}
+
+	important := make([]models.TargetMemoryItem, 0)
+	_ = database.DB.
+		Where("target_id = ? AND user_id = ?", targetID, user.ID).
+		Order("importance DESC, confidence DESC, updated_at DESC").
+		Limit(maxItems).
+		Find(&important).Error
+
+	recent := make([]models.TargetMemoryItem, 0)
+	_ = database.DB.
+		Where("target_id = ? AND user_id = ?", targetID, user.ID).
+		Order("updated_at DESC").
+		Limit(8).
+		Find(&recent).Error
+
+	policies := make([]models.TargetMemoryItem, 0)
+	_ = database.DB.
+		Where("target_id = ? AND user_id = ? AND memory_type = ?", targetID, user.ID, models.TargetMemoryTypePolicyConstraint).
+		Order("importance DESC, updated_at DESC").
+		Limit(8).
+		Find(&policies).Error
+
+	failedTests := make([]models.TargetMemoryItem, 0)
+	_ = database.DB.
+		Where("target_id = ? AND user_id = ? AND memory_type = ?", targetID, user.ID, models.TargetMemoryTypeFailedTest).
+		Order("updated_at DESC").
+		Limit(8).
+		Find(&failedTests).Error
+
+	successfulTests := make([]models.TargetMemoryItem, 0)
+	_ = database.DB.
+		Where("target_id = ? AND user_id = ? AND memory_type = ?", targetID, user.ID, models.TargetMemoryTypeSuccessfulTest).
+		Order("updated_at DESC").
+		Limit(8).
+		Find(&successfulTests).Error
+
+	findingEvidence := make([]models.TargetMemoryItem, 0)
+	_ = database.DB.
+		Where("target_id = ? AND user_id = ? AND memory_type = ?", targetID, user.ID, models.TargetMemoryTypeFindingEvidence).
+		Order("importance DESC, updated_at DESC").
+		Limit(8).
+		Find(&findingEvidence).Error
+
+	typeCounts := make([]struct {
+		MemoryType string `json:"memory_type"`
+		Count      int64  `json:"count"`
+	}, 0)
+	_ = database.DB.Model(&models.TargetMemoryItem{}).
+		Select("memory_type, COUNT(*) as count").
+		Where("target_id = ? AND user_id = ?", targetID, user.ID).
+		Group("memory_type").
+		Order("count DESC").
+		Scan(&typeCounts).Error
+
+	importantBrief := make([]map[string]interface{}, 0, len(important))
+	for _, item := range important {
+		importantBrief = append(importantBrief, memoryItemBrief(item))
+	}
+
+	recentBrief := make([]map[string]interface{}, 0, len(recent))
+	for _, item := range recent {
+		recentBrief = append(recentBrief, memoryItemBrief(item))
+	}
+
+	policyBrief := make([]map[string]interface{}, 0, len(policies))
+	for _, item := range policies {
+		policyBrief = append(policyBrief, memoryItemBrief(item))
+	}
+
+	failedBrief := make([]map[string]interface{}, 0, len(failedTests))
+	for _, item := range failedTests {
+		failedBrief = append(failedBrief, memoryItemBrief(item))
+	}
+
+	successfulBrief := make([]map[string]interface{}, 0, len(successfulTests))
+	for _, item := range successfulTests {
+		successfulBrief = append(successfulBrief, memoryItemBrief(item))
+	}
+
+	evidenceBrief := make([]map[string]interface{}, 0, len(findingEvidence))
+	for _, item := range findingEvidence {
+		evidenceBrief = append(evidenceBrief, memoryItemBrief(item))
+	}
+
+	compactSummary := map[string]interface{}{
+		"target_id":         target.ID,
+		"target_name":       target.Name,
+		"root_domain":       target.RootDomain,
+		"status":            target.Status,
+		"current_phase":     target.CurrentPhase,
+		"memory_item_count": len(important),
+		"operator_ready":    true,
+		"context_version":   "target-memory-context-v1",
+		"context_intent":    "Provide compact target memory for the RAG-backed LLM Pentest Operator.",
+		"guardrail_summary": "Use this memory only for authorized target-scoped testing. Active/risky execution still requires policy checks and approval.",
+	}
+
+	contextTextParts := []string{
+		target.Name,
+		target.RootDomain,
+		target.Status,
+		target.CurrentPhase,
+	}
+	for _, item := range important {
+		if item.Summary != "" {
+			contextTextParts = append(contextTextParts, item.Summary)
+		} else {
+			contextTextParts = append(contextTextParts, item.Content)
+		}
+	}
+	estimatedTokens := estimateContextTokens(strings.Join(contextTextParts, "\n"))
+
+	event := models.TargetMemoryEvent{
+		UserID:    user.ID,
+		TargetID:  targetID,
+		EventType: models.TargetMemoryEventUsed,
+		AfterJSON: memoryJSON(map[string]interface{}{
+			"context_version":  "target-memory-context-v1",
+			"max_items":        maxItems,
+			"token_budget":     tokenBudget,
+			"estimated_tokens": estimatedTokens,
+		}, "{}"),
+		Metadata: memoryJSON(map[string]interface{}{
+			"used_by": "target-memory-context-api-v1",
+		}, "{}"),
+	}
+	_ = database.DB.Create(&event).Error
+
+	return c.JSON(fiber.Map{
+		"status": "ok",
+		"data": fiber.Map{
+			"context_version":    "target-memory-context-v1",
+			"compact_summary":    compactSummary,
+			"important_memories": importantBrief,
+			"recent_memories":    recentBrief,
+			"policy_constraints": policyBrief,
+			"failed_tests":       failedBrief,
+			"successful_tests":   successfulBrief,
+			"finding_evidence":   evidenceBrief,
+			"type_counts":        typeCounts,
+			"token_budget": fiber.Map{
+				"requested":         tokenBudget,
+				"estimated":         estimatedTokens,
+				"within_budget":     estimatedTokens <= tokenBudget,
+				"estimator":         "runes_div_4",
+				"retrieval_limited": len(important) >= maxItems,
+			},
+			"operator_guardrails": []string{
+				"Context is target-scoped and owner-scoped.",
+				"Context is for planning and reasoning, not direct execution.",
+				"Active/risky tests require policy checks and approval.",
+				"Do not use memory for out-of-scope targets.",
+			},
+		},
+	})
+}
