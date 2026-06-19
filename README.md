@@ -6,7 +6,7 @@ The platform combines deterministic scanner logic with structured evidence, acco
 
 ---
 
-## Current release focus: v3.9.0
+## Current release focus: v3.10.0
 
 v3.9.0 introduces the Pattern/Payload Pack Foundation and closes the current pre-operator registry workstream. It prepares Hunt Engine for the new RAG-backed LLM Pentest Operator roadmap while keeping execution policy-aware, approval-gated, and safe-by-default.
 
@@ -49,6 +49,25 @@ The main strategic shift in this release is that the Analysis workspace is being
   - Added the new operator roadmap under `docs/roadmaps/`.
   - The roadmap deprecates standalone Analysis features that do not directly support RAG, LLM operator workflows, real OWASP-style testing, evidence feedback, finding promotion, and report drafting.
   - Future development prioritizes per-target/project RAG memory, LLM-powered Attack Surface Chat, approved real test execution, iterative pentest loops, and controlled operator runtime.
+
+
+### v3.10.0 - RAG Memory Foundation
+
+v3.10.0 introduces the target-scoped RAG memory foundation for the future LLM Pentest Operator. This release does not enable uncontrolled autonomous testing; it prepares the memory, retrieval, and interaction layer needed for professional, policy-aware operator planning.
+
+Delivered in v3.10.0:
+
+- Target Memory data layer with `target_memory_items`, `target_memory_chunks`, and `target_memory_events`.
+- Target Memory APIs for listing, creating, reading, deleting, and chunking memory records.
+- Target Memory Context API for compact, low-token operator context.
+- Automatic Target Memory Ingestion from target overview, live asset summary, URL inventory, findings, and Safe Bug Testing results.
+- Broad objective-based Operator Retrieval API for full vulnerability discovery, not limited to XSS or a small set of bug classes.
+- Supported retrieval objectives include `all_bugs`, `vulnerability_discovery`, `xss`, `open_redirect`, `cors`, `security_headers`, `auth`, `access_control`, `idor`, `api`, `ssrf`, `sqli`, `nosqli`, `ssti`, `path_traversal`, `file_upload`, `csrf`, `clickjacking`, `takeover`, `secrets`, `cloud`, `cache_poisoning`, `rate_limit`, `session`, `business_logic`, `misconfiguration`, `cve`, `crawl_more`, and `report`.
+- Agent Chat Memory Hooks for important user clarifications, approvals/rejections, policy constraints, vulnerability objectives, evidence interpretations, and recon/crawling decisions.
+- Memory event audit trail for created, updated, chunked, ingested, and used memory events.
+- Guardrail-first design: memory retrieval is target-scoped and owner-scoped; active or risky tests still require policy checks and approval.
+
+v3.10.0 prepares the RAG and retrieval substrate for v3.11.0 LLM Pentest Operator MVP.
 
 ### v3.9.0 guardrail status
 
@@ -790,4 +809,17 @@ Future work must keep deterministic guardrails authoritative and keep risky exec
 ## Safety statement
 
 Use Hunt Engine only on assets and programs where you have authorization. Configure target policy and scope before running active testing. Advisory agents and generated report drafts are not proof of vulnerability and must be manually validated before use in customer-facing or bug bounty submissions.
+
+
+
+### Next: v3.11.0 - LLM Pentest Operator MVP
+
+The next release connects the RAG memory foundation to a real LLM-backed Operator:
+
+- Account-scoped LLM provider/model selection.
+- RAG-backed operator context builder.
+- Broad vulnerability objective planning across low to critical findings.
+- Interactive clarification questions when context, scope, policy, or approval state is ambiguous.
+- Approval-aware agent action proposals.
+- Small low-token LLM smoke tests for context use, structured JSON output, and guardrail behavior.
 
