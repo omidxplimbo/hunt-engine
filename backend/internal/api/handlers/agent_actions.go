@@ -356,7 +356,7 @@ func policyCheckForAgentAction(target *models.Target, req proposeAgentActionRequ
 	}
 
 	if testLevel >= 3 || safetyLevel >= 3 {
-		blockedReasons = append(blockedReasons, "level 3 exploit-validation/manual-approved action is blocked in v3.7.0 foundation")
+		blockedReasons = append(blockedReasons, "level 3 exploit-validation/manual-approved action requires future controlled runtime and explicit approval")
 	}
 
 	switch class {
@@ -417,7 +417,7 @@ func policyCheckForAgentAction(target *models.Target, req proposeAgentActionRequ
 			"max_test_level":             maxIntensityLevel,
 		},
 		"guardrails": []string{
-			"v3.7.0 action execution is not enabled in this foundation step",
+			"v3.11.0 operator actions are approval-gated; execution requires controlled dispatcher/runtime approval",
 			"blocked_by_policy actions cannot be approved",
 			"policy max_test_intensity is enforced against safety_level and test_level",
 			"disallowed_test_types takes precedence over allowed_test_types",
@@ -452,9 +452,14 @@ func GetTargetAgentActions(c *fiber.Ctx) error {
 		return err
 	}
 
+	_, ownerKey, _, _, ownerErr := currentAccountOwner(c)
+	if ownerErr != nil {
+		return ownerErr
+	}
+
 	limit, offset, page := parseDataLayerPagination(c)
 
-	db := database.DB.Model(&models.AgentAction{}).Where("target_id = ?", target.ID)
+	db := database.DB.Model(&models.AgentAction{}).Where("target_id = ? AND owner_key = ?", target.ID, ownerKey)
 
 	if status := normalizeActionStatus(c.Query("status")); status != "" {
 		db = db.Where("status = ?", status)
@@ -662,7 +667,7 @@ func loadAccessibleAgentAction(c *fiber.Ctx) (models.Target, models.AgentAction,
 }
 
 // ApproveTargetAgentAction marks a proposed/warning/allowed action as approved.
-// Execution is intentionally not performed in this v3.7.0 data-layer step.
+// Execution is intentionally gated behind approval, policy checks, and controlled runtime support.
 func ApproveTargetAgentAction(c *fiber.Ctx) error {
 	if err := ensureAgentActionsEnabled(c); err != nil {
 		return err

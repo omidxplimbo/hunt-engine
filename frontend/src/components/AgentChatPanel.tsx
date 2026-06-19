@@ -45,10 +45,33 @@ const formatDate = (value?: string | null) => {
   return Number.isNaN(d.getTime()) ? value : d.toLocaleString();
 };
 
+const asArray = (value: any): any[] => (Array.isArray(value) ? value : []);
+
+const truncateText = (value: any, max = 180) => {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+};
+
+const actionLabel = (value: string) =>
+  String(value || "")
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (ch) => ch.toUpperCase());
+
 const MessageBubble = ({ message }: { message: TargetAgentChatMessage }) => {
   const isUser = message.role === "user";
   const output = parseJSONValue(message.output_json);
+  const input = parseJSONValue(message.input_json);
   const actionIds = Array.isArray(output?.action_ids) ? output.action_ids : [];
+  const operatorPlan = output?.operator_plan || {};
+  const recommendedSteps = asArray(operatorPlan?.recommended_next_steps);
+  const planActions = asArray(operatorPlan?.actions);
+  const guardrails = asArray(output?.guardrails);
+  const llmAssisted = Boolean(output?.llm_assisted);
+  const operatorMode = String(output?.operator_mode || input?.operator_mode || "");
+  const operatorError = String(output?.operator_error || input?.operator_error || "");
+  const provider = operatorPlan?.llm_provider;
+  const model = operatorPlan?.llm_model;
 
   return (
     <div
@@ -82,6 +105,86 @@ const MessageBubble = ({ message }: { message: TargetAgentChatMessage }) => {
         <div dir="auto" className="whitespace-pre-wrap text-sm text-white">
           {message.content}
         </div>
+
+        {!isUser && operatorMode && (
+          <div className="mt-3 flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-wider">
+            <span
+              className={clsx(
+                "border px-2 py-1",
+                llmAssisted
+                  ? "border-hack-primary/60 bg-hack-primary/10 text-hack-primary"
+                  : "border-hack-warning/60 bg-hack-warning/10 text-hack-warning",
+              )}
+            >
+              {llmAssisted ? "LLM Assisted" : "Fallback"}
+            </span>
+            <span className="border border-hack-border bg-black/30 px-2 py-1 text-hack-dim">
+              {operatorMode}
+            </span>
+            {provider && (
+              <span className="border border-hack-border bg-black/30 px-2 py-1 text-hack-dim">
+                {provider} / {model || "-"}
+              </span>
+            )}
+          </div>
+        )}
+
+        {!isUser && operatorError && (
+          <div className="mt-3 border border-hack-warning/60 bg-hack-warning/10 p-2 font-mono text-[11px] text-hack-warning">
+            Operator fallback reason: {truncateText(operatorError, 260)}
+          </div>
+        )}
+
+        {!isUser && recommendedSteps.length > 0 && (
+          <div className="mt-3 border border-hack-border bg-black/30 p-3">
+            <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-hack-dim">
+              Recommended Next Steps
+            </div>
+            <ul className="space-y-1 text-xs text-white">
+              {recommendedSteps.slice(0, 6).map((step, index) => (
+                <li key={`${message.id}-step-${index}`}>• {truncateText(step, 220)}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {!isUser && planActions.length > 0 && (
+          <div className="mt-3 border border-hack-primary/40 bg-hack-primary/10 p-3">
+            <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-hack-primary">
+              Operator Proposed Actions
+            </div>
+            <div className="space-y-2">
+              {planActions.slice(0, 5).map((action, index) => (
+                <div key={`${message.id}-action-${index}`} className="border border-hack-border bg-black/30 p-2">
+                  <div className="font-mono text-xs font-bold text-white">
+                    {action.title || actionLabel(action.action_type)}
+                  </div>
+                  <div className="mt-1 font-mono text-[10px] uppercase tracking-wider text-hack-dim">
+                    {actionLabel(action.action_type)} · risk {action.risk_level || "low"} · safety {action.safety_level ?? 0} · test {action.test_level ?? 0}
+                  </div>
+                  {action.reason && (
+                    <div className="mt-1 text-xs text-hack-dim">
+                      {truncateText(action.reason, 220)}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!isUser && guardrails.length > 0 && (
+          <div className="mt-3 border border-hack-border bg-black/20 p-2">
+            <div className="font-mono text-[10px] uppercase tracking-wider text-hack-dim">
+              Guardrails
+            </div>
+            <div className="mt-1 text-[11px] text-hack-dim">
+              {guardrails.slice(0, 3).map((item, index) => (
+                <div key={`${message.id}-guardrail-${index}`}>• {truncateText(item, 160)}</div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {actionIds.length > 0 && (
           <div className="mt-3 border border-hack-warning/50 bg-hack-warning/10 p-2 font-mono text-[11px] text-hack-warning">
@@ -261,9 +364,9 @@ const AgentChatPanel = ({ targetId, enabled = true }: Props) => {
             <MessageSquare className="h-5 w-5" /> Attack Surface Chat
           </h2>
           <p className="mt-1 max-w-4xl text-sm text-hack-dim">
-            Conversational v3.7.0 foundation. The agent converts natural-language
-            requests into policy-aware, approval-gated agent action proposals.
-            Direct execution remains disabled in this step.
+            RAG-backed v3.11 Operator MVP. The agent uses target memory and
+            policy context to create owner-scoped, approval-gated pentest action
+            proposals. Direct chat execution remains disabled.
           </p>
         </div>
 
