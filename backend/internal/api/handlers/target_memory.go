@@ -987,3 +987,522 @@ func IngestTargetMemory(c *fiber.Ctx) error {
 		},
 	})
 }
+
+func normalizeMemoryObjective(objective string) string {
+	objective = strings.ToLower(strings.TrimSpace(objective))
+	switch objective {
+	case "all", "all_bugs", "all-bugs", "bugs", "vuln", "vulns", "vulnerability", "vulnerability_discovery", "vulnerability-discovery", "full", "full_scan", "full-scan":
+		return "all_bugs"
+	case "xss", "cross_site_scripting", "cross-site-scripting":
+		return "xss"
+	case "redirect", "open_redirect", "open-redirect":
+		return "open_redirect"
+	case "cors":
+		return "cors"
+	case "headers", "security_headers", "security-headers":
+		return "security_headers"
+	case "js", "javascript", "js_review", "js-review":
+		return "js_review"
+	case "auth", "authentication", "authorization":
+		return "auth"
+	case "access", "access_control", "access-control", "idor", "bola", "bfl":
+		return "access_control"
+	case "api", "api_security", "api-security":
+		return "api"
+	case "ssrf":
+		return "ssrf"
+	case "sqli", "sql", "sql_injection", "sql-injection":
+		return "sqli"
+	case "nosqli", "nosql", "nosql_injection", "nosql-injection":
+		return "nosqli"
+	case "ssti", "template_injection", "template-injection":
+		return "ssti"
+	case "path", "path_traversal", "path-traversal", "lfi", "rfi", "file_inclusion", "file-inclusion":
+		return "path_traversal"
+	case "upload", "file_upload", "file-upload":
+		return "file_upload"
+	case "csrf":
+		return "csrf"
+	case "clickjacking", "click_jacking":
+		return "clickjacking"
+	case "takeover", "subdomain_takeover", "subdomain-takeover":
+		return "takeover"
+	case "secret", "secrets", "exposed_secrets", "exposed-secrets":
+		return "secrets"
+	case "cloud", "storage", "cloud_misconfig", "cloud-misconfig":
+		return "cloud"
+	case "cache", "cache_poisoning", "cache-poisoning":
+		return "cache_poisoning"
+	case "rate", "rate_limit", "rate-limit", "ratelimit":
+		return "rate_limit"
+	case "session", "cookie", "cookies", "session_cookie", "session-cookie":
+		return "session"
+	case "logic", "business_logic", "business-logic":
+		return "business_logic"
+	case "misconfig", "misconfiguration", "config":
+		return "misconfiguration"
+	case "cve", "dependency", "dependencies", "dependency_cve", "dependency-cve":
+		return "cve"
+	case "crawl", "crawl_more", "crawl-more", "recon", "discovery":
+		return "crawl_more"
+	case "report", "reporting":
+		return "report"
+	default:
+		return "general"
+	}
+}
+
+func objectiveMemoryTerms(objective string) []string {
+	switch objective {
+	case "all_bugs":
+		return []string{"finding", "evidence", "bug", "vulnerability", "endpoint", "parameter", "auth", "api", "token", "secret", "redirect", "xss", "cors", "header", "upload", "path", "ssrf", "sql", "idor", "access", "session", "cookie", "rate", "takeover", "misconfig"}
+	case "xss":
+		return []string{"xss", "cross-site", "script", "payload", "reflection", "parameter", "query", "dom", "sink", "url", "endpoint"}
+	case "open_redirect":
+		return []string{"redirect", "url=", "next", "return", "continue", "dest", "destination", "callback", "redirect_uri", "location"}
+	case "cors":
+		return []string{"cors", "origin", "access-control", "allow-origin", "credentials", "header"}
+	case "security_headers":
+		return []string{"header", "csp", "content-security-policy", "hsts", "x-frame", "x-content-type", "referrer-policy"}
+	case "js_review":
+		return []string{"javascript", "js", ".js", "source", "sink", "dom", "endpoint", "api", "token", "secret"}
+	case "auth":
+		return []string{"auth", "login", "session", "jwt", "token", "oauth", "sso", "cookie", "password", "account"}
+	case "access_control":
+		return []string{"idor", "access", "authorization", "permission", "role", "user_id", "account_id", "tenant", "object", "admin", "private"}
+	case "api":
+		return []string{"api", "graphql", "rest", "json", "endpoint", "token", "authorization", "swagger", "openapi"}
+	case "ssrf":
+		return []string{"ssrf", "url", "uri", "callback", "webhook", "fetch", "proxy", "import", "remote", "internal"}
+	case "sqli":
+		return []string{"sql", "sqli", "query", "id=", "search", "filter", "sort", "where", "select", "database"}
+	case "nosqli":
+		return []string{"nosql", "mongodb", "mongo", "filter", "json", "$ne", "$regex", "query"}
+	case "ssti":
+		return []string{"ssti", "template", "render", "jinja", "twig", "handlebars", "velocity", "expression"}
+	case "path_traversal":
+		return []string{"path", "file", "download", "upload", "include", "lfi", "rfi", "traversal", "../", "filename"}
+	case "file_upload":
+		return []string{"upload", "file", "avatar", "image", "attachment", "multipart", "content-type", "extension"}
+	case "csrf":
+		return []string{"csrf", "state-changing", "post", "delete", "update", "token", "form"}
+	case "clickjacking":
+		return []string{"clickjacking", "frame", "iframe", "x-frame-options", "csp", "frame-ancestors"}
+	case "takeover":
+		return []string{"takeover", "cname", "dangling", "bucket", "github", "heroku", "vercel", "netlify", "azure"}
+	case "secrets":
+		return []string{"secret", "token", "apikey", "api_key", "password", "credential", "private_key", "jwt", "bearer"}
+	case "cloud":
+		return []string{"cloud", "s3", "bucket", "storage", "azure", "gcp", "aws", "blob", "public"}
+	case "cache_poisoning":
+		return []string{"cache", "poison", "vary", "host", "x-forwarded", "cdn", "akamai", "cloudflare"}
+	case "rate_limit":
+		return []string{"rate", "limit", "throttle", "otp", "password reset", "login", "bruteforce", "enumeration"}
+	case "session":
+		return []string{"session", "cookie", "jwt", "secure", "httponly", "samesite", "token", "refresh"}
+	case "business_logic":
+		return []string{"logic", "workflow", "checkout", "price", "coupon", "role", "state", "order", "payment"}
+	case "misconfiguration":
+		return []string{"misconfig", "debug", "admin", "exposed", "directory", "index", "backup", "config", "env"}
+	case "cve":
+		return []string{"cve", "version", "dependency", "technology", "server", "framework", "outdated"}
+	case "crawl_more":
+		return []string{"crawl", "url", "endpoint", "asset", "subdomain", "live", "katana", "gau", "wayback", "virustotal"}
+	case "report":
+		return []string{"finding", "evidence", "impact", "reproduce", "severity", "recommendation", "report"}
+	default:
+		return []string{"target", "asset", "url", "finding", "test", "operator", "memory"}
+	}
+}
+
+func objectiveMemoryTypes(objective string) []string {
+	switch objective {
+	case "all_bugs":
+		return []string{
+			models.TargetMemoryTypeOverview,
+			models.TargetMemoryTypeAttackSurface,
+			models.TargetMemoryTypeEndpointNote,
+			models.TargetMemoryTypeFindingEvidence,
+			models.TargetMemoryTypeTestResult,
+			models.TargetMemoryTypeVulnerabilityHypothesis,
+			models.TargetMemoryTypeFailedTest,
+			models.TargetMemoryTypeSuccessfulTest,
+			models.TargetMemoryTypePolicyConstraint,
+			models.TargetMemoryTypeUserDecision,
+		}
+	case "xss", "open_redirect", "cors", "security_headers", "js_review", "auth", "access_control", "api", "ssrf", "sqli", "nosqli", "ssti", "path_traversal", "file_upload", "csrf", "clickjacking", "takeover", "secrets", "cloud", "cache_poisoning", "rate_limit", "session", "business_logic", "misconfiguration", "cve":
+		return []string{
+			models.TargetMemoryTypeEndpointNote,
+			models.TargetMemoryTypeFindingEvidence,
+			models.TargetMemoryTypeTestResult,
+			models.TargetMemoryTypeVulnerabilityHypothesis,
+			models.TargetMemoryTypeFailedTest,
+			models.TargetMemoryTypeSuccessfulTest,
+			models.TargetMemoryTypeAttackSurface,
+			models.TargetMemoryTypePolicyConstraint,
+			models.TargetMemoryTypeUserDecision,
+		}
+	case "crawl_more":
+		return []string{
+			models.TargetMemoryTypeAttackSurface,
+			models.TargetMemoryTypeEndpointNote,
+			models.TargetMemoryTypeOverview,
+			models.TargetMemoryTypePolicyConstraint,
+			models.TargetMemoryTypeUserDecision,
+		}
+	case "report":
+		return []string{
+			models.TargetMemoryTypeFindingEvidence,
+			models.TargetMemoryTypeSuccessfulTest,
+			models.TargetMemoryTypeTestResult,
+			models.TargetMemoryTypeUserDecision,
+			models.TargetMemoryTypePolicyConstraint,
+		}
+	default:
+		return []string{}
+	}
+}
+
+func objectiveRecommendedAction(objective string) string {
+	switch objective {
+	case "all_bugs":
+		return "build_prioritized_owasp_test_plan_from_full_attack_surface"
+	case "xss":
+		return "review_parameters_or_propose_safe_xss_tests"
+	case "open_redirect":
+		return "review_redirect_parameters_or_propose_safe_open_redirect_tests"
+	case "cors":
+		return "review_cors_candidates_or_run_safe_cors_checks"
+	case "security_headers":
+		return "run_safe_security_header_checks"
+	case "js_review":
+		return "run_js_intelligence_or_review_js_findings"
+	case "auth":
+		return "ask_clarifying_question_before_auth_testing"
+	case "access_control":
+		return "ask_for_authorized_test_accounts_before_access_control_testing"
+	case "api":
+		return "review_api_endpoints_and_auth_context"
+	case "ssrf":
+		return "review_ssrf_candidates_and_require_approval_before_active_testing"
+	case "sqli", "nosqli":
+		return "review_injection_candidates_and_require_approval_before_active_testing"
+	case "ssti":
+		return "review_template_candidates_and_require_approval_before_active_testing"
+	case "path_traversal":
+		return "review_file_path_candidates_and_require_approval_before_active_testing"
+	case "file_upload":
+		return "ask_for_upload_scope_and_allowed_file_types"
+	case "csrf":
+		return "review_state_changing_endpoints"
+	case "clickjacking":
+		return "check_frame_protection_headers"
+	case "takeover":
+		return "review_takeover_candidates"
+	case "secrets":
+		return "review_exposed_secret_candidates"
+	case "cloud":
+		return "review_cloud_storage_exposure_candidates"
+	case "cache_poisoning":
+		return "review_cache_key_and_header_behavior_candidates"
+	case "rate_limit":
+		return "ask_for_rate_limit_testing_policy_before_active_testing"
+	case "session":
+		return "review_cookie_and_session_security"
+	case "business_logic":
+		return "ask_clarifying_question_for_business_logic_workflow"
+	case "misconfiguration":
+		return "review_exposed_admin_debug_config_surfaces"
+	case "cve":
+		return "review_detected_technologies_for_known_exposures"
+	case "crawl_more":
+		return "propose_policy_checked_crawling"
+	case "report":
+		return "draft_report_from_validated_evidence"
+	default:
+		return "retrieve_more_context_or_ask_clarifying_question"
+	}
+}
+
+func memoryTypeWhere(memoryTypes []string) (string, []interface{}) {
+	if len(memoryTypes) == 0 {
+		return "", nil
+	}
+
+	placeholders := make([]string, 0, len(memoryTypes))
+	args := make([]interface{}, 0, len(memoryTypes))
+	for _, mt := range memoryTypes {
+		placeholders = append(placeholders, "?")
+		args = append(args, mt)
+	}
+
+	return "memory_type IN (" + strings.Join(placeholders, ",") + ")", args
+}
+
+func RetrieveTargetMemory(c *fiber.Ctx) error {
+	targetID, err := parseUintParam(c, "id")
+	if err != nil {
+		return err
+	}
+
+	user, target, err := targetMemoryOwner(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	objective := normalizeMemoryObjective(c.Query("objective", "all_bugs"))
+
+	tokenBudget := c.QueryInt("token_budget", 2200)
+	if tokenBudget <= 300 || tokenBudget > 10000 {
+		tokenBudget = 2200
+	}
+
+	limit := c.QueryInt("limit", 16)
+	if limit <= 0 || limit > 80 {
+		limit = 16
+	}
+
+	chunkLimit := c.QueryInt("chunk_limit", 12)
+	if chunkLimit <= 0 || chunkLimit > 60 {
+		chunkLimit = 12
+	}
+
+	terms := objectiveMemoryTerms(objective)
+	memoryTypes := objectiveMemoryTypes(objective)
+
+	items := make([]models.TargetMemoryItem, 0)
+	q := database.DB.Where("target_id = ? AND user_id = ?", targetID, user.ID)
+
+	if where, args := memoryTypeWhere(memoryTypes); where != "" {
+		q = q.Where(where, args...)
+	}
+
+	_ = q.Order("importance DESC, confidence DESC, updated_at DESC").
+		Limit(limit).
+		Find(&items).Error
+
+	if len(items) < limit {
+		extra := make([]models.TargetMemoryItem, 0)
+		_ = database.DB.
+			Where("target_id = ? AND user_id = ?", targetID, user.ID).
+			Order("updated_at DESC").
+			Limit(limit - len(items)).
+			Find(&extra).Error
+
+		seen := map[uint]bool{}
+		for _, item := range items {
+			seen[item.ID] = true
+		}
+		for _, item := range extra {
+			if !seen[item.ID] {
+				items = append(items, item)
+				seen[item.ID] = true
+			}
+		}
+	}
+
+	itemIDs := make([]uint, 0, len(items))
+	itemBriefs := make([]map[string]interface{}, 0, len(items))
+	for _, item := range items {
+		itemIDs = append(itemIDs, item.ID)
+		itemBriefs = append(itemBriefs, memoryItemBrief(item))
+	}
+
+	chunks := make([]models.TargetMemoryChunk, 0)
+	if len(itemIDs) > 0 {
+		_ = database.DB.
+			Where("target_id = ? AND user_id = ? AND memory_item_id IN ?", targetID, user.ID, itemIDs).
+			Order("chunk_index ASC").
+			Limit(chunkLimit).
+			Find(&chunks).Error
+	}
+
+	chunkBriefs := make([]map[string]interface{}, 0, len(chunks))
+	contextParts := []string{target.Name, target.RootDomain, objective}
+	for _, chunk := range chunks {
+		text := strings.TrimSpace(chunk.ChunkText)
+		runes := []rune(text)
+		if len(runes) > 700 {
+			text = string(runes[:700]) + "..."
+		}
+
+		chunkBriefs = append(chunkBriefs, map[string]interface{}{
+			"id":             chunk.ID,
+			"memory_item_id": chunk.MemoryItemID,
+			"chunk_index":    chunk.ChunkIndex,
+			"chunk_text":     text,
+			"token_count":    chunk.TokenCount,
+			"source_hash":    chunk.SourceHash,
+			"metadata":       chunk.Metadata,
+			"created_at":     chunk.CreatedAt,
+			"updated_at":     chunk.UpdatedAt,
+		})
+		contextParts = append(contextParts, text)
+	}
+
+	relevantURLs := make([]models.FoundURL, 0)
+	urlQuery := database.DB.Where("target_id = ?", targetID)
+	if objective != "general" && len(terms) > 0 {
+		likeParts := make([]string, 0, len(terms))
+		args := make([]interface{}, 0, len(terms))
+		for _, term := range terms {
+			likeParts = append(likeParts, "LOWER(value) LIKE ?")
+			args = append(args, "%"+strings.ToLower(term)+"%")
+		}
+		urlQuery = urlQuery.Where(strings.Join(likeParts, " OR "), args...)
+	}
+	_ = urlQuery.Order("occurrence_count DESC, id DESC").Limit(20).Find(&relevantURLs).Error
+
+	urlBriefs := make([]map[string]interface{}, 0, len(relevantURLs))
+	for _, u := range relevantURLs {
+		urlBriefs = append(urlBriefs, map[string]interface{}{
+			"id":               u.ID,
+			"value":            u.Value,
+			"canonical_value":  u.CanonicalValue,
+			"occurrence_count": u.OccurrenceCount,
+			"source":           u.Source,
+			"asset_id":         u.AssetID,
+		})
+		contextParts = append(contextParts, u.Value)
+	}
+
+	relevantResults := make([]models.BugTestResult, 0)
+	resultQuery := database.DB.Where("target_id = ?", targetID)
+	if objective != "general" && objective != "all_bugs" {
+		resultQuery = resultQuery.Where(
+			"LOWER(bug_type) LIKE ? OR LOWER(test_name) LIKE ? OR LOWER(pattern_key) LIKE ?",
+			"%"+strings.ReplaceAll(objective, "_", "%")+"%",
+			"%"+strings.ReplaceAll(objective, "_", "%")+"%",
+			"%"+strings.ReplaceAll(objective, "_", "%")+"%",
+		)
+	}
+	_ = resultQuery.Order("id DESC").Limit(20).Find(&relevantResults).Error
+
+	resultBriefs := make([]map[string]interface{}, 0, len(relevantResults))
+	for _, r := range relevantResults {
+		resultBriefs = append(resultBriefs, map[string]interface{}{
+			"id":            r.ID,
+			"run_id":        r.RunID,
+			"bug_type":      r.BugType,
+			"test_name":     r.TestName,
+			"status":        r.Status,
+			"confidence":    r.Confidence,
+			"severity_hint": r.SeverityHint,
+			"pattern_key":   r.PatternKey,
+			"asset_id":      r.AssetID,
+			"url_id":        r.URLID,
+			"finding_id":    r.FindingID,
+			"tags":          r.Tags,
+			"owasp_refs":    r.OWASPRefs,
+		})
+		contextParts = append(contextParts, r.TestName+" "+r.BugType+" "+r.Status+" "+r.Confidence)
+	}
+
+	relevantFindings := make([]models.Finding, 0)
+	findingQuery := database.DB.Where("target_id = ?", targetID)
+	if objective != "general" && objective != "all_bugs" && len(terms) > 0 {
+		likeParts := make([]string, 0, len(terms))
+		args := make([]interface{}, 0, len(terms)*3)
+		for _, term := range terms {
+			like := "%" + strings.ToLower(term) + "%"
+			likeParts = append(likeParts, "(LOWER(title) LIKE ? OR LOWER(description) LIKE ? OR LOWER(category) LIKE ?)")
+			args = append(args, like, like, like)
+		}
+		findingQuery = findingQuery.Where(strings.Join(likeParts, " OR "), args...)
+	}
+	_ = findingQuery.Order("severity DESC, id DESC").Limit(20).Find(&relevantFindings).Error
+
+	findingBriefs := make([]map[string]interface{}, 0, len(relevantFindings))
+	for _, f := range relevantFindings {
+		findingBriefs = append(findingBriefs, map[string]interface{}{
+			"id":          f.ID,
+			"title":       f.Title,
+			"severity":    f.Severity,
+			"category":    f.Category,
+			"status":      f.Status,
+			"source_tool": f.SourceTool,
+			"asset_id":    f.AssetID,
+			"url_id":      f.URLID,
+		})
+		contextParts = append(contextParts, f.Title+" "+f.Severity+" "+f.Category+" "+f.Status)
+	}
+
+	estimatedTokens := estimateContextTokens(strings.Join(contextParts, "\n"))
+
+	missingContext := []string{}
+	if len(itemBriefs) == 0 {
+		missingContext = append(missingContext, "No target memory found; run automatic memory ingestion first.")
+	}
+	if (objective == "all_bugs" || objective == "crawl_more") && len(urlBriefs) == 0 {
+		missingContext = append(missingContext, "No relevant URLs found; propose crawling or URL discovery.")
+	}
+	if objective == "js_review" && len(urlBriefs) == 0 {
+		missingContext = append(missingContext, "No JS-specific URLs found; propose JS intelligence or crawling.")
+	}
+	if objective == "auth" || objective == "access_control" || objective == "business_logic" {
+		missingContext = append(missingContext, "Interactive clarification or authorized test accounts may be required before meaningful testing.")
+	}
+	if objective == "ssrf" || objective == "sqli" || objective == "nosqli" || objective == "ssti" || objective == "path_traversal" || objective == "file_upload" {
+		missingContext = append(missingContext, "Active validation for this class requires explicit policy checks and approval.")
+	}
+	if len(missingContext) == 0 {
+		missingContext = append(missingContext, "No critical missing context detected from current retrieval.")
+	}
+
+	event := models.TargetMemoryEvent{
+		UserID:    user.ID,
+		TargetID:  targetID,
+		EventType: models.TargetMemoryEventUsed,
+		AfterJSON: memoryJSON(map[string]interface{}{
+			"retrieval_version": "target-memory-retrieval-v1",
+			"objective":         objective,
+			"token_budget":      tokenBudget,
+			"estimated_tokens":  estimatedTokens,
+			"items":             len(itemBriefs),
+			"chunks":            len(chunkBriefs),
+			"urls":              len(urlBriefs),
+			"bug_results":       len(resultBriefs),
+			"findings":          len(findingBriefs),
+		}, "{}"),
+		Metadata: memoryJSON(map[string]interface{}{
+			"used_by": "target-memory-retrieval-api-v1",
+		}, "{}"),
+	}
+	_ = database.DB.Create(&event).Error
+
+	return c.JSON(fiber.Map{
+		"status": "ok",
+		"data": fiber.Map{
+			"retrieval_version": "target-memory-retrieval-v1",
+			"objective":         objective,
+			"target": fiber.Map{
+				"id":          target.ID,
+				"name":        target.Name,
+				"root_domain": target.RootDomain,
+				"status":      target.Status,
+				"phase":       target.CurrentPhase,
+			},
+			"selected_memories":                itemBriefs,
+			"selected_chunks":                  chunkBriefs,
+			"relevant_urls":                    urlBriefs,
+			"relevant_bug_results":             resultBriefs,
+			"relevant_findings":                findingBriefs,
+			"suggested_missing_context":        missingContext,
+			"recommended_next_operator_action": objectiveRecommendedAction(objective),
+			"bug_coverage_note":                "Operator retrieval is broad by design and is not limited to XSS or a small set of bug classes.",
+			"token_budget": fiber.Map{
+				"requested":     tokenBudget,
+				"estimated":     estimatedTokens,
+				"within_budget": estimatedTokens <= tokenBudget,
+				"estimator":     "runes_div_4",
+			},
+			"operator_guardrails": []string{
+				"Retrieval is target-scoped and owner-scoped.",
+				"Use this context for planning, prioritization, and clarifying questions.",
+				"Active/risky tests require policy checks and approval.",
+				"Additional crawling must stay within target scope and configured rate limits.",
+				"Retain low-severity findings when useful for chaining, evidence, or reporting.",
+			},
+		},
+	})
+}

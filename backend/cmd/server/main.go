@@ -216,6 +216,7 @@ func main() {
 	api.Post("/targets/:id/memory", handlers.CreateTargetMemory)
 	api.Post("/targets/:id/memory/ingest", handlers.IngestTargetMemory)
 	api.Get("/targets/:id/memory/context", handlers.GetTargetMemoryContext)
+	api.Get("/targets/:id/memory/retrieve", handlers.RetrieveTargetMemory)
 	api.Get("/targets/:id/memory/:memory_id", handlers.GetTargetMemory)
 	api.Delete("/targets/:id/memory/:memory_id", handlers.DeleteTargetMemory)
 
