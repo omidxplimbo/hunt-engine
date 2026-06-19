@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -576,6 +577,413 @@ func GetTargetMemoryContext(c *fiber.Ctx) error {
 				"Active/risky tests require policy checks and approval.",
 				"Do not use memory for out-of-scope targets.",
 			},
+		},
+	})
+}
+
+type ingestTargetMemoryRequest struct {
+	IncludeAssets         *bool `json:"include_assets"`
+	IncludeURLs           *bool `json:"include_urls"`
+	IncludeFindings       *bool `json:"include_findings"`
+	IncludeBugTestResults *bool `json:"include_bug_test_results"`
+}
+
+func boolDefault(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func upsertTargetMemoryItem(item models.TargetMemoryItem) (models.TargetMemoryItem, bool, error) {
+	var existing models.TargetMemoryItem
+	err := database.DB.
+		Where("target_id = ? AND user_id = ? AND source_hash = ?", item.TargetID, item.UserID, item.SourceHash).
+		First(&existing).Error
+
+	if err == nil {
+		existing.SourceType = item.SourceType
+		existing.SourceID = item.SourceID
+		existing.MemoryType = item.MemoryType
+		existing.Title = item.Title
+		existing.Content = item.Content
+		existing.Summary = item.Summary
+		existing.Tags = item.Tags
+		existing.Importance = item.Importance
+		existing.Confidence = item.Confidence
+		existing.Metadata = item.Metadata
+
+		if saveErr := database.DB.Save(&existing).Error; saveErr != nil {
+			return existing, false, saveErr
+		}
+
+		_ = database.DB.
+			Where("memory_item_id = ? AND target_id = ? AND user_id = ?", existing.ID, existing.TargetID, existing.UserID).
+			Delete(&models.TargetMemoryChunk{}).Error
+
+		if chunkErr := createMemoryChunks(existing); chunkErr != nil {
+			return existing, false, chunkErr
+		}
+
+		event := models.TargetMemoryEvent{
+			UserID:       existing.UserID,
+			TargetID:     existing.TargetID,
+			EventType:    models.TargetMemoryEventUpdated,
+			SourceType:   existing.SourceType,
+			SourceID:     existing.SourceID,
+			MemoryItemID: &existing.ID,
+			AfterJSON: memoryJSON(map[string]interface{}{
+				"id":          existing.ID,
+				"title":       existing.Title,
+				"memory_type": existing.MemoryType,
+				"source_hash": existing.SourceHash,
+			}, "{}"),
+			Metadata: memoryJSON(map[string]interface{}{
+				"updated_by": "target-memory-ingest-v1",
+			}, "{}"),
+		}
+		_ = database.DB.Create(&event).Error
+
+		return existing, false, nil
+	}
+
+	if err := database.DB.Create(&item).Error; err != nil {
+		return item, false, err
+	}
+
+	event := models.TargetMemoryEvent{
+		UserID:       item.UserID,
+		TargetID:     item.TargetID,
+		EventType:    models.TargetMemoryEventCreated,
+		SourceType:   item.SourceType,
+		SourceID:     item.SourceID,
+		MemoryItemID: &item.ID,
+		AfterJSON: memoryJSON(map[string]interface{}{
+			"id":          item.ID,
+			"title":       item.Title,
+			"memory_type": item.MemoryType,
+			"source_hash": item.SourceHash,
+		}, "{}"),
+		Metadata: memoryJSON(map[string]interface{}{
+			"created_by": "target-memory-ingest-v1",
+		}, "{}"),
+	}
+	_ = database.DB.Create(&event).Error
+
+	if err := createMemoryChunks(item); err != nil {
+		return item, true, err
+	}
+
+	return item, true, nil
+}
+
+func IngestTargetMemory(c *fiber.Ctx) error {
+	targetID, err := parseUintParam(c, "id")
+	if err != nil {
+		return err
+	}
+
+	user, target, err := targetMemoryOwner(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	var req ingestTargetMemoryRequest
+	_ = c.BodyParser(&req)
+
+	includeAssets := boolDefault(req.IncludeAssets, true)
+	includeURLs := boolDefault(req.IncludeURLs, true)
+	includeFindings := boolDefault(req.IncludeFindings, true)
+	includeBugTestResults := boolDefault(req.IncludeBugTestResults, true)
+
+	created := 0
+	updated := 0
+	items := make([]models.TargetMemoryItem, 0)
+
+	targetContent := strings.Join([]string{
+		"Target overview:",
+		"Name: " + target.Name,
+		"Root domain: " + target.RootDomain,
+		"Description: " + target.Description,
+		"Status: " + target.Status,
+		"Current phase: " + target.CurrentPhase,
+		"Scan modules: " + target.ScanModules,
+		"In scope: " + strconv.FormatBool(target.InScope),
+		"Tool flags:",
+		"- alterx=" + strconv.FormatBool(target.UseAlterx),
+		"- gau=" + strconv.FormatBool(target.UseGau),
+		"- katana=" + strconv.FormatBool(target.UseKatana),
+		"- virustotal=" + strconv.FormatBool(target.UseVirusTotal),
+		"- nuclei=" + strconv.FormatBool(target.UseNuclei),
+		"- portscan=" + strconv.FormatBool(target.UsePortscan),
+		"This memory item is a compact target overview for the RAG-backed LLM Pentest Operator.",
+	}, "\n")
+
+	targetItem := models.TargetMemoryItem{
+		UserID:     user.ID,
+		TargetID:   targetID,
+		SourceType: models.TargetMemorySourceTarget,
+		SourceID:   &target.ID,
+		MemoryType: models.TargetMemoryTypeOverview,
+		Title:      "Target overview: " + target.Name,
+		Content:    targetContent,
+		Summary:    "Target " + target.Name + " on " + target.RootDomain + " is " + target.Status + " / " + target.CurrentPhase + ".",
+		Tags:       memoryJSON([]string{"target", "overview", "operator"}, "[]"),
+		Importance: 90,
+		Confidence: 90,
+		SourceHash: memoryHash("target_overview", target.RootDomain, target.Name, target.Status, target.CurrentPhase),
+		Metadata: memoryJSON(map[string]interface{}{
+			"ingest_version": "target-memory-ingest-v1",
+			"root_domain":    target.RootDomain,
+			"status":         target.Status,
+			"current_phase":  target.CurrentPhase,
+			"in_scope":       target.InScope,
+		}, "{}"),
+	}
+
+	row, wasCreated, err := upsertTargetMemoryItem(targetItem)
+	if err != nil {
+		return err
+	}
+	if wasCreated {
+		created++
+	} else {
+		updated++
+	}
+	items = append(items, row)
+
+	if includeAssets {
+		var totalAssets int64
+		var liveAssets int64
+		_ = database.DB.Model(&models.Asset{}).Where("target_id = ?", targetID).Count(&totalAssets).Error
+		_ = database.DB.Model(&models.Asset{}).Where("target_id = ? AND is_live = ?", targetID, true).Count(&liveAssets).Error
+
+		topAssets := make([]models.Asset, 0)
+		_ = database.DB.
+			Where("target_id = ? AND is_live = ?", targetID, true).
+			Order("status_code DESC, id DESC").
+			Limit(15).
+			Find(&topAssets).Error
+
+		lines := []string{
+			"Live asset summary:",
+			"Total assets: " + strconv.FormatInt(totalAssets, 10),
+			"Live assets: " + strconv.FormatInt(liveAssets, 10),
+			"Representative live assets:",
+		}
+		for _, asset := range topAssets {
+			line := "- " + asset.Value +
+				" status=" + strconv.Itoa(asset.StatusCode) +
+				" final_url=" + asset.FinalURL +
+				" title=" + asset.Title +
+				" web_server=" + asset.WebServer +
+				" tech=" + asset.Technologies
+			lines = append(lines, line)
+		}
+
+		item := models.TargetMemoryItem{
+			UserID:     user.ID,
+			TargetID:   targetID,
+			SourceType: models.TargetMemorySourceAsset,
+			MemoryType: models.TargetMemoryTypeAttackSurface,
+			Title:      "Live asset summary",
+			Content:    strings.Join(lines, "\n"),
+			Summary:    "Target has " + strconv.FormatInt(liveAssets, 10) + " live assets out of " + strconv.FormatInt(totalAssets, 10) + " discovered assets.",
+			Tags:       memoryJSON([]string{"assets", "subdomains", "attack_surface", "operator"}, "[]"),
+			Importance: 85,
+			Confidence: 85,
+			SourceHash: memoryHash("asset_summary", target.RootDomain, strconv.FormatInt(totalAssets, 10), strconv.FormatInt(liveAssets, 10)),
+			Metadata: memoryJSON(map[string]interface{}{
+				"ingest_version": "target-memory-ingest-v1",
+				"total_assets":   totalAssets,
+				"live_assets":    liveAssets,
+			}, "{}"),
+		}
+
+		row, wasCreated, err := upsertTargetMemoryItem(item)
+		if err != nil {
+			return err
+		}
+		if wasCreated {
+			created++
+		} else {
+			updated++
+		}
+		items = append(items, row)
+	}
+
+	if includeURLs {
+		var totalURLs int64
+		_ = database.DB.Model(&models.FoundURL{}).Where("target_id = ?", targetID).Count(&totalURLs).Error
+
+		urls := make([]models.FoundURL, 0)
+		_ = database.DB.
+			Where("target_id = ?", targetID).
+			Order("occurrence_count DESC, id DESC").
+			Limit(20).
+			Find(&urls).Error
+
+		lines := []string{
+			"URL inventory summary:",
+			"Total URLs: " + strconv.FormatInt(totalURLs, 10),
+			"Representative URLs:",
+		}
+		for _, u := range urls {
+			lines = append(lines, "- "+u.Value+" source="+u.Source+" occurrences="+strconv.Itoa(u.OccurrenceCount))
+		}
+
+		item := models.TargetMemoryItem{
+			UserID:     user.ID,
+			TargetID:   targetID,
+			SourceType: models.TargetMemorySourceURL,
+			MemoryType: models.TargetMemoryTypeEndpointNote,
+			Title:      "URL inventory summary",
+			Content:    strings.Join(lines, "\n"),
+			Summary:    "Target has " + strconv.FormatInt(totalURLs, 10) + " collected URLs for endpoint, parameter, and crawl planning.",
+			Tags:       memoryJSON([]string{"urls", "endpoints", "parameters", "operator"}, "[]"),
+			Importance: 82,
+			Confidence: 82,
+			SourceHash: memoryHash("url_summary", target.RootDomain, strconv.FormatInt(totalURLs, 10)),
+			Metadata: memoryJSON(map[string]interface{}{
+				"ingest_version": "target-memory-ingest-v1",
+				"total_urls":     totalURLs,
+			}, "{}"),
+		}
+
+		row, wasCreated, err := upsertTargetMemoryItem(item)
+		if err != nil {
+			return err
+		}
+		if wasCreated {
+			created++
+		} else {
+			updated++
+		}
+		items = append(items, row)
+	}
+
+	if includeFindings {
+		var totalFindings int64
+		_ = database.DB.Model(&models.Finding{}).Where("target_id = ?", targetID).Count(&totalFindings).Error
+
+		findings := make([]models.Finding, 0)
+		_ = database.DB.
+			Where("target_id = ?", targetID).
+			Order("severity DESC, id DESC").
+			Limit(15).
+			Find(&findings).Error
+
+		lines := []string{
+			"Finding summary:",
+			"Total findings: " + strconv.FormatInt(totalFindings, 10),
+			"Representative findings:",
+		}
+		for _, finding := range findings {
+			lines = append(lines, "- "+finding.Title+" severity="+finding.Severity+" category="+finding.Category+" status="+finding.Status+" source="+finding.SourceTool)
+		}
+
+		item := models.TargetMemoryItem{
+			UserID:     user.ID,
+			TargetID:   targetID,
+			SourceType: models.TargetMemorySourceFinding,
+			MemoryType: models.TargetMemoryTypeFindingEvidence,
+			Title:      "Finding summary",
+			Content:    strings.Join(lines, "\n"),
+			Summary:    "Target has " + strconv.FormatInt(totalFindings, 10) + " findings available for operator triage and evidence review.",
+			Tags:       memoryJSON([]string{"findings", "evidence", "triage", "operator"}, "[]"),
+			Importance: 78,
+			Confidence: 82,
+			SourceHash: memoryHash("finding_summary", target.RootDomain, strconv.FormatInt(totalFindings, 10)),
+			Metadata: memoryJSON(map[string]interface{}{
+				"ingest_version": "target-memory-ingest-v1",
+				"total_findings": totalFindings,
+			}, "{}"),
+		}
+
+		row, wasCreated, err := upsertTargetMemoryItem(item)
+		if err != nil {
+			return err
+		}
+		if wasCreated {
+			created++
+		} else {
+			updated++
+		}
+		items = append(items, row)
+	}
+
+	if includeBugTestResults {
+		var totalResults int64
+		_ = database.DB.Model(&models.BugTestResult{}).Where("target_id = ?", targetID).Count(&totalResults).Error
+
+		results := make([]models.BugTestResult, 0)
+		_ = database.DB.
+			Where("target_id = ?", targetID).
+			Order("id DESC").
+			Limit(15).
+			Find(&results).Error
+
+		lines := []string{
+			"Bug test result summary:",
+			"Total bug test results: " + strconv.FormatInt(totalResults, 10),
+			"Recent bug test results:",
+		}
+		for _, result := range results {
+			lines = append(lines, "- "+result.TestName+" type="+result.BugType+" status="+result.Status+" confidence="+result.Confidence+" severity_hint="+result.SeverityHint+" pattern_key="+result.PatternKey)
+		}
+
+		item := models.TargetMemoryItem{
+			UserID:     user.ID,
+			TargetID:   targetID,
+			SourceType: models.TargetMemorySourceBugTestResult,
+			MemoryType: models.TargetMemoryTypeTestResult,
+			Title:      "Bug test result summary",
+			Content:    strings.Join(lines, "\n"),
+			Summary:    "Target has " + strconv.FormatInt(totalResults, 10) + " bug test results available for iterative operator planning.",
+			Tags:       memoryJSON([]string{"bug_tests", "test_results", "operator"}, "[]"),
+			Importance: 80,
+			Confidence: 82,
+			SourceHash: memoryHash("bug_test_result_summary", target.RootDomain, strconv.FormatInt(totalResults, 10)),
+			Metadata: memoryJSON(map[string]interface{}{
+				"ingest_version":    "target-memory-ingest-v1",
+				"total_bug_results": totalResults,
+			}, "{}"),
+		}
+
+		row, wasCreated, err := upsertTargetMemoryItem(item)
+		if err != nil {
+			return err
+		}
+		if wasCreated {
+			created++
+		} else {
+			updated++
+		}
+		items = append(items, row)
+	}
+
+	event := models.TargetMemoryEvent{
+		UserID:    user.ID,
+		TargetID:  targetID,
+		EventType: "memory.ingested",
+		AfterJSON: memoryJSON(map[string]interface{}{
+			"created": created,
+			"updated": updated,
+			"total":   len(items),
+		}, "{}"),
+		Metadata: memoryJSON(map[string]interface{}{
+			"ingest_version": "target-memory-ingest-v1",
+		}, "{}"),
+	}
+	_ = database.DB.Create(&event).Error
+
+	return c.JSON(fiber.Map{
+		"status": "ok",
+		"data": fiber.Map{
+			"ingest_version": "target-memory-ingest-v1",
+			"created":        created,
+			"updated":        updated,
+			"items":          items,
 		},
 	})
 }
