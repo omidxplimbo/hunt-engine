@@ -124,6 +124,9 @@ func sanitizePlan(raw map[string]interface{}) *Plan {
 			if action.ActionType == "" || action.Title == "" {
 				continue
 			}
+			if !isAllowedOperatorActionType(action.ActionType) {
+				continue
+			}
 			if action.RiskLevel == "" {
 				action.RiskLevel = models.AgentActionRiskLow
 			}
@@ -137,6 +140,30 @@ func sanitizePlan(raw map[string]interface{}) *Plan {
 	}
 
 	return plan
+}
+
+func isAllowedOperatorActionType(actionType string) bool {
+	switch strings.TrimSpace(actionType) {
+	case models.AgentActionTypeRunCrawling,
+		models.AgentActionTypeRunNucleiProfile,
+		models.AgentActionTypeGenerateNucleiDraft,
+		models.AgentActionTypeRunJSIntelligence,
+		models.AgentActionTypeRunSafeBugTests,
+		models.AgentActionTypeReviewBugTestResults,
+		models.AgentActionTypePromoteBugTestResults,
+		models.AgentActionTypeInspectBugPatterns,
+		models.AgentActionTypeInspectBugPayloads,
+		models.AgentActionTypeDeepScanAsset,
+		models.AgentActionTypeReviewEndpoint,
+		models.AgentActionTypeGeneratePayload,
+		models.AgentActionTypeRunOWASPChecklist,
+		models.AgentActionTypeValidateFinding,
+		models.AgentActionTypeProposeSeverityChange,
+		models.AgentActionTypeGenerateReport:
+		return true
+	default:
+		return false
+	}
 }
 
 func buildContextFacts(targetContext map[string]interface{}, memoryContext map[string]interface{}) []string {
