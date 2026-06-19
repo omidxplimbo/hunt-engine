@@ -2,6 +2,9 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"time"
 
@@ -490,4 +493,403 @@ func CreateControlledTestRunFromAgentAction(target *models.Target, action *model
 	_ = database.DB.Create(&event).Error
 
 	return &run, nil
+}
+
+type executeControlledTestRunRequest struct {
+	Note      string `json:"note"`
+	TimeoutMS int    `json:"timeout_ms"`
+	MaxBytes  int64  `json:"max_bytes"`
+}
+
+type controlledHTTPProbeInput struct {
+	URL     string            `json:"url"`
+	Method  string            `json:"method"`
+	Headers map[string]string `json:"headers"`
+	Body    string            `json:"body"`
+}
+
+func normalizeControlledHTTPMethod(value string) string {
+	method := strings.ToUpper(strings.TrimSpace(value))
+	switch method {
+	case "", "GET":
+		return "GET"
+	case "HEAD":
+		return "HEAD"
+	case "POST":
+		return "POST"
+	default:
+		return ""
+	}
+}
+
+func controlledCleanString(value interface{}) string {
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case []byte:
+		return strings.TrimSpace(string(v))
+	case nil:
+		return ""
+	default:
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
+}
+
+func controlledBodyExcerpt(text string, max int) string {
+	if max <= 0 {
+		max = 2048
+	}
+	runes := []rune(text)
+	if len(runes) <= max {
+		return text
+	}
+	return string(runes[:max])
+}
+
+func executeControlledHTTPProbe(run *models.ControlledTestRun, uid uint, timeoutMS int, maxBytes int64) (*models.ControlledTestResult, map[string]interface{}, error) {
+	input := map[string]interface{}{}
+	if len(run.InputJSON) > 0 {
+		_ = json.Unmarshal(run.InputJSON, &input)
+	}
+
+	rawURL := strings.TrimSpace(controlledCleanString(input["url"]))
+	if rawURL == "" {
+		return nil, nil, fiber.NewError(fiber.StatusBadRequest, "http_probe input_json.url is required")
+	}
+	if !strings.HasPrefix(strings.ToLower(rawURL), "http://") && !strings.HasPrefix(strings.ToLower(rawURL), "https://") {
+		return nil, nil, fiber.NewError(fiber.StatusBadRequest, "http_probe url must be http or https")
+	}
+
+	method := normalizeControlledHTTPMethod(controlledCleanString(input["method"]))
+	if method == "" {
+		return nil, nil, fiber.NewError(fiber.StatusBadRequest, "unsupported http_probe method")
+	}
+
+	if timeoutMS <= 0 || timeoutMS > 30000 {
+		timeoutMS = 8000
+	}
+	if maxBytes <= 0 || maxBytes > 1024*1024 {
+		maxBytes = 256 * 1024
+	}
+
+	client := &http.Client{
+		Timeout: time.Duration(timeoutMS) * time.Millisecond,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+
+	var bodyReader io.Reader
+	if method == "POST" {
+		bodyReader = strings.NewReader(controlledCleanString(input["body"]))
+	}
+
+	req, err := http.NewRequest(method, rawURL, bodyReader)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	req.Header.Set("User-Agent", "HuntEngine-ControlledRuntime/1.0")
+	req.Header.Set("Accept", "*/*")
+
+	if headersRaw, ok := input["headers"].(map[string]interface{}); ok {
+		for key, value := range headersRaw {
+			key = strings.TrimSpace(key)
+			if key == "" {
+				continue
+			}
+			lower := strings.ToLower(key)
+			if lower == "host" || lower == "content-length" {
+				continue
+			}
+			req.Header.Set(key, controlledCleanString(value))
+		}
+	}
+
+	start := time.Now().UTC()
+	resp, err := client.Do(req)
+	durationMS := time.Since(start).Milliseconds()
+
+	requestJSON := map[string]interface{}{
+		"method":     method,
+		"url":        rawURL,
+		"headers":    req.Header,
+		"timeout_ms": timeoutMS,
+		"max_bytes":  maxBytes,
+	}
+
+	if err != nil {
+		result := models.ControlledTestResult{
+			UserID:        uid,
+			OwnerKey:      run.OwnerKey,
+			TargetID:      run.TargetID,
+			RunID:         run.ID,
+			AgentActionID: run.AgentActionID,
+			RuntimeType:   run.RuntimeType,
+			BugType:       "http_probe",
+			CheckKey:      "controlled.http_probe.v1",
+			URL:           rawURL,
+			Method:        method,
+			Status:        models.ControlledTestResultStatusInconclusive,
+			Confidence:    "low",
+			SeverityHint:  "info",
+			RequestJSON:   controlledJSON(requestJSON, "{}"),
+			ResponseJSON: controlledJSON(map[string]interface{}{
+				"error":       err.Error(),
+				"duration_ms": durationMS,
+			}, "{}"),
+			EvidenceJSON: controlledJSON(map[string]interface{}{
+				"proof":       "http request failed or was inconclusive",
+				"error":       err.Error(),
+				"duration_ms": durationMS,
+			}, "{}"),
+			Metadata: controlledJSON(map[string]interface{}{
+				"source": "controlled_http_probe_v1",
+			}, "{}"),
+		}
+		if createErr := database.DB.Create(&result).Error; createErr != nil {
+			return nil, nil, createErr
+		}
+		return &result, map[string]interface{}{
+			"status":      result.Status,
+			"duration_ms": durationMS,
+			"error":       err.Error(),
+		}, nil
+	}
+	defer resp.Body.Close()
+
+	limited := io.LimitReader(resp.Body, maxBytes)
+	bodyBytes, readErr := io.ReadAll(limited)
+	bodyText := string(bodyBytes)
+
+	headers := map[string][]string(resp.Header)
+	responseJSON := map[string]interface{}{
+		"status_code":    resp.StatusCode,
+		"status":         resp.Status,
+		"headers":        headers,
+		"body_excerpt":   controlledBodyExcerpt(bodyText, 4096),
+		"body_size":      len(bodyBytes),
+		"duration_ms":    durationMS,
+		"final_url":      resp.Request.URL.String(),
+		"content_type":   resp.Header.Get("Content-Type"),
+		"content_length": resp.ContentLength,
+	}
+	if readErr != nil {
+		responseJSON["read_error"] = readErr.Error()
+	}
+
+	status := models.ControlledTestResultStatusPassed
+	confidence := "medium"
+	classification := "http_response_observed"
+
+	cfMitigated := strings.TrimSpace(resp.Header.Get("Cf-Mitigated"))
+	serverHeader := strings.ToLower(strings.TrimSpace(resp.Header.Get("Server")))
+	isCloudflareChallenge := strings.EqualFold(cfMitigated, "challenge") ||
+		(strings.Contains(serverHeader, "cloudflare") && resp.StatusCode == http.StatusForbidden && strings.Contains(strings.ToLower(bodyText), "just a moment"))
+
+	if resp.StatusCode >= 500 || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests || isCloudflareChallenge {
+		status = models.ControlledTestResultStatusInconclusive
+		confidence = "low"
+		classification = "http_response_blocked_or_challenged"
+	}
+
+	evidence := map[string]interface{}{
+		"proof":                "controlled HTTP probe completed",
+		"classification":       classification,
+		"cloudflare_challenge": isCloudflareChallenge,
+		"cf_mitigated":         cfMitigated,
+		"status_code":          resp.StatusCode,
+		"duration_ms":          durationMS,
+		"final_url":            resp.Request.URL.String(),
+		"body_excerpt":         controlledBodyExcerpt(bodyText, 1200),
+		"headers_seen":         len(headers),
+	}
+
+	result := models.ControlledTestResult{
+		UserID:        uid,
+		OwnerKey:      run.OwnerKey,
+		TargetID:      run.TargetID,
+		RunID:         run.ID,
+		AgentActionID: run.AgentActionID,
+		RuntimeType:   run.RuntimeType,
+		BugType:       "http_probe",
+		CheckKey:      "controlled.http_probe.v1",
+		URL:           rawURL,
+		Method:        method,
+		Status:        status,
+		Confidence:    confidence,
+		SeverityHint:  "info",
+		RequestJSON:   controlledJSON(requestJSON, "{}"),
+		ResponseJSON:  controlledJSON(responseJSON, "{}"),
+		EvidenceJSON:  controlledJSON(evidence, "{}"),
+		MatcherJSON: controlledJSON(map[string]interface{}{
+			"matcher": "http_probe_completed",
+		}, "{}"),
+		Metadata: controlledJSON(map[string]interface{}{
+			"source": "controlled_http_probe_v1",
+		}, "{}"),
+	}
+
+	if err := database.DB.Create(&result).Error; err != nil {
+		return nil, nil, err
+	}
+
+	return &result, map[string]interface{}{
+		"status":       result.Status,
+		"status_code":  resp.StatusCode,
+		"duration_ms":  durationMS,
+		"body_size":    len(bodyBytes),
+		"final_url":    resp.Request.URL.String(),
+		"result_id":    result.ID,
+		"evidence_key": "controlled.http_probe.v1",
+	}, nil
+}
+
+func ExecuteTargetControlledTestRun(c *fiber.Ctx) error {
+	targetID, err := parseUintParam(c, "id")
+	if err != nil {
+		return err
+	}
+
+	user, target, ownerKey, err := controlledTestOwner(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	runID, err := parseControlledRunIDParam(c)
+	if err != nil {
+		return err
+	}
+
+	req := new(executeControlledTestRunRequest)
+	_ = c.BodyParser(req)
+
+	var run models.ControlledTestRun
+	if err := database.DB.
+		Where("id = ? AND target_id = ? AND owner_key = ?", runID, target.ID, ownerKey).
+		First(&run).Error; err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "controlled test run not found")
+	}
+
+	if run.Status != models.ControlledTestRunStatusQueued && run.Status != models.ControlledTestRunStatusRunning {
+		return fiber.NewError(fiber.StatusConflict, "controlled test run is not executable")
+	}
+
+	if run.RuntimeType != models.ControlledTestRuntimeHTTPProbe {
+		return fiber.NewError(fiber.StatusConflict, "controlled runtime worker for this runtime_type is not implemented yet")
+	}
+
+	now := time.Now().UTC()
+	_ = database.DB.Model(&models.ControlledTestRun{}).
+		Where("id = ?", run.ID).
+		Updates(map[string]interface{}{
+			"status":     models.ControlledTestRunStatusRunning,
+			"started_at": &now,
+		}).Error
+
+	startEvent := models.ControlledTestEvent{
+		UserID:    user.ID,
+		OwnerKey:  ownerKey,
+		TargetID:  target.ID,
+		RunID:     &run.ID,
+		EventType: models.ControlledTestEventStarted,
+		Metadata: controlledJSON(map[string]interface{}{
+			"source": "controlled_runtime_execute_api",
+			"note":   strings.TrimSpace(req.Note),
+		}, "{}"),
+	}
+	_ = database.DB.Create(&startEvent).Error
+
+	result, output, execErr := executeControlledHTTPProbe(&run, user.ID, req.TimeoutMS, req.MaxBytes)
+
+	completedAt := time.Now().UTC()
+	status := models.ControlledTestRunStatusCompleted
+	errorMessage := ""
+	if execErr != nil {
+		status = models.ControlledTestRunStatusFailed
+		errorMessage = execErr.Error()
+		output = map[string]interface{}{
+			"error": execErr.Error(),
+		}
+	}
+
+	resultCount := 0
+	if result != nil {
+		resultCount = 1
+		resultID := result.ID
+		event := models.ControlledTestEvent{
+			UserID:    user.ID,
+			OwnerKey:  ownerKey,
+			TargetID:  target.ID,
+			RunID:     &run.ID,
+			ResultID:  &resultID,
+			EventType: models.ControlledTestEventResultCreated,
+			AfterJSON: controlledJSON(map[string]interface{}{
+				"result_id":     result.ID,
+				"status":        result.Status,
+				"check_key":     result.CheckKey,
+				"severity_hint": result.SeverityHint,
+			}, "{}"),
+			Metadata: controlledJSON(map[string]interface{}{
+				"source": "controlled_runtime_execute_api",
+			}, "{}"),
+		}
+		_ = database.DB.Create(&event).Error
+	}
+
+	updates := map[string]interface{}{
+		"status":        status,
+		"completed_at":  &completedAt,
+		"attempt_count": 1,
+		"result_count":  resultCount,
+		"output_json": controlledJSON(map[string]interface{}{
+			"execution_enabled": true,
+			"runtime_type":      run.RuntimeType,
+			"worker":            "controlled-http-probe-v1",
+			"completed_at":      completedAt.Format(time.RFC3339),
+			"result":            output,
+		}, "{}"),
+		"error_message": errorMessage,
+	}
+
+	if err := database.DB.Model(&models.ControlledTestRun{}).
+		Where("id = ?", run.ID).
+		Updates(updates).Error; err != nil {
+		return err
+	}
+
+	finalEventType := models.ControlledTestEventCompleted
+	if status == models.ControlledTestRunStatusFailed {
+		finalEventType = models.ControlledTestEventFailed
+	}
+	finalEvent := models.ControlledTestEvent{
+		UserID:    user.ID,
+		OwnerKey:  ownerKey,
+		TargetID:  target.ID,
+		RunID:     &run.ID,
+		EventType: finalEventType,
+		AfterJSON: controlledJSON(map[string]interface{}{
+			"status":       status,
+			"result_count": resultCount,
+			"error":        errorMessage,
+		}, "{}"),
+		Metadata: controlledJSON(map[string]interface{}{
+			"source": "controlled_runtime_execute_api",
+		}, "{}"),
+	}
+	_ = database.DB.Create(&finalEvent).Error
+
+	_ = database.DB.First(&run, run.ID)
+
+	return c.JSON(fiber.Map{
+		"status": "ok",
+		"data": fiber.Map{
+			"run":    run,
+			"result": result,
+			"output": output,
+		},
+	})
 }
