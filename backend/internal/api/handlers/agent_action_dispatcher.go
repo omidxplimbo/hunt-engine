@@ -241,6 +241,36 @@ func DispatchTargetAgentAction(c *fiber.Ctx) error {
 		}
 	}
 
+	if !isHardBlockedDispatcherAction(row) && controlledRuntimeTypeForAgentAction(row.ActionType) != "" {
+		run, runErr := CreateControlledTestRunFromAgentAction(&target, &row, uid)
+		if runErr != nil {
+			preview["controlled_runtime"] = map[string]interface{}{
+				"attempted": true,
+				"error":     runErr.Error(),
+			}
+			updateFields["output_json"] = agentActionJSON(preview)
+			updateFields["error_message"] = runErr.Error()
+		} else {
+			preview["execution_enabled"] = true
+			preview["executed"] = true
+			preview["hard_blocked"] = false
+			preview["reason"] = "approved action converted into queued controlled runtime run"
+			preview["controlled_runtime"] = map[string]interface{}{
+				"attempted":              true,
+				"controlled_test_run_id": run.ID,
+				"runtime_type":           run.RuntimeType,
+				"runtime_status":         run.Status,
+				"real_execution_pending": true,
+				"evidence_capture":       true,
+				"manual_review":          true,
+			}
+			updateFields["output_json"] = agentActionJSON(preview)
+			updateFields["error_message"] = ""
+			updateFields["status"] = models.AgentActionStatusExecuted
+			updateFields["executed_at"] = &now
+		}
+	}
+
 	if !isHardBlockedDispatcherAction(row) {
 		var bridgeOutput map[string]interface{}
 

@@ -371,3 +371,123 @@ func CreateTargetControlledTestRun(c *fiber.Ctx) error {
 		"data":   row,
 	})
 }
+
+// controlledRuntimeTypeForAgentAction maps approved Agent Actions to controlled runtime types.
+// It creates runtime jobs, not direct chat execution.
+func controlledRuntimeTypeForAgentAction(actionType string) string {
+	switch normalizeAgentActionType(actionType) {
+	case models.AgentActionTypeRunOWASPChecklist:
+		return models.ControlledTestRuntimeOWASPValidation
+	case models.AgentActionTypeValidateFinding:
+		return models.ControlledTestRuntimeExploitValidation
+	case models.AgentActionTypeReviewEndpoint, models.AgentActionTypeDeepScanAsset:
+		return models.ControlledTestRuntimeHTTPProbe
+	default:
+		return ""
+	}
+}
+
+// CreateControlledTestRunFromAgentAction converts an approved AgentAction into a queued
+// controlled runtime run. Real HTTP/probe/exploit execution is intentionally not performed here;
+// execution will be handled by the controlled runtime worker in later v3.12 steps.
+func CreateControlledTestRunFromAgentAction(target *models.Target, action *models.AgentAction, uid uint) (*models.ControlledTestRun, error) {
+	if target == nil || action == nil {
+		return nil, fiber.NewError(fiber.StatusBadRequest, "target and action are required")
+	}
+
+	runtimeType := controlledRuntimeTypeForAgentAction(action.ActionType)
+	if runtimeType == "" {
+		return nil, fiber.NewError(fiber.StatusBadRequest, "agent action is not controlled-runtime compatible")
+	}
+
+	if action.OwnerKey == "" {
+		return nil, fiber.NewError(fiber.StatusBadRequest, "agent action owner scope is missing")
+	}
+
+	input := map[string]interface{}{}
+	if len(action.InputJSON) > 0 {
+		_ = json.Unmarshal(action.InputJSON, &input)
+	}
+	input["source"] = "agent_action_dispatch"
+	input["runtime_type"] = runtimeType
+	input["owner_key"] = action.OwnerKey
+	input["agent_action_id"] = action.ID
+	input["action_type"] = action.ActionType
+
+	policyCheck := map[string]interface{}{}
+	if len(action.PolicyCheckJSON) > 0 {
+		_ = json.Unmarshal(action.PolicyCheckJSON, &policyCheck)
+	}
+	policyCheck["runtime_version"] = "controlled-test-runtime-v1"
+	policyCheck["controlled_runtime_created"] = true
+	policyCheck["execution_enabled"] = false
+	policyCheck["real_execution_pending"] = true
+	policyCheck["reason"] = "approved action converted into queued controlled runtime run; worker execution will be enabled in later v3.12 steps"
+	policyCheck["required_controls"] = []string{
+		"scope_check",
+		"target_policy_check",
+		"explicit_approval",
+		"rate_limit",
+		"audit_log",
+		"evidence_capture",
+	}
+
+	now := time.Now().UTC()
+	run := models.ControlledTestRun{
+		UserID:          uid,
+		OwnerKey:        action.OwnerKey,
+		TargetID:        target.ID,
+		AgentActionID:   &action.ID,
+		RuntimeType:     runtimeType,
+		Title:           action.Title,
+		Description:     action.Description,
+		Status:          models.ControlledTestRunStatusQueued,
+		PolicyStatus:    action.PolicyStatus,
+		RiskLevel:       action.RiskLevel,
+		SafetyLevel:     action.SafetyLevel,
+		TestLevel:       action.TestLevel,
+		AutonomyLevel:   action.AutonomyLevel,
+		InputJSON:       controlledJSON(input, "{}"),
+		PolicyCheckJSON: controlledJSON(policyCheck, "{}"),
+		OutputJSON: controlledJSON(map[string]interface{}{
+			"created_at":        now.Format(time.RFC3339),
+			"execution_enabled": false,
+			"queued":            true,
+			"runtime_type":      runtimeType,
+			"agent_action_id":   action.ID,
+			"next_step":         "controlled runtime worker execution",
+		}, "{}"),
+	}
+
+	if run.RiskLevel == "" {
+		run.RiskLevel = models.AgentActionRiskMedium
+	}
+	if run.PolicyStatus == "" {
+		run.PolicyStatus = models.AgentActionPolicyStatusWarning
+	}
+
+	if err := database.DB.Create(&run).Error; err != nil {
+		return nil, err
+	}
+
+	event := models.ControlledTestEvent{
+		UserID:    uid,
+		OwnerKey:  action.OwnerKey,
+		TargetID:  target.ID,
+		RunID:     &run.ID,
+		EventType: models.ControlledTestEventCreated,
+		AfterJSON: controlledJSON(map[string]interface{}{
+			"id":              run.ID,
+			"runtime_type":    run.RuntimeType,
+			"status":          run.Status,
+			"agent_action_id": action.ID,
+		}, "{}"),
+		Metadata: controlledJSON(map[string]interface{}{
+			"source":            "agent_action_dispatch",
+			"execution_enabled": false,
+		}, "{}"),
+	}
+	_ = database.DB.Create(&event).Error
+
+	return &run, nil
+}
