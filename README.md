@@ -6,11 +6,11 @@ The platform combines deterministic scanner logic with structured evidence, acco
 
 ---
 
-## Current release focus: v3.10.0
+## Current release focus: v3.11.0
 
-v3.9.0 introduces the Pattern/Payload Pack Foundation and closes the current pre-operator registry workstream. It prepares Hunt Engine for the new RAG-backed LLM Pentest Operator roadmap while keeping execution policy-aware, approval-gated, and safe-by-default.
+v3.11.0 introduces the LLM Pentest Operator MVP. It connects Attack Surface Chat to the account-scoped LLM provider, builds owner-scoped RAG/operator context from target memory, and produces context-grounded, approval-gated pentest action proposals.
 
-The main strategic shift in this release is that the Analysis workspace is being refocused toward a professional Operator Workspace: RAG-backed target memory, LLM-driven Attack Surface Chat, OWASP-aware test planning, approval-gated real testing, evidence feedback, finding labeling, and report drafting.
+The main strategic shift in this release is that the Analysis workspace is now moving from standalone analysis panels toward a professional Operator Workspace: RAG-backed target memory, LLM-driven Attack Surface Chat, OWASP-aware planning, approval-gated controlled testing, evidence feedback, finding labeling, and report drafting.
 
 ### Core v3.9.0 scope
 
@@ -50,6 +50,27 @@ The main strategic shift in this release is that the Analysis workspace is being
   - The roadmap deprecates standalone Analysis features that do not directly support RAG, LLM operator workflows, real OWASP-style testing, evidence feedback, finding promotion, and report drafting.
   - Future development prioritizes per-target/project RAG memory, LLM-powered Attack Surface Chat, approved real test execution, iterative pentest loops, and controlled operator runtime.
 
+
+### v3.11.0 - LLM Pentest Operator MVP
+
+v3.11.0 connects the RAG memory foundation to a real LLM-backed Pentest Operator. The operator uses target context and memory to produce grounded, approval-gated action plans while preserving deterministic guardrails, owner/account isolation, auditability, and safe-by-default execution controls.
+
+Delivered in v3.11.0:
+
+- Account-scoped LLM Operator Planning Foundation for Attack Surface Chat.
+- RAG-backed operator context builder using target metadata, policy, assets, URLs, findings, bug test results, and memory.
+- Context-grounded LLM responses that cite concrete target facts such as asset counts, live assets, URL inventory, findings, bug test results, policy limits, and representative evidence.
+- Owner-scoped commercial isolation for Target Memory, Target Memory Chunks, Target Memory Events, and Agent Actions.
+- Admin users share the `admin` owner scope while non-admin users use `user:<id>` owner scope.
+- `user_id` / `created_by_user_id` remain actor/audit fields, while `owner_key` is the account/tenant boundary.
+- LLM-generated action proposals are allowlist-filtered and always approval-gated.
+- Unknown or dangerous action types from the LLM are dropped before action creation.
+- Duplicate agent action handling was hardened so chat-created actions do not incorrectly reuse old actions from unrelated chat sessions.
+- Attack Surface Chat UI now surfaces LLM Assisted/Fallback state, provider/model, operator mode, recommended next steps, proposed actions, guardrails, and fallback errors.
+- Operator prompt wording now supports future controlled validation/exploitation through approved Agent Actions and controlled runtime execution, while blocking direct chat execution and uncontrolled payload execution.
+- Small operator smoke/unit tests verify context fact extraction, grounded summaries, evidence_basis injection, action allowlisting, approval-gated behavior, and prompt guardrail wording.
+
+v3.11.0 is still a planning/proposal MVP. It does not execute tests directly inside chat. Real validation/exploitation must go through target scope checks, target policy, approval gates, rate limits, audit logs, and controlled runtime support.
 
 ### v3.10.0 - RAG Memory Foundation
 
@@ -91,7 +112,7 @@ Pattern and payload packs are metadata/control foundations. Real operator-driven
 Hunt Engine is being refocused toward a real, controlled, RAG-backed LLM Pentest Operator:
 
 - `v3.10.0`: RAG Memory Foundation.
-- `v3.11.0`: LLM Pentest Operator MVP.
+- `v3.11.0`: LLM Pentest Operator MVP. ✅
 - `v3.12.0`: Approved Real OWASP Test Execution.
 - `v4.0.0`: Iterative Pentest Loop v1.
 - `v4.1.0`: Controlled Operator Runtime Expansion.
@@ -812,14 +833,14 @@ Use Hunt Engine only on assets and programs where you have authorization. Config
 
 
 
-### Next: v3.11.0 - LLM Pentest Operator MVP
+### Next: v3.12.0 - Approved Real OWASP Test Execution
 
-The next release connects the RAG memory foundation to a real LLM-backed Operator:
+The next release should connect approved Operator actions to controlled real testing primitives:
 
-- Account-scoped LLM provider/model selection.
-- RAG-backed operator context builder.
-- Broad vulnerability objective planning across low to critical findings.
-- Interactive clarification questions when context, scope, policy, or approval state is ambiguous.
-- Approval-aware agent action proposals.
-- Small low-token LLM smoke tests for context use, structured JSON output, and guardrail behavior.
+- Approval-gated safe HTTP/probe runtime.
+- Policy/scope/test-level checks before execution.
+- Controlled OWASP-style validation for safe bug classes.
+- Evidence capture for each test attempt.
+- RAG memory updates after test results, approvals, rejections, failed hypotheses, and useful findings.
+- Continued separation between chat planning, approval workflow, and controlled runtime execution.
 
