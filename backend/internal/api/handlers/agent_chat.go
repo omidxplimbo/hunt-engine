@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/ai/operator"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/auditlog"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
@@ -385,6 +387,131 @@ func planActionsFromChat(content string) ([]plannedChatAction, string) {
 	return actions, response
 }
 
+func buildAgentChatMemoryContext(targetID uint, uid uint) map[string]interface{} {
+	items := make([]models.TargetMemoryItem, 0)
+	_ = database.DB.
+		Where("target_id = ? AND user_id = ?", targetID, uid).
+		Order("importance desc, updated_at desc").
+		Limit(8).
+		Find(&items).Error
+
+	memories := make([]map[string]interface{}, 0, len(items))
+	itemIDs := make([]uint, 0, len(items))
+	for _, item := range items {
+		itemIDs = append(itemIDs, item.ID)
+		memories = append(memories, map[string]interface{}{
+			"id":          item.ID,
+			"memory_type": item.MemoryType,
+			"source_type": item.SourceType,
+			"title":       item.Title,
+			"summary":     item.Summary,
+			"tags":        item.Tags,
+			"importance":  item.Importance,
+			"confidence":  item.Confidence,
+			"updated_at":  item.UpdatedAt,
+		})
+	}
+
+	chunks := make([]models.TargetMemoryChunk, 0)
+	if len(itemIDs) > 0 {
+		_ = database.DB.
+			Where("target_id = ? AND user_id = ? AND memory_item_id IN ?", targetID, uid, itemIDs).
+			Order("token_count asc, updated_at desc").
+			Limit(10).
+			Find(&chunks).Error
+	}
+
+	chunkOut := make([]map[string]interface{}, 0, len(chunks))
+	for _, chunk := range chunks {
+		text := strings.TrimSpace(chunk.ChunkText)
+		if len(text) > 900 {
+			text = text[:900]
+		}
+		chunkOut = append(chunkOut, map[string]interface{}{
+			"id":             chunk.ID,
+			"memory_item_id": chunk.MemoryItemID,
+			"chunk_index":    chunk.ChunkIndex,
+			"chunk_text":     text,
+			"token_count":    chunk.TokenCount,
+		})
+	}
+
+	return map[string]interface{}{
+		"context_version": "agent-chat-memory-context-v1",
+		"memory_count":    len(memories),
+		"memories":        memories,
+		"chunks":          chunkOut,
+	}
+}
+
+func convertOperatorPlanActions(plan *operator.Plan) []plannedChatAction {
+	if plan == nil {
+		return nil
+	}
+
+	out := make([]plannedChatAction, 0, len(plan.Actions))
+	for _, action := range plan.Actions {
+		input := action.InputJSON
+		if input == nil {
+			input = map[string]interface{}{}
+		}
+		input["llm_assisted"] = true
+		input["operator_prompt_version"] = plan.OperatorPromptVersion
+
+		out = append(out, plannedChatAction{
+			Request: proposeAgentActionRequest{
+				ActionType:       action.ActionType,
+				Title:            action.Title,
+				Description:      action.Description,
+				RiskLevel:        action.RiskLevel,
+				SafetyLevel:      action.SafetyLevel,
+				TestLevel:        action.TestLevel,
+				InputJSON:        input,
+				RequestedByAgent: boolPtr(true),
+				RequiresApproval: boolPtr(true),
+			},
+			Reason: action.Reason,
+		})
+	}
+
+	return out
+}
+
+func buildOperatorAssistantText(plan *operator.Plan) string {
+	if plan == nil {
+		return ""
+	}
+
+	parts := []string{}
+	if strings.TrimSpace(plan.ResponseSummary) != "" {
+		parts = append(parts, strings.TrimSpace(plan.ResponseSummary))
+	}
+	if len(plan.ClarifyingQuestions) > 0 {
+		parts = append(parts, "Clarifying questions:")
+		for _, q := range plan.ClarifyingQuestions {
+			if q = strings.TrimSpace(q); q != "" {
+				parts = append(parts, "- "+q)
+			}
+		}
+	}
+	if len(plan.RecommendedNextSteps) > 0 {
+		parts = append(parts, "Recommended next steps:")
+		for _, step := range plan.RecommendedNextSteps {
+			if step = strings.TrimSpace(step); step != "" {
+				parts = append(parts, "- "+step)
+			}
+		}
+	}
+	if len(plan.Actions) > 0 {
+		parts = append(parts, fmt.Sprintf("I proposed %d approval-gated operator action(s). Review and approve before dispatch.", len(plan.Actions)))
+	}
+
+	if len(parts) == 0 {
+		return "I prepared an approval-gated operator plan from the available target context and memory."
+	}
+	return strings.Join(parts, "\n")
+}
+
 func boolPtr(value bool) *bool {
 	return &value
 }
@@ -693,8 +820,38 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 		return err
 	}
 
-	context := buildAgentChatContext(*target)
+	chatContext := buildAgentChatContext(*target)
+	memoryContext := buildAgentChatMemoryContext(target.ID, uid)
+
+	_, ownerKey, _, _, ownerErr := currentAccountOwner(c)
+	if ownerErr != nil {
+		return ownerErr
+	}
+
 	plannedActions, assistantText := planActionsFromChat(content)
+	var operatorPlan *operator.Plan
+	operatorMode := "deterministic_fallback"
+	operatorError := ""
+
+	if plan, err := operator.GeneratePlan(context.Background(), operator.PlanRequest{
+		TargetID:      target.ID,
+		UserID:        uid,
+		OwnerKey:      ownerKey,
+		UserMessage:   content,
+		TargetContext: chatContext,
+		MemoryContext: memoryContext,
+	}); err == nil && plan != nil {
+		llmActions := convertOperatorPlanActions(plan)
+		if len(llmActions) > 0 {
+			plannedActions = llmActions
+			assistantText = buildOperatorAssistantText(plan)
+			operatorPlan = plan
+			operatorMode = "llm_operator_plan"
+		}
+	} else if err != nil {
+		operatorError = err.Error()
+	}
+
 	now := time.Now().UTC()
 
 	var userMessage models.AgentChatMessage
@@ -744,10 +901,17 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 			Content:         assistantText,
 			InputJSON: chatJSON(map[string]interface{}{
 				"user_message_id": userMessage.ID,
-				"context":         context,
+				"context":         chatContext,
+				"memory_context":  memoryContext,
+				"operator_mode":   operatorMode,
+				"operator_error":  operatorError,
 			}),
 			OutputJSON: chatJSON(map[string]interface{}{
 				"action_ids":        actionIDs,
+				"operator_mode":     operatorMode,
+				"operator_plan":     operatorPlan,
+				"operator_error":    operatorError,
+				"llm_assisted":      operatorMode == "llm_operator_plan",
 				"actions_created":   len(actionIDs),
 				"execution_enabled": false,
 				"guardrails": []string{

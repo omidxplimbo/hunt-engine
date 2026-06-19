@@ -152,6 +152,192 @@ func configFromRow(ownerKey, provider, displayName, apiKey, baseURL, model strin
 	}, nil
 }
 
+type JSONRequest struct {
+	SystemPrompt    string
+	UserPayload     map[string]interface{}
+	Temperature     float64
+	MaxTokens       int
+	ResponseVersion string
+}
+
+func GenerateJSON(ctx context.Context, cfg *Config, req JSONRequest) (map[string]interface{}, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("LLM config is required")
+	}
+
+	systemPrompt := strings.TrimSpace(req.SystemPrompt)
+	if systemPrompt == "" {
+		return nil, fmt.Errorf("system prompt is required")
+	}
+
+	if req.UserPayload == nil {
+		req.UserPayload = map[string]interface{}{}
+	}
+
+	if req.MaxTokens <= 0 {
+		req.MaxTokens = 1200
+	}
+	if req.Temperature < 0 {
+		req.Temperature = 0
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	userJSON, _ := json.Marshal(req.UserPayload)
+
+	var out map[string]interface{}
+	var err error
+
+	if cfg.Provider == "gemini" {
+		out, err = generateGeminiJSON(ctx, cfg, systemPrompt, string(userJSON), req.Temperature, req.MaxTokens)
+	} else {
+		out, err = generateOpenAICompatibleJSON(ctx, cfg, systemPrompt, string(userJSON), req.Temperature, req.MaxTokens)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+	if out == nil {
+		return nil, fmt.Errorf("LLM returned empty JSON object")
+	}
+
+	out["llm_provider"] = cfg.Provider
+	out["llm_model"] = cfg.Model
+	if strings.TrimSpace(req.ResponseVersion) != "" {
+		out["response_version"] = strings.TrimSpace(req.ResponseVersion)
+	}
+
+	return out, nil
+}
+
+func generateOpenAICompatibleJSON(ctx context.Context, cfg *Config, systemPrompt string, userJSON string, temperature float64, maxTokens int) (map[string]interface{}, error) {
+	reqBody := chatRequest{
+		Model:       cfg.Model,
+		Temperature: temperature,
+		MaxTokens:   maxTokens,
+		Messages: []chatMessage{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userJSON},
+		},
+		ResponseFormat: map[string]interface{}{"type": "json_object"},
+	}
+
+	rawReq, _ := json.Marshal(reqBody)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.BaseURL+"/chat/completions", bytes.NewReader(rawReq))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	if cfg.Provider == "openrouter" {
+		req.Header.Set("HTTP-Referer", "https://hunt-engine.local")
+		req.Header.Set("X-Title", "Hunt Engine")
+	}
+
+	client := http.Client{Timeout: 65 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("LLM request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var parsed chatResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, fmt.Errorf("decode LLM response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("LLM API returned status %d: %v", resp.StatusCode, parsed.Error)
+	}
+
+	if len(parsed.Choices) == 0 || strings.TrimSpace(parsed.Choices[0].Message.Content) == "" {
+		return nil, fmt.Errorf("LLM API returned empty content")
+	}
+
+	return decodeJSONMap(parsed.Choices[0].Message.Content)
+}
+
+func generateGeminiJSON(ctx context.Context, cfg *Config, systemPrompt string, userJSON string, temperature float64, maxTokens int) (map[string]interface{}, error) {
+	endpoint := fmt.Sprintf(
+		"%s/models/%s:generateContent?key=%s",
+		strings.TrimRight(cfg.BaseURL, "/"),
+		url.PathEscape(cfg.Model),
+		url.QueryEscape(cfg.APIKey),
+	)
+
+	reqBody := geminiRequest{
+		SystemInstruction: &geminiContent{
+			Parts: []geminiPart{{Text: systemPrompt}},
+		},
+		Contents: []geminiContent{
+			{
+				Role: "user",
+				Parts: []geminiPart{{
+					Text: userJSON + "\n\nReturn valid JSON only. Do not wrap it in markdown.",
+				}},
+			},
+		},
+		GenerationConfig: map[string]interface{}{
+			"temperature":      temperature,
+			"maxOutputTokens":  maxTokens,
+			"responseMimeType": "application/json",
+		},
+	}
+
+	rawReq, _ := json.Marshal(reqBody)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(rawReq))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	client := http.Client{Timeout: 65 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("Gemini request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var parsed geminiResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, fmt.Errorf("decode Gemini response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("Gemini API returned status %d: %v", resp.StatusCode, parsed.Error)
+	}
+
+	if len(parsed.Candidates) == 0 || len(parsed.Candidates[0].Content.Parts) == 0 {
+		return nil, fmt.Errorf("Gemini API returned empty content")
+	}
+
+	content := strings.TrimSpace(parsed.Candidates[0].Content.Parts[0].Text)
+	if content == "" {
+		return nil, fmt.Errorf("Gemini API returned empty text")
+	}
+
+	return decodeJSONMap(content)
+}
+
+func decodeJSONMap(content string) (map[string]interface{}, error) {
+	content = strings.TrimSpace(content)
+	content = strings.TrimPrefix(content, "```json")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	content = strings.TrimSpace(content)
+
+	var out map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &out); err != nil {
+		return nil, fmt.Errorf("LLM returned non-JSON response: %w", err)
+	}
+	return out, nil
+}
+
 func GenerateTargetNarrative(ctx context.Context, cfg *Config, snapshot map[string]interface{}, deterministicOutput map[string]interface{}) (map[string]interface{}, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("LLM config is required")
