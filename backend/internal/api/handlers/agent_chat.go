@@ -777,6 +777,9 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": txErr.Error()})
 	}
 
+	_ = maybeCreateChatMemoryFromMessage(uid, target, session.ID, userMessage, len(createdActions))
+	_ = maybeCreateChatMemoryFromMessage(uid, target, session.ID, assistantMessage, len(createdActions))
+
 	entityID := assistantMessage.ID
 	_ = auditlog.Record(auditlog.Entry{
 		ActorUserID: &uid,
@@ -814,4 +817,147 @@ func mergeChatActionInput(base map[string]interface{}, extra map[string]interfac
 		out[k] = v
 	}
 	return out
+}
+
+func classifyChatMemory(content string, actionCount int) (bool, string, []string, int, int, string) {
+	text := strings.ToLower(strings.TrimSpace(content))
+	if text == "" {
+		return false, "", nil, 0, 0, ""
+	}
+
+	tags := []string{"chat", "operator"}
+	importance := 65
+	confidence := 70
+	reason := "chat message may help future operator planning"
+	memoryType := models.TargetMemoryTypeUserDecision
+
+	hasAny := func(words ...string) bool {
+		for _, word := range words {
+			if strings.Contains(text, word) {
+				return true
+			}
+		}
+		return false
+	}
+
+	switch {
+	case hasAny("approve", "approved", "yes", "ok", "اوکی", "تایید", "بله", "مجاز", "اجازه"):
+		tags = append(tags, "approval", "decision")
+		importance = 88
+		confidence = 82
+		reason = "user approval or authorization decision"
+		memoryType = models.TargetMemoryTypeUserDecision
+		return true, memoryType, tags, importance, confidence, reason
+
+	case hasAny("reject", "rejected", "deny", "denied", "no", "نه", "رد", "اجازه نده", "انجام نده"):
+		tags = append(tags, "rejection", "decision")
+		importance = 88
+		confidence = 82
+		reason = "user rejection or denial decision"
+		memoryType = models.TargetMemoryTypeUserDecision
+		return true, memoryType, tags, importance, confidence, reason
+
+	case hasAny("scope", "out of scope", "in scope", "policy", "rate limit", "destructive", "production", "lab", "محدوده", "اسکوپ", "پالیسی", "سیاست", "مخرب", "نرخ"):
+		tags = append(tags, "policy", "scope", "constraint")
+		importance = 92
+		confidence = 86
+		reason = "scope or policy constraint for future testing"
+		memoryType = models.TargetMemoryTypePolicyConstraint
+		return true, memoryType, tags, importance, confidence, reason
+
+	case hasAny("test xss", "xss", "ssrf", "idor", "bola", "sqli", "sql injection", "nosql", "ssti", "path traversal", "lfi", "rfi", "file upload", "csrf", "cors", "open redirect", "takeover", "secret", "secrets", "cve", "misconfig", "باگ", "آسیب", "نفوذ"):
+		tags = append(tags, "objective", "vulnerability_hypothesis")
+		importance = 84
+		confidence = 78
+		reason = "user selected or discussed a vulnerability testing objective"
+		memoryType = models.TargetMemoryTypeVulnerabilityHypothesis
+		return true, memoryType, tags, importance, confidence, reason
+
+	case hasAny("crawl", "crawling", "recon", "discover", "subdomain", "url", "endpoint", "js", "javascript", "کرال", "ساب دامین", "یوارال", "اندپوینت"):
+		tags = append(tags, "recon", "crawl", "attack_surface")
+		importance = 80
+		confidence = 78
+		reason = "recon/crawling or attack-surface expansion decision"
+		memoryType = models.TargetMemoryTypeEndpointNote
+		return true, memoryType, tags, importance, confidence, reason
+
+	case hasAny("confirmed", "validated", "false positive", "not exploitable", "manual validation", "evidence", "یافتم", "تایید شد", "فالس", "ولید", "شواهد"):
+		tags = append(tags, "evidence", "validation", "triage")
+		importance = 86
+		confidence = 82
+		reason = "finding interpretation or validation signal"
+		memoryType = models.TargetMemoryTypeFindingEvidence
+		return true, memoryType, tags, importance, confidence, reason
+
+	case actionCount > 0:
+		tags = append(tags, "action_plan", "operator")
+		importance = 74
+		confidence = 72
+		reason = "chat produced proposed operator actions"
+		memoryType = models.TargetMemoryTypeUserDecision
+		return true, memoryType, tags, importance, confidence, reason
+	}
+
+	return false, "", nil, 0, 0, ""
+}
+
+func maybeCreateChatMemoryFromMessage(userID uint, target *models.Target, sessionID uint, message models.AgentChatMessage, actionCount int) error {
+	shouldRemember, memoryType, tags, importance, confidence, reason := classifyChatMemory(message.Content, actionCount)
+	if !shouldRemember {
+		return nil
+	}
+
+	title := "Chat memory: " + reason
+	content := strings.TrimSpace(message.Content)
+	if len([]rune(content)) > 2500 {
+		content = string([]rune(content)[:2500]) + "..."
+	}
+
+	summary := content
+	if len([]rune(summary)) > 420 {
+		summary = string([]rune(summary)[:420]) + "..."
+	}
+
+	sourceID := message.ID
+	item := models.TargetMemoryItem{
+		UserID:     userID,
+		TargetID:   target.ID,
+		SourceType: models.TargetMemorySourceChatMessage,
+		SourceID:   &sourceID,
+		MemoryType: memoryType,
+		Title:      title,
+		Content: strings.Join([]string{
+			"Operator chat memory:",
+			"Reason: " + reason,
+			"Role: " + message.Role,
+			"Message type: " + message.MessageType,
+			"Content:",
+			content,
+		}, "\n"),
+		Summary:    summary,
+		Tags:       memoryJSON(tags, "[]"),
+		Importance: importance,
+		Confidence: confidence,
+		SourceHash: memoryHash(
+			"agent_chat_message",
+			target.RootDomain,
+			strconv.FormatUint(uint64(sessionID), 10),
+			strconv.FormatUint(uint64(message.ID), 10),
+			message.Role,
+			memoryType,
+			content,
+		),
+		Metadata: memoryJSON(map[string]interface{}{
+			"memory_hook_version": "agent-chat-memory-hook-v1",
+			"chat_session_id":     sessionID,
+			"chat_message_id":     message.ID,
+			"role":                message.Role,
+			"message_type":        message.MessageType,
+			"reason":              reason,
+			"action_count":        actionCount,
+		}, "{}"),
+	}
+
+	_, _, err := upsertTargetMemoryItem(item)
+	return err
 }
