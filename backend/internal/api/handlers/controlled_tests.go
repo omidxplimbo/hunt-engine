@@ -838,6 +838,18 @@ func ExecuteTargetControlledTestRun(c *fiber.Ctx) error {
 			}, "{}"),
 		}
 		_ = database.DB.Create(&event).Error
+
+		if memErr := createControlledRuntimeMemoryFromResult(&run, result, output); memErr != nil {
+			if output == nil {
+				output = map[string]interface{}{}
+			}
+			output["memory_ingest_error"] = memErr.Error()
+		} else {
+			if output == nil {
+				output = map[string]interface{}{}
+			}
+			output["memory_ingested"] = true
+		}
 	}
 
 	updates := map[string]interface{}{
@@ -892,4 +904,208 @@ func ExecuteTargetControlledTestRun(c *fiber.Ctx) error {
 			"output": output,
 		},
 	})
+}
+
+func controlledRuntimeMemoryTypeForResult(result models.ControlledTestResult) string {
+	switch result.Status {
+	case models.ControlledTestResultStatusVulnerable:
+		return models.TargetMemoryTypeFindingEvidence
+	case models.ControlledTestResultStatusPassed:
+		return models.TargetMemoryTypeSuccessfulTest
+	case models.ControlledTestResultStatusFailed:
+		return models.TargetMemoryTypeFailedTest
+	default:
+		return models.TargetMemoryTypeTestResult
+	}
+}
+
+func controlledRuntimeMemoryImportance(result models.ControlledTestResult) int {
+	switch result.Status {
+	case models.ControlledTestResultStatusVulnerable:
+		return 95
+	case models.ControlledTestResultStatusPassed:
+		return 78
+	case models.ControlledTestResultStatusInconclusive, models.ControlledTestResultStatusNeedsManualReview:
+		return 82
+	case models.ControlledTestResultStatusBlocked:
+		return 84
+	case models.ControlledTestResultStatusFailed:
+		return 65
+	default:
+		return 75
+	}
+}
+
+func controlledRuntimeMemoryConfidence(result models.ControlledTestResult) int {
+	switch strings.ToLower(strings.TrimSpace(result.Confidence)) {
+	case "high":
+		return 90
+	case "medium":
+		return 75
+	case "low":
+		return 45
+	default:
+		return 60
+	}
+}
+
+func controlledJSONMap(raw []byte) map[string]interface{} {
+	out := map[string]interface{}{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &out)
+	}
+	return out
+}
+
+func controlledIntFromMap(m map[string]interface{}, key string) int {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return 0
+	}
+	switch x := v.(type) {
+	case int:
+		return x
+	case int64:
+		return int(x)
+	case float64:
+		return int(x)
+	case json.Number:
+		i, _ := x.Int64()
+		return int(i)
+	default:
+		return 0
+	}
+}
+
+func createControlledRuntimeMemoryFromResult(run *models.ControlledTestRun, result *models.ControlledTestResult, output map[string]interface{}) error {
+	if run == nil || result == nil {
+		return nil
+	}
+	if strings.TrimSpace(result.OwnerKey) == "" {
+		return nil
+	}
+
+	response := controlledJSONMap(result.ResponseJSON)
+	evidence := controlledJSONMap(result.EvidenceJSON)
+
+	statusCode := controlledIntFromMap(response, "status_code")
+	if statusCode == 0 {
+		statusCode = controlledIntFromMap(evidence, "status_code")
+	}
+
+	classification := strings.TrimSpace(controlledCleanString(evidence["classification"]))
+	if classification == "" {
+		classification = "runtime_result_observed"
+	}
+
+	bodyExcerpt := strings.TrimSpace(controlledCleanString(evidence["body_excerpt"]))
+	if bodyExcerpt != "" {
+		bodyExcerpt = controlledBodyExcerpt(bodyExcerpt, 700)
+	}
+
+	agentActionID := interface{}(nil)
+	agentActionLabel := "none"
+	if result.AgentActionID != nil {
+		agentActionID = *result.AgentActionID
+		agentActionLabel = fmt.Sprint(*result.AgentActionID)
+	}
+
+	lines := []string{
+		"Controlled runtime test result:",
+		"Runtime type: " + result.RuntimeType,
+		"Check key: " + result.CheckKey,
+		"URL: " + result.URL,
+		"Method: " + result.Method,
+		"Result status: " + result.Status,
+		"Confidence: " + result.Confidence,
+		"Severity hint: " + result.SeverityHint,
+		"HTTP status code: " + fmt.Sprint(statusCode),
+		"Classification: " + classification,
+		"Run ID: " + fmt.Sprint(run.ID),
+		"Result ID: " + fmt.Sprint(result.ID),
+		"Agent action ID: " + agentActionLabel,
+		"Operator note: This is evidence from controlled runtime execution and should guide the next LLM pentest step.",
+	}
+
+	if cfChallenge, ok := evidence["cloudflare_challenge"]; ok {
+		lines = append(lines, "Cloudflare challenge observed: "+fmt.Sprint(cfChallenge))
+	}
+	if finalURL := strings.TrimSpace(controlledCleanString(evidence["final_url"])); finalURL != "" {
+		lines = append(lines, "Final URL: "+finalURL)
+	}
+	if bodyExcerpt != "" {
+		lines = append(lines, "Body excerpt: "+bodyExcerpt)
+	}
+
+	nextHint := "Use this runtime evidence to decide whether to continue, retest with a different method, escalate to a more specific validation, or mark as inconclusive."
+	if strings.Contains(classification, "blocked") || strings.Contains(classification, "challenged") || result.Status == models.ControlledTestResultStatusInconclusive {
+		nextHint = "Treat this as blocked/challenged/inconclusive evidence, not vulnerability proof. Consider browser-aware validation, alternate endpoint selection, authenticated context, or policy-approved deeper testing."
+	}
+	lines = append(lines, "Next operator hint: "+nextHint)
+
+	titleURL := result.URL
+	if titleURL == "" {
+		titleURL = fmt.Sprintf("run-%d", run.ID)
+	}
+
+	memoryType := controlledRuntimeMemoryTypeForResult(*result)
+	item := models.TargetMemoryItem{
+		UserID:     result.UserID,
+		OwnerKey:   result.OwnerKey,
+		TargetID:   result.TargetID,
+		SourceType: models.TargetMemorySourceControlledTestResult,
+		SourceID:   &result.ID,
+		MemoryType: memoryType,
+		Title:      "Controlled runtime result: " + titleURL,
+		Content:    strings.Join(lines, "\n"),
+		Summary: fmt.Sprintf(
+			"Controlled %s produced %s for %s with status_code=%d classification=%s.",
+			result.RuntimeType,
+			result.Status,
+			titleURL,
+			statusCode,
+			classification,
+		),
+		Tags: memoryJSON([]string{
+			"controlled_runtime",
+			"real_test_result",
+			result.RuntimeType,
+			result.BugType,
+			result.Status,
+			"operator",
+			"rag",
+		}, "[]"),
+		Importance: controlledRuntimeMemoryImportance(*result),
+		Confidence: controlledRuntimeMemoryConfidence(*result),
+		SourceHash: memoryHash(
+			"controlled_runtime_result",
+			fmt.Sprint(result.TargetID),
+			fmt.Sprint(run.ID),
+			fmt.Sprint(result.ID),
+			result.RuntimeType,
+			result.URL,
+			result.Status,
+			fmt.Sprint(statusCode),
+			classification,
+		),
+		Metadata: memoryJSON(map[string]interface{}{
+			"ingest_version":     "controlled-runtime-memory-v1",
+			"runtime_type":       result.RuntimeType,
+			"run_id":             run.ID,
+			"result_id":          result.ID,
+			"agent_action_id":    agentActionID,
+			"status":             result.Status,
+			"status_code":        statusCode,
+			"classification":     classification,
+			"check_key":          result.CheckKey,
+			"source":             "controlled_runtime_execute_api",
+			"operator_ready":     true,
+			"next_operator_hint": nextHint,
+			"execution_evidence": true,
+			"output":             output,
+		}, "{}"),
+	}
+
+	_, _, err := upsertTargetMemoryItem(item)
+	return err
 }
