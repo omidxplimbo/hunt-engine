@@ -79,6 +79,7 @@ func createMemoryChunks(item models.TargetMemoryItem) error {
 	for idx, chunk := range chunks {
 		chunkRow := models.TargetMemoryChunk{
 			UserID:       item.UserID,
+			OwnerKey:     item.OwnerKey,
 			TargetID:     item.TargetID,
 			MemoryItemID: item.ID,
 			ChunkIndex:   idx,
@@ -117,18 +118,23 @@ func createMemoryChunks(item models.TargetMemoryItem) error {
 	return nil
 }
 
-func targetMemoryOwner(c *fiber.Ctx, targetID uint) (*models.User, *models.Target, error) {
-	user, err := currentUser(c)
+func targetMemoryOwner(c *fiber.Ctx, targetID uint) (*models.User, *models.Target, string, error) {
+	user, ownerKey, _, _, err := currentAccountOwner(c)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 
-	var target models.Target
-	if err := database.DB.Where("id = ? AND created_by_user_id = ?", targetID, user.ID).First(&target).Error; err != nil {
-		return nil, nil, fiber.NewError(fiber.StatusNotFound, "target not found")
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return nil, nil, "", err
 	}
 
-	return user, &target, nil
+	return &user, target, ownerKey, nil
+}
+
+func memoryOwnerWhere(targetID uint, ownerKey string) (string, []interface{}) {
+	ownerKey = strings.TrimSpace(ownerKey)
+	return "target_id = ? AND owner_key = ?", []interface{}{targetID, ownerKey}
 }
 
 func ListTargetMemory(c *fiber.Ctx) error {
@@ -137,7 +143,7 @@ func ListTargetMemory(c *fiber.Ctx) error {
 		return err
 	}
 
-	user, _, err := targetMemoryOwner(c, targetID)
+	_, _, ownerKey, err := targetMemoryOwner(c, targetID)
 	if err != nil {
 		return err
 	}
@@ -151,7 +157,7 @@ func ListTargetMemory(c *fiber.Ctx) error {
 	sourceType := strings.TrimSpace(c.Query("source_type"))
 
 	q := database.DB.
-		Where("target_id = ? AND user_id = ?", targetID, user.ID).
+		Where("target_id = ? AND owner_key = ?", targetID, ownerKey).
 		Order("importance DESC, updated_at DESC").
 		Limit(limit)
 
@@ -169,7 +175,7 @@ func ListTargetMemory(c *fiber.Ctx) error {
 
 	var total int64
 	_ = database.DB.Model(&models.TargetMemoryItem{}).
-		Where("target_id = ? AND user_id = ?", targetID, user.ID).
+		Where("target_id = ? AND owner_key = ?", targetID, ownerKey).
 		Count(&total).Error
 
 	return c.JSON(fiber.Map{
@@ -188,7 +194,7 @@ func CreateTargetMemory(c *fiber.Ctx) error {
 		return err
 	}
 
-	user, _, err := targetMemoryOwner(c, targetID)
+	user, _, ownerKey, err := targetMemoryOwner(c, targetID)
 	if err != nil {
 		return err
 	}
@@ -224,6 +230,7 @@ func CreateTargetMemory(c *fiber.Ctx) error {
 
 	item := models.TargetMemoryItem{
 		UserID:     user.ID,
+		OwnerKey:   ownerKey,
 		TargetID:   targetID,
 		SourceType: models.TargetMemorySourceUserNote,
 		MemoryType: req.MemoryType,
@@ -248,6 +255,7 @@ func CreateTargetMemory(c *fiber.Ctx) error {
 
 	event := models.TargetMemoryEvent{
 		UserID:       user.ID,
+		OwnerKey:     ownerKey,
 		TargetID:     targetID,
 		EventType:    models.TargetMemoryEventCreated,
 		SourceType:   item.SourceType,
@@ -287,21 +295,21 @@ func GetTargetMemory(c *fiber.Ctx) error {
 		return err
 	}
 
-	user, _, err := targetMemoryOwner(c, targetID)
+	_, _, ownerKey, err := targetMemoryOwner(c, targetID)
 	if err != nil {
 		return err
 	}
 
 	var item models.TargetMemoryItem
 	if err := database.DB.
-		Where("id = ? AND target_id = ? AND user_id = ?", memoryID, targetID, user.ID).
+		Where("id = ? AND target_id = ? AND owner_key = ?", memoryID, targetID, ownerKey).
 		First(&item).Error; err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "memory item not found")
 	}
 
 	chunks := make([]models.TargetMemoryChunk, 0)
 	_ = database.DB.
-		Where("memory_item_id = ? AND target_id = ? AND user_id = ?", item.ID, targetID, user.ID).
+		Where("memory_item_id = ? AND target_id = ? AND owner_key = ?", item.ID, targetID, ownerKey).
 		Order("chunk_index ASC").
 		Find(&chunks).Error
 
@@ -325,20 +333,20 @@ func DeleteTargetMemory(c *fiber.Ctx) error {
 		return err
 	}
 
-	user, _, err := targetMemoryOwner(c, targetID)
+	user, _, ownerKey, err := targetMemoryOwner(c, targetID)
 	if err != nil {
 		return err
 	}
 
 	var item models.TargetMemoryItem
 	if err := database.DB.
-		Where("id = ? AND target_id = ? AND user_id = ?", memoryID, targetID, user.ID).
+		Where("id = ? AND target_id = ? AND owner_key = ?", memoryID, targetID, ownerKey).
 		First(&item).Error; err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "memory item not found")
 	}
 
 	_ = database.DB.
-		Where("memory_item_id = ? AND target_id = ? AND user_id = ?", item.ID, targetID, user.ID).
+		Where("memory_item_id = ? AND target_id = ? AND owner_key = ?", item.ID, targetID, ownerKey).
 		Delete(&models.TargetMemoryChunk{}).Error
 
 	if err := database.DB.Delete(&item).Error; err != nil {
@@ -347,6 +355,7 @@ func DeleteTargetMemory(c *fiber.Ctx) error {
 
 	event := models.TargetMemoryEvent{
 		UserID:       user.ID,
+		OwnerKey:     ownerKey,
 		TargetID:     targetID,
 		EventType:    "memory.deleted",
 		SourceType:   item.SourceType,
@@ -410,7 +419,7 @@ func GetTargetMemoryContext(c *fiber.Ctx) error {
 		return err
 	}
 
-	user, target, err := targetMemoryOwner(c, targetID)
+	user, target, ownerKey, err := targetMemoryOwner(c, targetID)
 	if err != nil {
 		return err
 	}
@@ -427,42 +436,42 @@ func GetTargetMemoryContext(c *fiber.Ctx) error {
 
 	important := make([]models.TargetMemoryItem, 0)
 	_ = database.DB.
-		Where("target_id = ? AND user_id = ?", targetID, user.ID).
+		Where("target_id = ? AND owner_key = ?", targetID, ownerKey).
 		Order("importance DESC, confidence DESC, updated_at DESC").
 		Limit(maxItems).
 		Find(&important).Error
 
 	recent := make([]models.TargetMemoryItem, 0)
 	_ = database.DB.
-		Where("target_id = ? AND user_id = ?", targetID, user.ID).
+		Where("target_id = ? AND owner_key = ?", targetID, ownerKey).
 		Order("updated_at DESC").
 		Limit(8).
 		Find(&recent).Error
 
 	policies := make([]models.TargetMemoryItem, 0)
 	_ = database.DB.
-		Where("target_id = ? AND user_id = ? AND memory_type = ?", targetID, user.ID, models.TargetMemoryTypePolicyConstraint).
+		Where("target_id = ? AND owner_key = ? AND memory_type = ?", targetID, ownerKey, models.TargetMemoryTypePolicyConstraint).
 		Order("importance DESC, updated_at DESC").
 		Limit(8).
 		Find(&policies).Error
 
 	failedTests := make([]models.TargetMemoryItem, 0)
 	_ = database.DB.
-		Where("target_id = ? AND user_id = ? AND memory_type = ?", targetID, user.ID, models.TargetMemoryTypeFailedTest).
+		Where("target_id = ? AND owner_key = ? AND memory_type = ?", targetID, ownerKey, models.TargetMemoryTypeFailedTest).
 		Order("updated_at DESC").
 		Limit(8).
 		Find(&failedTests).Error
 
 	successfulTests := make([]models.TargetMemoryItem, 0)
 	_ = database.DB.
-		Where("target_id = ? AND user_id = ? AND memory_type = ?", targetID, user.ID, models.TargetMemoryTypeSuccessfulTest).
+		Where("target_id = ? AND owner_key = ? AND memory_type = ?", targetID, ownerKey, models.TargetMemoryTypeSuccessfulTest).
 		Order("updated_at DESC").
 		Limit(8).
 		Find(&successfulTests).Error
 
 	findingEvidence := make([]models.TargetMemoryItem, 0)
 	_ = database.DB.
-		Where("target_id = ? AND user_id = ? AND memory_type = ?", targetID, user.ID, models.TargetMemoryTypeFindingEvidence).
+		Where("target_id = ? AND owner_key = ? AND memory_type = ?", targetID, ownerKey, models.TargetMemoryTypeFindingEvidence).
 		Order("importance DESC, updated_at DESC").
 		Limit(8).
 		Find(&findingEvidence).Error
@@ -473,7 +482,7 @@ func GetTargetMemoryContext(c *fiber.Ctx) error {
 	}, 0)
 	_ = database.DB.Model(&models.TargetMemoryItem{}).
 		Select("memory_type, COUNT(*) as count").
-		Where("target_id = ? AND user_id = ?", targetID, user.ID).
+		Where("target_id = ? AND owner_key = ?", targetID, ownerKey).
 		Group("memory_type").
 		Order("count DESC").
 		Scan(&typeCounts).Error
@@ -598,7 +607,7 @@ func boolDefault(value *bool, fallback bool) bool {
 func upsertTargetMemoryItem(item models.TargetMemoryItem) (models.TargetMemoryItem, bool, error) {
 	var existing models.TargetMemoryItem
 	err := database.DB.
-		Where("target_id = ? AND user_id = ? AND source_hash = ?", item.TargetID, item.UserID, item.SourceHash).
+		Where("target_id = ? AND owner_key = ? AND source_hash = ?", item.TargetID, item.OwnerKey, item.SourceHash).
 		First(&existing).Error
 
 	if err == nil {
@@ -618,7 +627,7 @@ func upsertTargetMemoryItem(item models.TargetMemoryItem) (models.TargetMemoryIt
 		}
 
 		_ = database.DB.
-			Where("memory_item_id = ? AND target_id = ? AND user_id = ?", existing.ID, existing.TargetID, existing.UserID).
+			Where("memory_item_id = ? AND target_id = ? AND owner_key = ?", existing.ID, existing.TargetID, existing.OwnerKey).
 			Delete(&models.TargetMemoryChunk{}).Error
 
 		if chunkErr := createMemoryChunks(existing); chunkErr != nil {
@@ -627,6 +636,7 @@ func upsertTargetMemoryItem(item models.TargetMemoryItem) (models.TargetMemoryIt
 
 		event := models.TargetMemoryEvent{
 			UserID:       existing.UserID,
+			OwnerKey:     existing.OwnerKey,
 			TargetID:     existing.TargetID,
 			EventType:    models.TargetMemoryEventUpdated,
 			SourceType:   existing.SourceType,
@@ -653,6 +663,7 @@ func upsertTargetMemoryItem(item models.TargetMemoryItem) (models.TargetMemoryIt
 
 	event := models.TargetMemoryEvent{
 		UserID:       item.UserID,
+		OwnerKey:     item.OwnerKey,
 		TargetID:     item.TargetID,
 		EventType:    models.TargetMemoryEventCreated,
 		SourceType:   item.SourceType,
@@ -683,7 +694,7 @@ func IngestTargetMemory(c *fiber.Ctx) error {
 		return err
 	}
 
-	user, target, err := targetMemoryOwner(c, targetID)
+	user, target, ownerKey, err := targetMemoryOwner(c, targetID)
 	if err != nil {
 		return err
 	}
@@ -721,6 +732,7 @@ func IngestTargetMemory(c *fiber.Ctx) error {
 
 	targetItem := models.TargetMemoryItem{
 		UserID:     user.ID,
+		OwnerKey:   ownerKey,
 		TargetID:   targetID,
 		SourceType: models.TargetMemorySourceTarget,
 		SourceID:   &target.ID,
@@ -1245,7 +1257,7 @@ func RetrieveTargetMemory(c *fiber.Ctx) error {
 		return err
 	}
 
-	user, target, err := targetMemoryOwner(c, targetID)
+	user, target, ownerKey, err := targetMemoryOwner(c, targetID)
 	if err != nil {
 		return err
 	}
@@ -1271,7 +1283,7 @@ func RetrieveTargetMemory(c *fiber.Ctx) error {
 	memoryTypes := objectiveMemoryTypes(objective)
 
 	items := make([]models.TargetMemoryItem, 0)
-	q := database.DB.Where("target_id = ? AND user_id = ?", targetID, user.ID)
+	q := database.DB.Where("target_id = ? AND owner_key = ?", targetID, ownerKey)
 
 	if where, args := memoryTypeWhere(memoryTypes); where != "" {
 		q = q.Where(where, args...)
@@ -1284,7 +1296,7 @@ func RetrieveTargetMemory(c *fiber.Ctx) error {
 	if len(items) < limit {
 		extra := make([]models.TargetMemoryItem, 0)
 		_ = database.DB.
-			Where("target_id = ? AND user_id = ?", targetID, user.ID).
+			Where("target_id = ? AND owner_key = ?", targetID, ownerKey).
 			Order("updated_at DESC").
 			Limit(limit - len(items)).
 			Find(&extra).Error
@@ -1311,7 +1323,7 @@ func RetrieveTargetMemory(c *fiber.Ctx) error {
 	chunks := make([]models.TargetMemoryChunk, 0)
 	if len(itemIDs) > 0 {
 		_ = database.DB.
-			Where("target_id = ? AND user_id = ? AND memory_item_id IN ?", targetID, user.ID, itemIDs).
+			Where("target_id = ? AND owner_key = ? AND memory_item_id IN ?", targetID, ownerKey, itemIDs).
 			Order("chunk_index ASC").
 			Limit(chunkLimit).
 			Find(&chunks).Error

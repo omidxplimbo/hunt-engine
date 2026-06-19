@@ -452,9 +452,14 @@ func GetTargetAgentActions(c *fiber.Ctx) error {
 		return err
 	}
 
+	_, ownerKey, _, _, ownerErr := currentAccountOwner(c)
+	if ownerErr != nil {
+		return ownerErr
+	}
+
 	limit, offset, page := parseDataLayerPagination(c)
 
-	db := database.DB.Model(&models.AgentAction{}).Where("target_id = ?", target.ID)
+	db := database.DB.Model(&models.AgentAction{}).Where("target_id = ? AND owner_key = ?", target.ID, ownerKey)
 
 	if status := normalizeActionStatus(c.Query("status")); status != "" {
 		db = db.Where("status = ?", status)

@@ -46,8 +46,9 @@ type TargetMemoryItem struct {
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 
-	UserID   uint `gorm:"not null;index" json:"user_id"`
-	TargetID uint `gorm:"not null;index" json:"target_id"`
+	UserID   uint   `gorm:"not null;index" json:"user_id"`
+	OwnerKey string `gorm:"size:80;index" json:"owner_key"`
+	TargetID uint   `gorm:"not null;index" json:"target_id"`
 
 	SourceType string `gorm:"size:96;not null;index" json:"source_type"`
 	SourceID   *uint  `gorm:"index" json:"source_id"`
@@ -71,9 +72,10 @@ type TargetMemoryChunk struct {
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 
-	UserID       uint `gorm:"not null;index" json:"user_id"`
-	TargetID     uint `gorm:"not null;index" json:"target_id"`
-	MemoryItemID uint `gorm:"not null;index" json:"memory_item_id"`
+	UserID       uint   `gorm:"not null;index" json:"user_id"`
+	OwnerKey     string `gorm:"size:80;index" json:"owner_key"`
+	TargetID     uint   `gorm:"not null;index" json:"target_id"`
+	MemoryItemID uint   `gorm:"not null;index" json:"memory_item_id"`
 
 	ChunkIndex int    `gorm:"not null;default:0;index" json:"chunk_index"`
 	ChunkText  string `gorm:"type:text;not null" json:"chunk_text"`
@@ -94,8 +96,9 @@ type TargetMemoryEvent struct {
 	CreatedAt time.Time      `gorm:"index" json:"created_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 
-	UserID   uint `gorm:"not null;index" json:"user_id"`
-	TargetID uint `gorm:"not null;index" json:"target_id"`
+	UserID   uint   `gorm:"not null;index" json:"user_id"`
+	OwnerKey string `gorm:"size:80;index" json:"owner_key"`
+	TargetID uint   `gorm:"not null;index" json:"target_id"`
 
 	EventType  string `gorm:"size:128;not null;index" json:"event_type"`
 	SourceType string `gorm:"size:96;index" json:"source_type"`

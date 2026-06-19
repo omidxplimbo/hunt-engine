@@ -387,10 +387,10 @@ func planActionsFromChat(content string) ([]plannedChatAction, string) {
 	return actions, response
 }
 
-func buildAgentChatMemoryContext(targetID uint, uid uint) map[string]interface{} {
+func buildAgentChatMemoryContext(targetID uint, ownerKey string) map[string]interface{} {
 	items := make([]models.TargetMemoryItem, 0)
 	_ = database.DB.
-		Where("target_id = ? AND user_id = ?", targetID, uid).
+		Where("target_id = ? AND owner_key = ?", targetID, ownerKey).
 		Order("importance desc, updated_at desc").
 		Limit(8).
 		Find(&items).Error
@@ -415,7 +415,7 @@ func buildAgentChatMemoryContext(targetID uint, uid uint) map[string]interface{}
 	chunks := make([]models.TargetMemoryChunk, 0)
 	if len(itemIDs) > 0 {
 		_ = database.DB.
-			Where("target_id = ? AND user_id = ? AND memory_item_id IN ?", targetID, uid, itemIDs).
+			Where("target_id = ? AND owner_key = ? AND memory_item_id IN ?", targetID, ownerKey, itemIDs).
 			Order("token_count asc, updated_at desc").
 			Limit(10).
 			Find(&chunks).Error
@@ -516,7 +516,7 @@ func boolPtr(value bool) *bool {
 	return &value
 }
 
-func createActionFromChat(c *fiber.Ctx, target *models.Target, uid uint, req proposeAgentActionRequest) (*models.AgentAction, error) {
+func createActionFromChat(c *fiber.Ctx, target *models.Target, uid uint, ownerKey string, req proposeAgentActionRequest) (*models.AgentAction, error) {
 	actionType := normalizeAgentActionType(req.ActionType)
 	if actionType == "" {
 		return nil, fmt.Errorf("invalid action type")
@@ -580,6 +580,7 @@ func createActionFromChat(c *fiber.Ctx, target *models.Target, uid uint, req pro
 
 	row := models.AgentAction{
 		TargetID:         target.ID,
+		OwnerKey:         ownerKey,
 		AgentRunID:       req.AgentRunID,
 		CreatedByUserID:  &uid,
 		ActionType:       actionType,
@@ -821,12 +822,13 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 	}
 
 	chatContext := buildAgentChatContext(*target)
-	memoryContext := buildAgentChatMemoryContext(target.ID, uid)
 
 	_, ownerKey, _, _, ownerErr := currentAccountOwner(c)
 	if ownerErr != nil {
 		return ownerErr
 	}
+
+	memoryContext := buildAgentChatMemoryContext(target.ID, ownerKey)
 
 	plannedActions, assistantText := planActionsFromChat(content)
 	var operatorPlan *operator.Plan
@@ -878,9 +880,10 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 				"chat_session_id": session.ID,
 				"user_message_id": userMessage.ID,
 				"chat_reason":     planned.Reason,
+				"owner_key":       ownerKey,
 			})
 
-			action, err := createActionFromChat(c, target, uid, planned.Request)
+			action, err := createActionFromChat(c, target, uid, ownerKey, planned.Request)
 			if err != nil {
 				return err
 			}
@@ -916,7 +919,7 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 				"execution_enabled": false,
 				"guardrails": []string{
 					"chat agent creates approval-gated action proposals only",
-					"execution is disabled in this v3.7.0 foundation step",
+					"v3.11.0 operator actions are approval-gated; direct chat execution remains disabled",
 					"blocked_by_policy actions cannot be approved",
 				},
 			}),

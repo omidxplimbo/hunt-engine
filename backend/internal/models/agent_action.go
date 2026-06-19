@@ -56,6 +56,7 @@ type AgentAction struct {
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 
 	TargetID uint    `gorm:"not null;index" json:"target_id"`
+	OwnerKey string  `gorm:"size:80;index" json:"owner_key"`
 	Target   *Target `gorm:"foreignKey:TargetID" json:"-"`
 
 	AgentRunID *uint     `gorm:"index" json:"agent_run_id"`
