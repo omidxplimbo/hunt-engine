@@ -26,8 +26,11 @@ func GeneratePlanWithConfig(ctx context.Context, cfg *llmclient.Config, req Plan
 		return nil, fmt.Errorf("user message is required")
 	}
 
+	contextFacts := buildContextFacts(req.TargetContext, req.MemoryContext)
+
 	payload := map[string]interface{}{
 		"task":                    "Create a safe, approval-gated pentest operator plan for this target chat request.",
+		"context_facts_required":  contextFacts,
 		"operator_prompt_version": PromptVersion,
 		"user_message":            req.UserMessage,
 		"target": map[string]interface{}{
@@ -73,6 +76,8 @@ func GeneratePlanWithConfig(ctx context.Context, cfg *llmclient.Config, req Plan
 	plan.LLMProvider = cfg.Provider
 	plan.LLMModel = cfg.Model
 	plan.OperatorPromptVersion = PromptVersion
+
+	groundPlan(plan, contextFacts)
 
 	if plan.ResponseSummary == "" {
 		plan.ResponseSummary = "I prepared an approval-gated operator plan from the available target context and memory."
@@ -134,12 +139,149 @@ func sanitizePlan(raw map[string]interface{}) *Plan {
 	return plan
 }
 
+func buildContextFacts(targetContext map[string]interface{}, memoryContext map[string]interface{}) []string {
+	facts := []string{}
+
+	add := func(label string, value interface{}) {
+		text := cleanString(value)
+		if text != "" {
+			facts = append(facts, fmt.Sprintf("%s=%s", label, text))
+		}
+	}
+
+	add("target_name", targetContext["target_name"])
+	add("root_domain", targetContext["root_domain"])
+	add("asset_count", targetContext["asset_count"])
+	add("live_asset_count", targetContext["live_asset_count"])
+	add("url_count", targetContext["url_count"])
+	add("finding_count", targetContext["finding_count"])
+	add("active_finding_count", targetContext["active_finding_count"])
+	add("platform_name", targetContext["platform_name"])
+	add("max_test_intensity", targetContext["max_test_intensity"])
+	add("auth_required", targetContext["auth_required"])
+
+	if count := cleanString(memoryContext["memory_count"]); count != "" {
+		facts = append(facts, "memory_count="+count)
+	}
+
+	if memories, ok := memoryContext["memories"].([]map[string]interface{}); ok {
+		for _, memory := range memories {
+			title := cleanString(memory["title"])
+			summary := cleanString(memory["summary"])
+			if title != "" || summary != "" {
+				fact := strings.TrimSpace(title + ": " + summary)
+				if len([]rune(fact)) > 220 {
+					fact = string([]rune(fact)[:220])
+				}
+				facts = append(facts, fact)
+			}
+			if len(facts) >= 14 {
+				break
+			}
+		}
+	} else if raw, ok := memoryContext["memories"].([]interface{}); ok {
+		for _, item := range raw {
+			memory, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			title := cleanString(memory["title"])
+			summary := cleanString(memory["summary"])
+			if title != "" || summary != "" {
+				fact := strings.TrimSpace(title + ": " + summary)
+				if len([]rune(fact)) > 220 {
+					fact = string([]rune(fact)[:220])
+				}
+				facts = append(facts, fact)
+			}
+			if len(facts) >= 14 {
+				break
+			}
+		}
+	}
+
+	return facts
+}
+
+func groundPlan(plan *Plan, facts []string) {
+	if plan == nil {
+		return
+	}
+
+	if len(facts) > 0 && isGenericOperatorText(plan.ResponseSummary) {
+		plan.ResponseSummary = "Using current target memory (" + strings.Join(firstStrings(facts, 5), ", ") + "), I prepared an approval-gated operator plan focused on the most relevant OWASP and evidence-review work."
+	}
+
+	if len(plan.RecommendedNextSteps) == 0 && len(facts) > 0 {
+		plan.RecommendedNextSteps = []string{
+			"Review stored findings and bug test results before running new checks.",
+			"Prioritize endpoints and live assets from the current memory context.",
+			"Keep testing within the target policy and approval workflow.",
+		}
+	}
+
+	if len(plan.Guardrails) == 0 || (len(plan.Guardrails) == 1 && strings.EqualFold(plan.Guardrails[0], "guardrails applied")) {
+		plan.Guardrails = defaultGuardrails()
+	}
+
+	for i := range plan.Actions {
+		if plan.Actions[i].InputJSON == nil {
+			plan.Actions[i].InputJSON = map[string]interface{}{}
+		}
+		if _, ok := plan.Actions[i].InputJSON["evidence_basis"]; !ok && len(facts) > 0 {
+			plan.Actions[i].InputJSON["evidence_basis"] = firstStrings(facts, 6)
+		}
+		if plan.Actions[i].Reason == "" && len(facts) > 0 {
+			plan.Actions[i].Reason = "Selected from current target context: " + strings.Join(firstStrings(facts, 3), ", ")
+		}
+	}
+}
+
+func isGenericOperatorText(value string) bool {
+	text := strings.ToLower(strings.TrimSpace(value))
+	if text == "" {
+		return true
+	}
+
+	generic := []string{
+		"i will create a prioritized owasp test plan",
+		"create a prioritized owasp test plan",
+		"identify owasp top 10 vulnerabilities",
+		"propose safe actions",
+		"prepared an approval-gated operator plan",
+	}
+	for _, item := range generic {
+		if strings.Contains(text, item) {
+			return true
+		}
+	}
+	return false
+}
+
+func firstStrings(items []string, limit int) []string {
+	if limit <= 0 || len(items) == 0 {
+		return nil
+	}
+	out := make([]string, 0, limit)
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			out = append(out, item)
+		}
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
 func defaultGuardrails() []string {
 	return []string{
 		"target-scoped and owner-scoped context only",
-		"planning and proposal only; no direct execution in chat",
-		"active/risky actions require policy checks and approval",
-		"destructive, out-of-scope, brute-force, and data-exfiltration actions remain blocked",
+		"chat responses do not execute tests directly",
+		"authorized controlled validation/exploitation must use approval-gated Agent Actions and audited runtime execution",
+		"active/risky actions require scope checks, policy checks, rate limits, and explicit approval",
+		"destructive, out-of-scope, brute-force, data-exfiltration, persistence, malware, credential theft, and uncontrolled payload execution remain blocked",
 	}
 }
 

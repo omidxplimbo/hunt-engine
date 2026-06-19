@@ -356,7 +356,7 @@ func policyCheckForAgentAction(target *models.Target, req proposeAgentActionRequ
 	}
 
 	if testLevel >= 3 || safetyLevel >= 3 {
-		blockedReasons = append(blockedReasons, "level 3 exploit-validation/manual-approved action is blocked in v3.7.0 foundation")
+		blockedReasons = append(blockedReasons, "level 3 exploit-validation/manual-approved action requires future controlled runtime and explicit approval")
 	}
 
 	switch class {
@@ -417,7 +417,7 @@ func policyCheckForAgentAction(target *models.Target, req proposeAgentActionRequ
 			"max_test_level":             maxIntensityLevel,
 		},
 		"guardrails": []string{
-			"v3.7.0 action execution is not enabled in this foundation step",
+			"v3.11.0 operator actions are approval-gated; execution requires controlled dispatcher/runtime approval",
 			"blocked_by_policy actions cannot be approved",
 			"policy max_test_intensity is enforced against safety_level and test_level",
 			"disallowed_test_types takes precedence over allowed_test_types",
