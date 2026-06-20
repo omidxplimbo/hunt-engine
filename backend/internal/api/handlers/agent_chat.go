@@ -550,6 +550,129 @@ func boolPtr(value bool) *bool {
 	return &value
 }
 
+func chatActionInputMap(raw datatypes.JSON) map[string]interface{} {
+	out := map[string]interface{}{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &out)
+	}
+	return out
+}
+
+func uintFromAny(value interface{}) uint {
+	switch x := value.(type) {
+	case uint:
+		return x
+	case int:
+		return uint(x)
+	case int64:
+		return uint(x)
+	case float64:
+		return uint(x)
+	case json.Number:
+		n, _ := x.Int64()
+		return uint(n)
+	default:
+		return 0
+	}
+}
+
+func appendUniqueUintInterface(items []interface{}, id uint) []interface{} {
+	for _, item := range items {
+		if uintFromAny(item) == id {
+			return items
+		}
+	}
+	return append(items, id)
+}
+
+func uintListFromInterface(value interface{}) []interface{} {
+	if items, ok := value.([]interface{}); ok {
+		return items
+	}
+	return []interface{}{}
+}
+
+func markDuplicateActionReusedByChat(c *fiber.Ctx, target *models.Target, uid uint, ownerKey string, duplicate *models.AgentAction, req proposeAgentActionRequest) (*models.AgentAction, error) {
+	if duplicate == nil {
+		return nil, nil
+	}
+
+	input := chatActionInputMap(duplicate.InputJSON)
+	if input == nil {
+		input = map[string]interface{}{}
+	}
+
+	chatSessionID := uintFromAny(req.InputJSON["chat_session_id"])
+	userMessageID := uintFromAny(req.InputJSON["user_message_id"])
+
+	input["reused_by_chat"] = true
+	input["last_reused_by_chat"] = map[string]interface{}{
+		"chat_session_id": chatSessionID,
+		"user_message_id": userMessageID,
+		"owner_key":       ownerKey,
+		"source":          "agent_chat_duplicate_reuse",
+	}
+
+	if chatSessionID > 0 {
+		input["last_reused_chat_session_id"] = chatSessionID
+		input["related_chat_session_ids"] = appendUniqueUintInterface(uintListFromInterface(input["related_chat_session_ids"]), chatSessionID)
+	}
+	if userMessageID > 0 {
+		input["last_reused_user_message_id"] = userMessageID
+		input["related_user_message_ids"] = appendUniqueUintInterface(uintListFromInterface(input["related_user_message_ids"]), userMessageID)
+	}
+
+	for k, v := range req.InputJSON {
+		if _, exists := input[k]; !exists {
+			input[k] = v
+		}
+	}
+
+	if err := database.DB.Model(&models.AgentAction{}).
+		Where("id = ? AND target_id = ? AND owner_key = ?", duplicate.ID, target.ID, ownerKey).
+		Update("input_json", agentActionJSON(input)).Error; err != nil {
+		return nil, err
+	}
+
+	var updated models.AgentAction
+	if err := database.DB.Where("id = ? AND target_id = ? AND owner_key = ?", duplicate.ID, target.ID, ownerKey).First(&updated).Error; err != nil {
+		return duplicate, nil
+	}
+
+	return &updated, nil
+}
+
+func actionReusedForCurrentChat(action models.AgentAction, sessionID uint, messageID uint) bool {
+	input := chatActionInputMap(action.InputJSON)
+	reused, _ := input["reused_by_chat"].(bool)
+	if !reused {
+		return false
+	}
+
+	last, ok := input["last_reused_by_chat"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+
+	return uintFromAny(last["chat_session_id"]) == sessionID && uintFromAny(last["user_message_id"]) == messageID
+}
+
+func shouldReuseChatActionByType(actionType string) bool {
+	switch normalizeAgentActionType(actionType) {
+	case models.AgentActionTypeReviewBugTestResults,
+		models.AgentActionTypeInspectBugPatterns,
+		models.AgentActionTypeInspectBugPayloads,
+		models.AgentActionTypePromoteBugTestResults,
+		models.AgentActionTypeRunOWASPChecklist,
+		models.AgentActionTypeReviewEndpoint,
+		models.AgentActionTypeRunJSIntelligence,
+		models.AgentActionTypeRunSafeBugTests:
+		return true
+	default:
+		return false
+	}
+}
+
 func createActionFromChat(c *fiber.Ctx, target *models.Target, uid uint, ownerKey string, req proposeAgentActionRequest) (*models.AgentAction, error) {
 	actionType := normalizeAgentActionType(req.ActionType)
 	if actionType == "" {
@@ -565,7 +688,21 @@ func createActionFromChat(c *fiber.Ctx, target *models.Target, uid uint, ownerKe
 	if duplicateErr != nil {
 		return nil, duplicateErr
 	}
+	if duplicate == nil && shouldReuseChatActionByType(actionType) {
+		duplicate, duplicateErr = findDuplicateAgentAction(target.ID, actionType, "")
+		if duplicateErr != nil {
+			return nil, duplicateErr
+		}
+	}
 	if duplicate != nil {
+		updatedDuplicate, reuseErr := markDuplicateActionReusedByChat(c, target, uid, ownerKey, duplicate, req)
+		if reuseErr != nil {
+			return nil, reuseErr
+		}
+		if updatedDuplicate != nil {
+			duplicate = updatedDuplicate
+		}
+
 		entityID := duplicate.ID
 		_ = auditlog.Record(auditlog.Entry{
 			ActorUserID: &uid,
@@ -576,14 +713,15 @@ func createActionFromChat(c *fiber.Ctx, target *models.Target, uid uint, ownerKe
 			IPAddress:   auditlog.ClientIP(c),
 			UserAgent:   auditlog.UserAgent(c),
 			Metadata: map[string]interface{}{
-				"target_id":     target.ID,
-				"root_domain":   target.RootDomain,
-				"source":        "agent_chat",
-				"action_type":   duplicate.ActionType,
-				"status":        duplicate.Status,
-				"policy_status": duplicate.PolicyStatus,
-				"risk_level":    duplicate.RiskLevel,
-				"duplicate":     true,
+				"target_id":      target.ID,
+				"root_domain":    target.RootDomain,
+				"source":         "agent_chat",
+				"action_type":    duplicate.ActionType,
+				"status":         duplicate.Status,
+				"policy_status":  duplicate.PolicyStatus,
+				"risk_level":     duplicate.RiskLevel,
+				"duplicate":      true,
+				"reused_by_chat": true,
 			},
 		})
 		return duplicate, nil
@@ -893,6 +1031,8 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 	var userMessage models.AgentChatMessage
 	var assistantMessage models.AgentChatMessage
 	createdActions := make([]models.AgentAction, 0)
+	reusedActionIDs := make([]uint, 0)
+	reusedActionCount := 0
 
 	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
 		userMessage = models.AgentChatMessage{
@@ -927,6 +1067,14 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 		actionIDs := make([]uint, 0, len(createdActions))
 		for _, action := range createdActions {
 			actionIDs = append(actionIDs, action.ID)
+			if actionReusedForCurrentChat(action, session.ID, userMessage.ID) {
+				reusedActionCount++
+				reusedActionIDs = append(reusedActionIDs, action.ID)
+			}
+		}
+
+		if reusedActionCount > 0 {
+			assistantText = strings.TrimSpace(assistantText + "\n" + fmt.Sprintf("I reused %d existing similar approval-gated operator action(s) and linked them to this chat session instead of creating duplicates.", reusedActionCount))
 		}
 
 		assistantMessage = models.AgentChatMessage{
@@ -949,7 +1097,9 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 				"operator_plan":     operatorPlan,
 				"operator_error":    operatorError,
 				"llm_assisted":      operatorMode == "llm_operator_plan",
-				"actions_created":   len(actionIDs),
+				"actions_created":   len(actionIDs) - reusedActionCount,
+				"actions_reused":    reusedActionCount,
+				"reused_action_ids": reusedActionIDs,
 				"execution_enabled": false,
 				"guardrails": []string{
 					"chat agent creates approval-gated action proposals only",
