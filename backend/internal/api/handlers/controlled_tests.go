@@ -222,7 +222,9 @@ func GetTargetControlledTestResults(c *fiber.Ctx) error {
 	}
 
 	status := normalizeControlledResultStatus(c.Query("status"))
-	runID, _ := parseControlledRunIDParam(c)
+	runtimeType := normalizeControlledRuntimeType(c.Query("runtime_type"))
+	runID := uint(c.QueryInt("run_id", 0))
+	agentActionID := uint(c.QueryInt("agent_action_id", 0))
 
 	q := database.DB.
 		Model(&models.ControlledTestResult{}).
@@ -231,23 +233,29 @@ func GetTargetControlledTestResults(c *fiber.Ctx) error {
 	if status != "" {
 		q = q.Where("status = ?", status)
 	}
+	if strings.TrimSpace(c.Query("runtime_type")) != "" {
+		q = q.Where("runtime_type = ?", runtimeType)
+	}
 	if runID > 0 {
 		q = q.Where("run_id = ?", runID)
+	}
+	if agentActionID > 0 {
+		q = q.Where("agent_action_id = ?", agentActionID)
 	}
 
 	if bugType := strings.TrimSpace(c.Query("bug_type")); bugType != "" {
 		q = q.Where("bug_type = ?", bugType)
 	}
 
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return err
+	}
+
 	rows := make([]models.ControlledTestResult, 0)
 	if err := q.Order("created_at DESC").Limit(limit).Find(&rows).Error; err != nil {
 		return err
 	}
-
-	var total int64
-	_ = database.DB.Model(&models.ControlledTestResult{}).
-		Where("target_id = ? AND owner_key = ?", target.ID, ownerKey).
-		Count(&total).Error
 
 	return c.JSON(fiber.Map{
 		"status":      "ok",
