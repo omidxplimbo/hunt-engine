@@ -412,6 +412,38 @@ func buildAgentChatMemoryContext(targetID uint, ownerKey string) map[string]inte
 		})
 	}
 
+	controlledRuntimeItems := make([]models.TargetMemoryItem, 0)
+	_ = database.DB.
+		Where("target_id = ? AND owner_key = ? AND source_type = ?", targetID, ownerKey, models.TargetMemorySourceControlledTestResult).
+		Order("updated_at desc, importance desc").
+		Limit(6).
+		Find(&controlledRuntimeItems).Error
+
+	controlledRuntimeEvidence := make([]map[string]interface{}, 0, len(controlledRuntimeItems))
+	for _, item := range controlledRuntimeItems {
+		text := strings.TrimSpace(item.Summary)
+		if text == "" {
+			text = strings.TrimSpace(item.Content)
+		}
+		if len([]rune(text)) > 700 {
+			text = string([]rune(text)[:700]) + "..."
+		}
+		controlledRuntimeEvidence = append(controlledRuntimeEvidence, map[string]interface{}{
+			"id":          item.ID,
+			"memory_type": item.MemoryType,
+			"source_type": item.SourceType,
+			"source_id":   item.SourceID,
+			"title":       item.Title,
+			"summary":     item.Summary,
+			"content":     text,
+			"tags":        item.Tags,
+			"importance":  item.Importance,
+			"confidence":  item.Confidence,
+			"metadata":    item.Metadata,
+			"updated_at":  item.UpdatedAt,
+		})
+	}
+
 	chunks := make([]models.TargetMemoryChunk, 0)
 	if len(itemIDs) > 0 {
 		_ = database.DB.
@@ -437,10 +469,12 @@ func buildAgentChatMemoryContext(targetID uint, ownerKey string) map[string]inte
 	}
 
 	return map[string]interface{}{
-		"context_version": "agent-chat-memory-context-v1",
-		"memory_count":    len(memories),
-		"memories":        memories,
-		"chunks":          chunkOut,
+		"context_version":             "agent-chat-memory-context-v1",
+		"memory_count":                len(memories),
+		"memories":                    memories,
+		"controlled_runtime_evidence": controlledRuntimeEvidence,
+		"controlled_runtime_count":    len(controlledRuntimeEvidence),
+		"chunks":                      chunkOut,
 	}
 }
 
