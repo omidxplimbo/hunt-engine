@@ -3,6 +3,7 @@ package operator
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
@@ -15,6 +16,96 @@ func GeneratePlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 		return nil, err
 	}
 	return GeneratePlanWithConfig(ctx, cfg, req)
+}
+
+var endpointURLPattern = regexp.MustCompile(`https?://[^\s"'<>(){}[\]]+`)
+
+func firstEndpointURLFromText(text string) string {
+	raw := endpointURLPattern.FindString(text)
+	if raw == "" {
+		return ""
+	}
+	return strings.TrimRight(raw, ".,;:!?)].\"'")
+}
+
+func endpointIntentRequestsSingleAction(text string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	return strings.Contains(normalized, "فقط") ||
+		strings.Contains(normalized, "only") ||
+		strings.Contains(normalized, "just create") ||
+		strings.Contains(normalized, "single action")
+}
+
+func ensureEndpointReviewAction(plan *Plan, userMessage string) {
+	if plan == nil {
+		return
+	}
+
+	url := firstEndpointURLFromText(userMessage)
+	if url == "" {
+		return
+	}
+
+	endpointAction := ActionProposal{
+		ActionType:       models.AgentActionTypeReviewEndpoint,
+		Title:            "Review endpoint with controlled HTTP probe",
+		Description:      "Review the user-specified endpoint through the approval-gated controlled runtime.",
+		Reason:           "The user provided a concrete endpoint URL, so the next operator step should preserve that URL and route it through the controlled runtime approval flow.",
+		RiskLevel:        models.AgentActionRiskLow,
+		SafetyLevel:      1,
+		TestLevel:        1,
+		RequiresApproval: true,
+		InputJSON: map[string]interface{}{
+			"url":                      url,
+			"method":                   "GET",
+			"source":                   "operator_endpoint_intent",
+			"objective":                "Review user-specified endpoint through controlled runtime",
+			"endpoint_intent_detected": true,
+			"operator_prompt_version":  PromptVersion,
+		},
+	}
+
+	found := false
+	for i := range plan.Actions {
+		if strings.TrimSpace(plan.Actions[i].ActionType) != models.AgentActionTypeReviewEndpoint {
+			continue
+		}
+
+		found = true
+		if plan.Actions[i].InputJSON == nil {
+			plan.Actions[i].InputJSON = map[string]interface{}{}
+		}
+		if strings.TrimSpace(fmt.Sprint(plan.Actions[i].InputJSON["url"])) == "" {
+			plan.Actions[i].InputJSON["url"] = url
+		}
+		if strings.TrimSpace(fmt.Sprint(plan.Actions[i].InputJSON["method"])) == "" {
+			plan.Actions[i].InputJSON["method"] = "GET"
+		}
+		plan.Actions[i].InputJSON["endpoint_intent_detected"] = true
+		plan.Actions[i].InputJSON["operator_prompt_version"] = PromptVersion
+
+		if plan.Actions[i].RiskLevel == "" {
+			plan.Actions[i].RiskLevel = models.AgentActionRiskLow
+		}
+		if plan.Actions[i].SafetyLevel <= 0 {
+			plan.Actions[i].SafetyLevel = 1
+		}
+		if plan.Actions[i].TestLevel <= 0 {
+			plan.Actions[i].TestLevel = 1
+		}
+		plan.Actions[i].RequiresApproval = true
+		endpointAction = plan.Actions[i]
+		break
+	}
+
+	if endpointIntentRequestsSingleAction(userMessage) {
+		plan.Actions = []ActionProposal{endpointAction}
+		return
+	}
+
+	if !found {
+		plan.Actions = append([]ActionProposal{endpointAction}, plan.Actions...)
+	}
 }
 
 func GeneratePlanWithConfig(ctx context.Context, cfg *llmclient.Config, req PlanRequest) (*Plan, error) {
@@ -78,6 +169,7 @@ func GeneratePlanWithConfig(ctx context.Context, cfg *llmclient.Config, req Plan
 	plan.OperatorPromptVersion = PromptVersion
 
 	groundPlan(plan, contextFacts)
+	ensureEndpointReviewAction(plan, req.UserMessage)
 
 	if plan.ResponseSummary == "" {
 		plan.ResponseSummary = "I prepared an approval-gated operator plan from the available target context and memory."
