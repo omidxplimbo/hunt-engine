@@ -81,10 +81,72 @@ const MessageBubble = ({
   const guardrails = asArray(output?.guardrails);
   const autopilot = output?.autopilot || {};
   const autopilotSummary = asArray(autopilot?.summary);
-  const autopilotErrors = asArray(autopilot?.errors);
   const autopilotExecuted = asArray(autopilot?.executed_actions);
+  const autopilotSkipped = asArray(autopilot?.skipped_actions);
   const autopilotRuns = asArray(autopilot?.controlled_runs);
   const autopilotResults = asArray(autopilot?.controlled_results);
+  const autopilotErrors = asArray(autopilot?.errors);
+
+  const numericActionIds = actionIds
+    .map((item: any) => Number(item))
+    .filter((item: number) => Number.isFinite(item) && item > 0);
+
+  const executedActionIds = autopilotExecuted
+    .map((item: any) => Number(item))
+    .filter((item: number) => Number.isFinite(item) && item > 0);
+
+  const skippedActionIds = autopilotSkipped
+    .map((item: any) => Number(item?.action_id || item))
+    .filter((item: number) => Number.isFinite(item) && item > 0);
+
+  const actionRuntimeState = (action: any, index: number) => {
+    const directId = Number(action?.id || action?.action_id || action?.agent_action_id || numericActionIds[index]);
+    const inferredSingleId =
+      planActions.length === 1 && numericActionIds.length === 1 ? numericActionIds[0] : 0;
+    const actionId = Number.isFinite(directId) && directId > 0 ? directId : inferredSingleId;
+
+    if (actionId && executedActionIds.includes(actionId)) {
+      return {
+        state: "executed",
+        actionId,
+        label: "Executed by Autopilot",
+      };
+    }
+    if (actionId && skippedActionIds.includes(actionId)) {
+      return {
+        state: "skipped",
+        actionId,
+        label: "Approval Required",
+      };
+    }
+    if (planActions.length === 1 && executedActionIds.length > 0) {
+      return {
+        state: "executed",
+        actionId: executedActionIds[0],
+        label: "Executed by Autopilot",
+      };
+    }
+    if (planActions.length === 1 && autopilotSkipped.length > 0) {
+      return {
+        state: "skipped",
+        actionId: skippedActionIds[0] || 0,
+        label: "Approval Required",
+      };
+    }
+
+    return {
+      state: "proposed",
+      actionId: actionId || 0,
+      label: "Proposed Action",
+    };
+  };
+
+  const actionRuntimeToneClass = (state: string) => {
+    if (state === "executed") return "border-hack-primary/60 bg-hack-primary/10 text-hack-primary";
+    if (state === "skipped") return "border-hack-warning/60 bg-hack-warning/10 text-hack-warning";
+    return "border-hack-border bg-black/30 text-hack-dim";
+  };
+
   const llmAssisted = Boolean(output?.llm_assisted);
   const operatorMode = String(output?.operator_mode || input?.operator_mode || "");
   const operatorError = String(output?.operator_error || input?.operator_error || "");
@@ -247,24 +309,48 @@ const MessageBubble = ({
         {!isUser && planActions.length > 0 && (
           <div className="mt-3 border border-hack-primary/40 bg-hack-primary/10 p-3">
             <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-hack-primary">
-              Operator Proposed Actions
+              Operator Actions
             </div>
             <div className="space-y-2">
-              {planActions.slice(0, 5).map((action, index) => (
-                <div key={`${message.id}-action-${index}`} className="border border-hack-border bg-black/30 p-2">
-                  <div className="font-mono text-xs font-bold text-white">
-                    {action.title || actionLabel(action.action_type)}
-                  </div>
-                  <div className="mt-1 font-mono text-[10px] uppercase tracking-wider text-hack-dim">
-                    {actionLabel(action.action_type)} · risk {action.risk_level || "low"} · safety {action.safety_level ?? 0} · test {action.test_level ?? 0}
-                  </div>
-                  {action.reason && (
-                    <div className="mt-1 text-xs text-hack-dim">
-                      {truncateText(action.reason, 220)}
+              {planActions.slice(0, 5).map((action, index) => {
+                const runtime = actionRuntimeState(action, index);
+                return (
+                  <div key={`${message.id}-action-${index}`} className="border border-hack-border bg-black/30 p-2">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="font-mono text-xs font-bold text-white">
+                        {action.title || actionLabel(action.action_type)}
+                      </div>
+                      <span
+                        className={clsx(
+                          "border px-2 py-1 font-mono text-[10px] uppercase tracking-wider",
+                          actionRuntimeToneClass(runtime.state),
+                        )}
+                      >
+                        {runtime.label}
+                      </span>
                     </div>
-                  )}
-                </div>
-              ))}
+                    <div className="mt-1 font-mono text-[10px] uppercase tracking-wider text-hack-dim">
+                      {actionLabel(action.action_type)} · risk {action.risk_level || "low"} · safety {action.safety_level ?? 0} · test {action.test_level ?? 0}
+                      {runtime.actionId ? ` · action #${runtime.actionId}` : ""}
+                    </div>
+                    {runtime.state === "executed" && (
+                      <div className="mt-2 border border-hack-primary/40 bg-hack-primary/10 p-2 text-xs text-hack-primary">
+                        This action was executed automatically by Operator Autopilot under the current target policy.
+                      </div>
+                    )}
+                    {runtime.state === "skipped" && (
+                      <div className="mt-2 border border-hack-warning/40 bg-hack-warning/10 p-2 text-xs text-hack-warning">
+                        This action was not executed automatically. Current target policy requires explicit approval.
+                      </div>
+                    )}
+                    {action.reason && (
+                      <div className="mt-1 text-xs text-hack-dim">
+                        {truncateText(action.reason, 220)}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
