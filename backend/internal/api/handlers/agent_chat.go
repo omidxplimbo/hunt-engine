@@ -1352,9 +1352,9 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 				"reused_action_ids": reusedActionIDs,
 				"execution_enabled": false,
 				"guardrails": []string{
-					"chat agent creates approval-gated action proposals only",
-					"v3.11.0 operator actions are approval-gated; direct chat execution remains disabled",
-					"blocked_by_policy actions cannot be approved",
+					"low-risk controlled actions may be auto-executed by Operator Autopilot when target policy permits",
+					"higher-risk, active, exploit, payload, auth, rate-limit, or brute-force actions require explicit approval",
+					"blocked_by_policy actions cannot be approved or executed",
 				},
 			}),
 		}
@@ -1384,12 +1384,18 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 	if len(assistantMessage.OutputJSON) > 0 {
 		_ = json.Unmarshal(assistantMessage.OutputJSON, &assistantOutput)
 	}
-	assistantOutput["autopilot"] = autopilot
-	assistantOutput["execution_enabled"] = len(autopilot.ExecutedActions) > 0
 
 	if len(autopilot.ExecutedActions) > 0 {
-		assistantMessage.Content = strings.TrimSpace(assistantMessage.Content + "\n" + fmt.Sprintf("Autopilot executed %d low-risk controlled action(s), captured evidence, and updated target memory where applicable.", len(autopilot.ExecutedActions)))
+		assistantMessage.Content = strings.ReplaceAll(
+			assistantMessage.Content,
+			"I proposed 1 approval-gated operator action(s). Review and approve before dispatch.",
+			"I routed the low-risk endpoint review through Operator Autopilot instead of requiring manual approval.",
+		)
+		assistantMessage.Content = strings.TrimSpace(assistantMessage.Content + "\n" + fmt.Sprintf("Autopilot executed %d low-risk controlled action(s), captured evidence, and updated target memory where applicable. Higher-risk actions still require explicit approval.", len(autopilot.ExecutedActions)))
 	}
+
+	assistantOutput["autopilot"] = autopilot
+	assistantOutput["execution_enabled"] = len(autopilot.ExecutedActions) > 0
 
 	_ = database.DB.Model(&models.AgentChatMessage{}).
 		Where("id = ?", assistantMessage.ID).
