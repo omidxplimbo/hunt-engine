@@ -955,6 +955,7 @@ export const dispatchTargetAgentAction = async (
   targetId: number,
   actionId: number,
   note = "",
+  dryRun = false,
 ) => {
   const response = await apiClient.post<{
     status: string;
@@ -963,8 +964,87 @@ export const dispatchTargetAgentAction = async (
       dispatch: any;
     };
   }>(`/targets/${targetId}/agent-actions/${actionId}/dispatch`, {
-    dry_run: true,
+    dry_run: dryRun,
     note,
+  });
+
+  return response.data.data;
+};
+
+export interface TargetControlledTestRun {
+  ID: number;
+  id?: number;
+  target_id: number;
+  agent_action_id?: number | null;
+  runtime_type: string;
+  title: string;
+  description?: string;
+  status: string;
+  policy_status: string;
+  risk_level: string;
+  safety_level: number;
+  test_level: number;
+  input_json?: any;
+  output_json?: any;
+  policy_check_json?: any;
+  error_message?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface TargetControlledTestResult {
+  ID: number;
+  id?: number;
+  target_id: number;
+  run_id: number;
+  agent_action_id?: number | null;
+  runtime_type: string;
+  bug_type: string;
+  check_key: string;
+  url: string;
+  method: string;
+  status: string;
+  confidence: string;
+  severity_hint: string;
+  request_json?: any;
+  response_json?: any;
+  evidence_json?: any;
+  matcher_json?: any;
+  metadata?: any;
+}
+
+export const getTargetControlledTestRun = async (
+  targetId: number,
+  runId: number,
+) => {
+  const response = await apiClient.get<{
+    status: string;
+    data: {
+      run: TargetControlledTestRun;
+      results: TargetControlledTestResult[];
+      events: any[];
+    };
+  }>(`/targets/${targetId}/controlled-tests/runs/${runId}`);
+
+  return response.data.data;
+};
+
+export const executeTargetControlledTestRun = async (
+  targetId: number,
+  runId: number,
+  note = "execute controlled runtime run from UI",
+) => {
+  const response = await apiClient.post<{
+    status: string;
+    data: {
+      run: TargetControlledTestRun;
+      result: TargetControlledTestResult;
+      output: any;
+    };
+  }>(`/targets/${targetId}/controlled-tests/runs/${runId}/execute`, {
+    note,
+    timeout_ms: 8000,
+    max_bytes: 262144,
   });
 
   return response.data.data;

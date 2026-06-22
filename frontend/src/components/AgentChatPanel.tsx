@@ -25,6 +25,7 @@ import {
 type Props = {
   targetId: number;
   enabled?: boolean;
+  onJumpToActions?: () => void;
 };
 
 const parseJSONValue = (value: any) => {
@@ -58,11 +59,22 @@ const actionLabel = (value: string) =>
     .replaceAll("_", " ")
     .replace(/\b\w/g, (ch) => ch.toUpperCase());
 
-const MessageBubble = ({ message }: { message: TargetAgentChatMessage }) => {
+const MessageBubble = ({
+  message,
+  onJumpToActions,
+}: {
+  message: TargetAgentChatMessage;
+  onJumpToActions?: () => void;
+}) => {
   const isUser = message.role === "user";
   const output = parseJSONValue(message.output_json);
   const input = parseJSONValue(message.input_json);
   const actionIds = Array.isArray(output?.action_ids) ? output.action_ids : [];
+  const reusedActionIds = Array.isArray(output?.reused_action_ids)
+    ? output.reused_action_ids
+    : [];
+  const actionsCreated = Number(output?.actions_created || 0);
+  const actionsReused = Number(output?.actions_reused || 0);
   const operatorPlan = output?.operator_plan || {};
   const recommendedSteps = asArray(operatorPlan?.recommended_next_steps);
   const planActions = asArray(operatorPlan?.actions);
@@ -186,16 +198,42 @@ const MessageBubble = ({ message }: { message: TargetAgentChatMessage }) => {
           </div>
         )}
 
-        {actionIds.length > 0 && (
+        {(actionIds.length > 0 || actionsCreated > 0 || actionsReused > 0) && (
           <div className="mt-3 border border-hack-warning/50 bg-hack-warning/10 p-2 font-mono text-[11px] text-hack-warning">
-            <div>Created proposed action IDs: {actionIds.join(", ")}</div>
+            <div className="flex flex-wrap gap-2">
+              <span className="border border-hack-warning/50 bg-black/30 px-2 py-1">
+                created: {actionsCreated}
+              </span>
+              <span className="border border-hack-warning/50 bg-black/30 px-2 py-1">
+                reused: {actionsReused}
+              </span>
+              {actionIds.length > 0 && (
+                <span className="border border-hack-warning/50 bg-black/30 px-2 py-1">
+                  action IDs: {actionIds.join(", ")}
+                </span>
+              )}
+              {reusedActionIds.length > 0 && (
+                <span className="border border-hack-warning/50 bg-black/30 px-2 py-1">
+                  reused IDs: {reusedActionIds.join(", ")}
+                </span>
+              )}
+            </div>
             <button
               type="button"
-              onClick={() =>
+              onClick={() => {
+                if (onJumpToActions) {
+                  onJumpToActions();
+                  window.setTimeout(() => {
+                    document
+                      .getElementById("agent-actions-panel")
+                      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  }, 100);
+                  return;
+                }
                 document
                   .getElementById("agent-actions-panel")
-                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
-              }
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }}
               className="mt-2 border border-hack-warning/70 px-2 py-1 text-[10px] uppercase tracking-wider hover:bg-hack-warning/10"
             >
               Jump to Agent Actions
@@ -239,7 +277,7 @@ const SessionSelector = ({
   );
 };
 
-const AgentChatPanel = ({ targetId, enabled = true }: Props) => {
+const AgentChatPanel = ({ targetId, enabled = true, onJumpToActions }: Props) => {
   const queryClient = useQueryClient();
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(
     null,
@@ -335,17 +373,22 @@ const AgentChatPanel = ({ targetId, enabled = true }: Props) => {
     },
     onSuccess: (result) => {
       setMessage("");
+      const output = parseJSONValue(result.assistant_message?.output_json);
+      const created = Number(output?.actions_created || 0);
+      const reused = Number(output?.actions_reused || 0);
       const count = result.proposed_actions?.length || 0;
       setNotice(
         count > 0
-          ? `Created ${count} proposed action${count === 1 ? "" : "s"} from chat`
+          ? `Chat returned ${count} action${count === 1 ? "" : "s"}: ${created} created, ${reused} reused`
           : "Chat response created",
       );
       refreshAll();
     },
   });
 
-  const actionCount = Number(latestAssistantOutput?.actions_created || 0);
+  const actionCount =
+    Number(latestAssistantOutput?.actions_created || 0) +
+    Number(latestAssistantOutput?.actions_reused || 0);
 
   const busy =
     createSessionMutation.isPending ||
@@ -486,7 +529,11 @@ const AgentChatPanel = ({ targetId, enabled = true }: Props) => {
             </div>
           </div>
         ) : (
-          messages.map((item) => <MessageBubble key={item.id} message={item} />)
+          messages.map((item) => <MessageBubble
+                key={item.id}
+                message={item}
+                onJumpToActions={onJumpToActions}
+              />)
         )}
       </div>
 
