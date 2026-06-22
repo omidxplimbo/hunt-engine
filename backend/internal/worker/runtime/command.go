@@ -22,6 +22,24 @@ func RunCommandWithKillSwitch(targetID uint, heartbeat HeartbeatFunc, shouldStop
 	return RunCommandWithStdinAndKillSwitch(targetID, nil, heartbeat, shouldStop, name, args...)
 }
 
+// RunCommandNoCaptureWithKillSwitch runs an external command without buffering stdout/stderr in memory.
+// Use this for high-volume tools that write primary output to files.
+func RunCommandNoCaptureWithKillSwitch(targetID uint, heartbeat HeartbeatFunc, shouldStop StopRequestedFunc, name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	prepareCommand(targetID, cmd)
+
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start command %s: %w", name, err)
+	}
+
+	var outBuf bytes.Buffer
+	_, err := waitCommandWithKillSwitch(targetID, cmd, heartbeat, shouldStop, name, args, &outBuf)
+	return err
+}
+
 // RunCommandWithStdinAndKillSwitch runs an external command with optional stdin
 // and kills the entire process group when shouldStop returns true.
 func RunCommandWithStdinAndKillSwitch(targetID uint, stdin io.Reader, heartbeat HeartbeatFunc, shouldStop StopRequestedFunc, name string, args ...string) ([]byte, error) {

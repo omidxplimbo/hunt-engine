@@ -147,6 +147,7 @@ const TargetAssets = () => {
   const [activeTab, setActiveTab] = useState<ActiveTab>("assets");
   const [activeAnalysisSection, setActiveAnalysisSection] = useState<AnalysisSection>("overview");
   const [page, setPage] = useState(1);
+  const [goToPage, setGoToPage] = useState("1");
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [sortBy, setSortBy] = useState("created_at");
@@ -299,12 +300,39 @@ const TargetAssets = () => {
   const displayedUrls = urlsQuery.data?.data || [];
   const totalRecords =
     activeTab === "assets"
-      ? (assetsQuery.data?.total ?? 0)
+      ? ((assetsQuery.data as any)?.total_count ??
+        (assetsQuery.data as any)?.total ??
+        displayedAssets.length ??
+        0)
       : activeTab === "urls"
-        ? ((urlsQuery.data as any)?.total ??
-          (urlsQuery.data as any)?.total_count ??
+        ? ((urlsQuery.data as any)?.total_count ??
+          (urlsQuery.data as any)?.total ??
+          displayedUrls.length ??
           0)
         : 0;
+  const pageSize = 50;
+  const totalPages = Math.max(1, Math.ceil(Number(totalRecords || 0) / pageSize));
+
+  useEffect(() => {
+    setGoToPage(String(page));
+  }, [page]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
+
+  const handleGoToPage = () => {
+    const next = Number.parseInt(goToPage, 10);
+    if (!Number.isFinite(next)) {
+      setGoToPage(String(page));
+      return;
+    }
+    const bounded = Math.min(totalPages, Math.max(1, next));
+    setPage(bounded);
+    setGoToPage(String(bounded));
+  };
 
   const accountFeatureFlags = featureFlagsQuery.data?.flags;
   const featureTargetPDFReport = isAccountFeatureEnabled(
@@ -1167,12 +1195,32 @@ const TargetAssets = () => {
             )}
           </div>
 
-          <div className="flex items-center justify-between border-t border-hack-border px-3 py-2 text-xs text-hack-dim">
+          <div className="flex flex-col gap-2 border-t border-hack-border px-3 py-2 text-xs text-hack-dim md:flex-row md:items-center md:justify-between">
             <span>
-              PAGE {page} // RECORDS:{" "}
+              PAGE {page} / {totalPages} // RECORDS:{" "}
               {Number(totalRecords || 0).toLocaleString()}
             </span>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-hack-dim">GO TO</span>
+              <input
+                type="number"
+                min={1}
+                max={totalPages}
+                value={goToPage}
+                onChange={(event) => setGoToPage(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    handleGoToPage();
+                  }
+                }}
+                className="w-20 rounded border border-hack-border bg-black/40 px-2 py-1 text-hack-primary outline-none focus:border-hack-primary"
+              />
+              <button
+                onClick={handleGoToPage}
+                className="hack-btn-ghost hover:bg-white/5"
+              >
+                GO
+              </button>
               <button
                 onClick={() => setPage((prev) => Math.max(1, prev - 1))}
                 disabled={page <= 1}
@@ -1181,7 +1229,8 @@ const TargetAssets = () => {
                 PREV
               </button>
               <button
-                onClick={() => setPage((prev) => prev + 1)}
+                onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
+                disabled={page >= totalPages}
                 className="hack-btn-ghost hover:bg-white/5 disabled:opacity-30"
               >
                 NEXT

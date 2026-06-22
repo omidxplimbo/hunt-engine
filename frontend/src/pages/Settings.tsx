@@ -29,7 +29,7 @@ const Settings = () => {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["users"] }),
   });
 
-  if (role !== "admin") return <Navigate to="/" replace />;
+  if (role !== "admin") return <Navigate to="/dashboard" replace />;
 
   return (
     <div className="space-y-6">
