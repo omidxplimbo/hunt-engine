@@ -25,6 +25,7 @@ import {
 type Props = {
   targetId: number;
   enabled?: boolean;
+  onJumpToActions?: () => void;
 };
 
 const parseJSONValue = (value: any) => {
@@ -58,15 +59,94 @@ const actionLabel = (value: string) =>
     .replaceAll("_", " ")
     .replace(/\b\w/g, (ch) => ch.toUpperCase());
 
-const MessageBubble = ({ message }: { message: TargetAgentChatMessage }) => {
+const MessageBubble = ({
+  message,
+  onJumpToActions,
+}: {
+  message: TargetAgentChatMessage;
+  onJumpToActions?: () => void;
+}) => {
   const isUser = message.role === "user";
   const output = parseJSONValue(message.output_json);
   const input = parseJSONValue(message.input_json);
   const actionIds = Array.isArray(output?.action_ids) ? output.action_ids : [];
+  const reusedActionIds = Array.isArray(output?.reused_action_ids)
+    ? output.reused_action_ids
+    : [];
+  const actionsCreated = Number(output?.actions_created || 0);
+  const actionsReused = Number(output?.actions_reused || 0);
   const operatorPlan = output?.operator_plan || {};
   const recommendedSteps = asArray(operatorPlan?.recommended_next_steps);
   const planActions = asArray(operatorPlan?.actions);
   const guardrails = asArray(output?.guardrails);
+  const autopilot = output?.autopilot || {};
+  const autopilotSummary = asArray(autopilot?.summary);
+  const autopilotExecuted = asArray(autopilot?.executed_actions);
+  const autopilotSkipped = asArray(autopilot?.skipped_actions);
+  const autopilotRuns = asArray(autopilot?.controlled_runs);
+  const autopilotResults = asArray(autopilot?.controlled_results);
+  const autopilotErrors = asArray(autopilot?.errors);
+
+  const numericActionIds = actionIds
+    .map((item: any) => Number(item))
+    .filter((item: number) => Number.isFinite(item) && item > 0);
+
+  const executedActionIds = autopilotExecuted
+    .map((item: any) => Number(item))
+    .filter((item: number) => Number.isFinite(item) && item > 0);
+
+  const skippedActionIds = autopilotSkipped
+    .map((item: any) => Number(item?.action_id || item))
+    .filter((item: number) => Number.isFinite(item) && item > 0);
+
+  const actionRuntimeState = (action: any, index: number) => {
+    const directId = Number(action?.id || action?.action_id || action?.agent_action_id || numericActionIds[index]);
+    const inferredSingleId =
+      planActions.length === 1 && numericActionIds.length === 1 ? numericActionIds[0] : 0;
+    const actionId = Number.isFinite(directId) && directId > 0 ? directId : inferredSingleId;
+
+    if (actionId && executedActionIds.includes(actionId)) {
+      return {
+        state: "executed",
+        actionId,
+        label: "Executed by Autopilot",
+      };
+    }
+    if (actionId && skippedActionIds.includes(actionId)) {
+      return {
+        state: "skipped",
+        actionId,
+        label: "Approval Required",
+      };
+    }
+    if (planActions.length === 1 && executedActionIds.length > 0) {
+      return {
+        state: "executed",
+        actionId: executedActionIds[0],
+        label: "Executed by Autopilot",
+      };
+    }
+    if (planActions.length === 1 && autopilotSkipped.length > 0) {
+      return {
+        state: "skipped",
+        actionId: skippedActionIds[0] || 0,
+        label: "Approval Required",
+      };
+    }
+
+    return {
+      state: "proposed",
+      actionId: actionId || 0,
+      label: "Proposed Action",
+    };
+  };
+
+  const actionRuntimeToneClass = (state: string) => {
+    if (state === "executed") return "border-hack-primary/60 bg-hack-primary/10 text-hack-primary";
+    if (state === "skipped") return "border-hack-warning/60 bg-hack-warning/10 text-hack-warning";
+    return "border-hack-border bg-black/30 text-hack-dim";
+  };
+
   const llmAssisted = Boolean(output?.llm_assisted);
   const operatorMode = String(output?.operator_mode || input?.operator_mode || "");
   const operatorError = String(output?.operator_error || input?.operator_error || "");
@@ -135,6 +215,84 @@ const MessageBubble = ({ message }: { message: TargetAgentChatMessage }) => {
           </div>
         )}
 
+        {!isUser && autopilot?.enabled && (
+          <div className="mt-3 border border-hack-primary/50 bg-hack-primary/10 p-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="font-mono text-[10px] uppercase tracking-wider text-hack-primary">
+                Operator Autopilot
+              </div>
+              <div className="flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-wider">
+                <span className="border border-hack-primary/60 bg-black/30 px-2 py-1 text-hack-primary">
+                  mode: {autopilot.mode || "assisted_autopilot_v1"}
+                </span>
+                <span className="border border-hack-primary/60 bg-black/30 px-2 py-1 text-hack-primary">
+                  executed: {autopilotExecuted.length}
+                </span>
+                <span className="border border-hack-primary/60 bg-black/30 px-2 py-1 text-hack-primary">
+                  runs: {autopilotRuns.join(", ") || "-"}
+                </span>
+                <span className="border border-hack-primary/60 bg-black/30 px-2 py-1 text-hack-primary">
+                  results: {autopilotResults.join(", ") || "-"}
+                </span>
+                <span className={clsx(
+                  "border bg-black/30 px-2 py-1",
+                  autopilot.memory_ingested
+                    ? "border-hack-primary/60 text-hack-primary"
+                    : "border-hack-warning/60 text-hack-warning",
+                )}>
+                  memory: {autopilot.memory_ingested ? "ingested" : "not ingested"}
+                </span>
+              </div>
+            </div>
+
+            {autopilotSummary.length > 0 && (
+              <div className="space-y-2">
+                {autopilotSummary.slice(0, 4).map((item: any, index: number) => (
+                  <div key={`${message.id}-autopilot-${index}`} className="border border-hack-border bg-black/30 p-2">
+                    <div className="grid gap-2 font-mono text-[11px] md:grid-cols-5">
+                      <div>
+                        <div className="text-[10px] uppercase text-hack-dim">Action</div>
+                        <div className="text-white">#{item.action_id || "-"}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] uppercase text-hack-dim">Run</div>
+                        <div className="text-white">#{item.run_id || "-"}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] uppercase text-hack-dim">Result</div>
+                        <div className="text-white">#{item.result_id || "-"}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] uppercase text-hack-dim">Status</div>
+                        <div className="text-white">{item.status || "-"}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] uppercase text-hack-dim">HTTP</div>
+                        <div className="text-white">{item.status_code || "-"}</div>
+                      </div>
+                    </div>
+                    {item.error && (
+                      <div className="mt-2 border border-hack-danger/40 bg-hack-danger/10 p-2 text-xs text-hack-danger">
+                        {truncateText(item.error, 220)}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {autopilotErrors.length > 0 && (
+              <div className="mt-2 border border-hack-warning/50 bg-hack-warning/10 p-2 text-xs text-hack-warning">
+                {autopilotErrors.slice(0, 3).map((item: any, index: number) => (
+                  <div key={`${message.id}-autopilot-error-${index}`}>
+                    • {truncateText(item, 220)}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {!isUser && recommendedSteps.length > 0 && (
           <div className="mt-3 border border-hack-border bg-black/30 p-3">
             <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-hack-dim">
@@ -151,24 +309,48 @@ const MessageBubble = ({ message }: { message: TargetAgentChatMessage }) => {
         {!isUser && planActions.length > 0 && (
           <div className="mt-3 border border-hack-primary/40 bg-hack-primary/10 p-3">
             <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-hack-primary">
-              Operator Proposed Actions
+              Operator Actions
             </div>
             <div className="space-y-2">
-              {planActions.slice(0, 5).map((action, index) => (
-                <div key={`${message.id}-action-${index}`} className="border border-hack-border bg-black/30 p-2">
-                  <div className="font-mono text-xs font-bold text-white">
-                    {action.title || actionLabel(action.action_type)}
-                  </div>
-                  <div className="mt-1 font-mono text-[10px] uppercase tracking-wider text-hack-dim">
-                    {actionLabel(action.action_type)} · risk {action.risk_level || "low"} · safety {action.safety_level ?? 0} · test {action.test_level ?? 0}
-                  </div>
-                  {action.reason && (
-                    <div className="mt-1 text-xs text-hack-dim">
-                      {truncateText(action.reason, 220)}
+              {planActions.slice(0, 5).map((action, index) => {
+                const runtime = actionRuntimeState(action, index);
+                return (
+                  <div key={`${message.id}-action-${index}`} className="border border-hack-border bg-black/30 p-2">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="font-mono text-xs font-bold text-white">
+                        {action.title || actionLabel(action.action_type)}
+                      </div>
+                      <span
+                        className={clsx(
+                          "border px-2 py-1 font-mono text-[10px] uppercase tracking-wider",
+                          actionRuntimeToneClass(runtime.state),
+                        )}
+                      >
+                        {runtime.label}
+                      </span>
                     </div>
-                  )}
-                </div>
-              ))}
+                    <div className="mt-1 font-mono text-[10px] uppercase tracking-wider text-hack-dim">
+                      {actionLabel(action.action_type)} · risk {action.risk_level || "low"} · safety {action.safety_level ?? 0} · test {action.test_level ?? 0}
+                      {runtime.actionId ? ` · action #${runtime.actionId}` : ""}
+                    </div>
+                    {runtime.state === "executed" && (
+                      <div className="mt-2 border border-hack-primary/40 bg-hack-primary/10 p-2 text-xs text-hack-primary">
+                        This action was executed automatically by Operator Autopilot under the current target policy.
+                      </div>
+                    )}
+                    {runtime.state === "skipped" && (
+                      <div className="mt-2 border border-hack-warning/40 bg-hack-warning/10 p-2 text-xs text-hack-warning">
+                        This action was not executed automatically. Current target policy requires explicit approval.
+                      </div>
+                    )}
+                    {action.reason && (
+                      <div className="mt-1 text-xs text-hack-dim">
+                        {truncateText(action.reason, 220)}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
@@ -186,16 +368,42 @@ const MessageBubble = ({ message }: { message: TargetAgentChatMessage }) => {
           </div>
         )}
 
-        {actionIds.length > 0 && (
+        {(actionIds.length > 0 || actionsCreated > 0 || actionsReused > 0) && (
           <div className="mt-3 border border-hack-warning/50 bg-hack-warning/10 p-2 font-mono text-[11px] text-hack-warning">
-            <div>Created proposed action IDs: {actionIds.join(", ")}</div>
+            <div className="flex flex-wrap gap-2">
+              <span className="border border-hack-warning/50 bg-black/30 px-2 py-1">
+                created: {actionsCreated}
+              </span>
+              <span className="border border-hack-warning/50 bg-black/30 px-2 py-1">
+                reused: {actionsReused}
+              </span>
+              {actionIds.length > 0 && (
+                <span className="border border-hack-warning/50 bg-black/30 px-2 py-1">
+                  action IDs: {actionIds.join(", ")}
+                </span>
+              )}
+              {reusedActionIds.length > 0 && (
+                <span className="border border-hack-warning/50 bg-black/30 px-2 py-1">
+                  reused IDs: {reusedActionIds.join(", ")}
+                </span>
+              )}
+            </div>
             <button
               type="button"
-              onClick={() =>
+              onClick={() => {
+                if (onJumpToActions) {
+                  onJumpToActions();
+                  window.setTimeout(() => {
+                    document
+                      .getElementById("agent-actions-panel")
+                      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  }, 100);
+                  return;
+                }
                 document
                   .getElementById("agent-actions-panel")
-                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
-              }
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }}
               className="mt-2 border border-hack-warning/70 px-2 py-1 text-[10px] uppercase tracking-wider hover:bg-hack-warning/10"
             >
               Jump to Agent Actions
@@ -239,7 +447,7 @@ const SessionSelector = ({
   );
 };
 
-const AgentChatPanel = ({ targetId, enabled = true }: Props) => {
+const AgentChatPanel = ({ targetId, enabled = true, onJumpToActions }: Props) => {
   const queryClient = useQueryClient();
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(
     null,
@@ -335,17 +543,22 @@ const AgentChatPanel = ({ targetId, enabled = true }: Props) => {
     },
     onSuccess: (result) => {
       setMessage("");
+      const output = parseJSONValue(result.assistant_message?.output_json);
+      const created = Number(output?.actions_created || 0);
+      const reused = Number(output?.actions_reused || 0);
       const count = result.proposed_actions?.length || 0;
       setNotice(
         count > 0
-          ? `Created ${count} proposed action${count === 1 ? "" : "s"} from chat`
+          ? `Chat returned ${count} action${count === 1 ? "" : "s"}: ${created} created, ${reused} reused`
           : "Chat response created",
       );
       refreshAll();
     },
   });
 
-  const actionCount = Number(latestAssistantOutput?.actions_created || 0);
+  const actionCount =
+    Number(latestAssistantOutput?.actions_created || 0) +
+    Number(latestAssistantOutput?.actions_reused || 0);
 
   const busy =
     createSessionMutation.isPending ||
@@ -486,7 +699,11 @@ const AgentChatPanel = ({ targetId, enabled = true }: Props) => {
             </div>
           </div>
         ) : (
-          messages.map((item) => <MessageBubble key={item.id} message={item} />)
+          messages.map((item) => <MessageBubble
+                key={item.id}
+                message={item}
+                onJumpToActions={onJumpToActions}
+              />)
         )}
       </div>
 

@@ -509,6 +509,11 @@ func ProposeTargetAgentAction(c *fiber.Ctx) error {
 		return err
 	}
 
+	_, ownerKey, _, _, ownerErr := currentAccountOwner(c)
+	if ownerErr != nil {
+		return ownerErr
+	}
+
 	req := new(proposeAgentActionRequest)
 	if err := c.BodyParser(req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "invalid request body", "error": err.Error()})
@@ -587,6 +592,7 @@ func ProposeTargetAgentAction(c *fiber.Ctx) error {
 
 	row := models.AgentAction{
 		TargetID:         target.ID,
+		OwnerKey:         ownerKey,
 		AgentRunID:       req.AgentRunID,
 		CreatedByUserID:  &uid,
 		ActionType:       actionType,

@@ -36,6 +36,12 @@ type TargetPolicy struct {
 	AuthRequired     bool   `gorm:"default:false" json:"auth_required"`
 	SafeTestingNotes string `gorm:"type:text" json:"safe_testing_notes"`
 
+	OperatorMode          string `gorm:"size:32;not null;default:'assisted_autopilot';index" json:"operator_mode"`
+	AutoExecuteLevel0     bool   `gorm:"default:true" json:"auto_execute_level_0"`
+	AutoExecuteLevel1     bool   `gorm:"default:true" json:"auto_execute_level_1"`
+	RequireApprovalLevel2 bool   `gorm:"default:true" json:"require_approval_level_2"`
+	RequireApprovalLevel3 bool   `gorm:"default:true" json:"require_approval_level_3"`
+
 	ReportingPreferences string `gorm:"type:text" json:"reporting_preferences"`
 	BusinessContext      string `gorm:"type:text" json:"business_context"`
 

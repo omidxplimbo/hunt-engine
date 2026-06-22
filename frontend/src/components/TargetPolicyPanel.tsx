@@ -33,6 +33,11 @@ const defaultPolicy: TargetPolicyPayload = {
   rate_limit_notes: "",
   auth_required: false,
   safe_testing_notes: "",
+  operator_mode: "assisted_autopilot",
+  auto_execute_level_0: true,
+  auto_execute_level_1: true,
+  require_approval_level_2: true,
+  require_approval_level_3: true,
   reporting_preferences: "",
   business_context: "",
   asset_criticality_default: "medium",
@@ -78,6 +83,11 @@ const fromPolicy = (policy: any): TargetPolicyPayload => {
     rate_limit_notes: policy.rate_limit_notes || "",
     auth_required: Boolean(policy.auth_required),
     safe_testing_notes: policy.safe_testing_notes || "",
+    operator_mode: policy.operator_mode || "assisted_autopilot",
+    auto_execute_level_0: policy.auto_execute_level_0 ?? true,
+    auto_execute_level_1: policy.auto_execute_level_1 ?? true,
+    require_approval_level_2: policy.require_approval_level_2 ?? true,
+    require_approval_level_3: policy.require_approval_level_3 ?? true,
     reporting_preferences: policy.reporting_preferences || "",
     business_context: policy.business_context || "",
     asset_criticality_default: policy.asset_criticality_default || "medium",
@@ -241,6 +251,9 @@ const TargetPolicyPanel = ({ targetId, enabled = true }: Props) => {
               </StatusPill>
               <StatusPill>
                 default criticality: {form.asset_criticality_default || "medium"}
+              </StatusPill>
+              <StatusPill tone={form.operator_mode === "strict_approval" ? "warning" : "primary"}>
+                operator mode: {form.operator_mode || "assisted_autopilot"}
               </StatusPill>
               {form.auth_required && (
                 <StatusPill tone="warning">auth required</StatusPill>
@@ -475,6 +488,119 @@ const TargetPolicyPanel = ({ targetId, enabled = true }: Props) => {
                   <option value="critical">Critical</option>
                 </select>
               </label>
+            </div>
+
+            <div className="space-y-3 border border-hack-primary/30 bg-hack-primary/5 p-3">
+              <div className="font-mono text-xs uppercase tracking-wider text-hack-primary">
+                Operator Automation
+              </div>
+
+              <label className="block">
+                <span className="mb-2 block font-mono text-[10px] uppercase tracking-widest text-hack-dim">
+                  Operator Mode
+                </span>
+                <select
+                  value={form.operator_mode || "assisted_autopilot"}
+                  onChange={(event) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      operator_mode: event.target.value,
+                    }))
+                  }
+                  className="w-full border border-hack-border bg-black/30 px-3 py-2 font-mono text-sm text-white outline-none focus:border-hack-primary"
+                >
+                  <option value="manual_only">Manual only</option>
+                  <option value="assisted_autopilot">Assisted Autopilot</option>
+                  <option value="strict_approval">Strict Approval</option>
+                </select>
+                <div className="mt-1 text-xs leading-5 text-hack-dim">
+                  Assisted Autopilot can execute low-risk controlled actions when target policy permits. Strict Approval requires explicit approval for every action.
+                </div>
+              </label>
+
+              <label className="flex cursor-pointer items-center justify-between gap-3 border border-hack-border bg-black/20 p-3 font-mono text-sm">
+                <span>
+                  <span className="block text-white">Auto execute Level 0</span>
+                  <span className="mt-1 block text-xs text-hack-dim">
+                    Allow passive/very-low-risk operator actions to run automatically.
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.auto_execute_level_0)}
+                  disabled={form.operator_mode === "strict_approval" || form.operator_mode === "manual_only"}
+                  onChange={(event) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      auto_execute_level_0: event.target.checked,
+                    }))
+                  }
+                  className="h-4 w-4 accent-hack-primary disabled:opacity-40"
+                />
+              </label>
+
+              <label className="flex cursor-pointer items-center justify-between gap-3 border border-hack-border bg-black/20 p-3 font-mono text-sm">
+                <span>
+                  <span className="block text-white">Auto execute Level 1</span>
+                  <span className="mt-1 block text-xs text-hack-dim">
+                    Allow low-risk controlled endpoint review/probe actions to run automatically.
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.auto_execute_level_1)}
+                  disabled={form.operator_mode === "strict_approval" || form.operator_mode === "manual_only"}
+                  onChange={(event) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      auto_execute_level_1: event.target.checked,
+                    }))
+                  }
+                  className="h-4 w-4 accent-hack-primary disabled:opacity-40"
+                />
+              </label>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="flex cursor-pointer items-center justify-between gap-3 border border-hack-border bg-black/20 p-3 font-mono text-sm">
+                  <span>
+                    <span className="block text-white">Require approval Level 2</span>
+                    <span className="mt-1 block text-xs text-hack-dim">
+                      Controlled active validation should stay approval-gated.
+                    </span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={form.require_approval_level_2 ?? true}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        require_approval_level_2: event.target.checked,
+                      }))
+                    }
+                    className="h-4 w-4 accent-hack-primary"
+                  />
+                </label>
+
+                <label className="flex cursor-pointer items-center justify-between gap-3 border border-hack-border bg-black/20 p-3 font-mono text-sm">
+                  <span>
+                    <span className="block text-white">Require approval Level 3</span>
+                    <span className="mt-1 block text-xs text-hack-dim">
+                      Exploit validation, payload execution, auth/rate-limit testing, and brute-force workflows must be explicitly approved.
+                    </span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={form.require_approval_level_3 ?? true}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        require_approval_level_3: event.target.checked,
+                      }))
+                    }
+                    className="h-4 w-4 accent-hack-primary"
+                  />
+                </label>
+              </div>
             </div>
 
             <label className="flex cursor-pointer items-center justify-between gap-3 border border-hack-border bg-black/20 p-3 font-mono text-sm">

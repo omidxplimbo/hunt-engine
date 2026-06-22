@@ -3,6 +3,7 @@ package operator
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
@@ -15,6 +16,96 @@ func GeneratePlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 		return nil, err
 	}
 	return GeneratePlanWithConfig(ctx, cfg, req)
+}
+
+var endpointURLPattern = regexp.MustCompile(`https?://[^\s"'<>(){}[\]]+`)
+
+func firstEndpointURLFromText(text string) string {
+	raw := endpointURLPattern.FindString(text)
+	if raw == "" {
+		return ""
+	}
+	return strings.TrimRight(raw, ".,;:!?)].\"'")
+}
+
+func endpointIntentRequestsSingleAction(text string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	return strings.Contains(normalized, "فقط") ||
+		strings.Contains(normalized, "only") ||
+		strings.Contains(normalized, "just create") ||
+		strings.Contains(normalized, "single action")
+}
+
+func ensureEndpointReviewAction(plan *Plan, userMessage string) {
+	if plan == nil {
+		return
+	}
+
+	url := firstEndpointURLFromText(userMessage)
+	if url == "" {
+		return
+	}
+
+	endpointAction := ActionProposal{
+		ActionType:       models.AgentActionTypeReviewEndpoint,
+		Title:            "Review endpoint with controlled HTTP probe",
+		Description:      "Review the user-specified endpoint through the approval-gated controlled runtime.",
+		Reason:           "The user provided a concrete endpoint URL, so the next operator step should preserve that URL and route it through the controlled runtime approval flow.",
+		RiskLevel:        models.AgentActionRiskLow,
+		SafetyLevel:      1,
+		TestLevel:        1,
+		RequiresApproval: true,
+		InputJSON: map[string]interface{}{
+			"url":                      url,
+			"method":                   "GET",
+			"source":                   "operator_endpoint_intent",
+			"objective":                "Review user-specified endpoint through controlled runtime",
+			"endpoint_intent_detected": true,
+			"operator_prompt_version":  PromptVersion,
+		},
+	}
+
+	found := false
+	for i := range plan.Actions {
+		if strings.TrimSpace(plan.Actions[i].ActionType) != models.AgentActionTypeReviewEndpoint {
+			continue
+		}
+
+		found = true
+		if plan.Actions[i].InputJSON == nil {
+			plan.Actions[i].InputJSON = map[string]interface{}{}
+		}
+		if strings.TrimSpace(fmt.Sprint(plan.Actions[i].InputJSON["url"])) == "" {
+			plan.Actions[i].InputJSON["url"] = url
+		}
+		if strings.TrimSpace(fmt.Sprint(plan.Actions[i].InputJSON["method"])) == "" {
+			plan.Actions[i].InputJSON["method"] = "GET"
+		}
+		plan.Actions[i].InputJSON["endpoint_intent_detected"] = true
+		plan.Actions[i].InputJSON["operator_prompt_version"] = PromptVersion
+
+		if plan.Actions[i].RiskLevel == "" {
+			plan.Actions[i].RiskLevel = models.AgentActionRiskLow
+		}
+		if plan.Actions[i].SafetyLevel <= 0 {
+			plan.Actions[i].SafetyLevel = 1
+		}
+		if plan.Actions[i].TestLevel <= 0 {
+			plan.Actions[i].TestLevel = 1
+		}
+		plan.Actions[i].RequiresApproval = true
+		endpointAction = plan.Actions[i]
+		break
+	}
+
+	if endpointIntentRequestsSingleAction(userMessage) {
+		plan.Actions = []ActionProposal{endpointAction}
+		return
+	}
+
+	if !found {
+		plan.Actions = append([]ActionProposal{endpointAction}, plan.Actions...)
+	}
 }
 
 func GeneratePlanWithConfig(ctx context.Context, cfg *llmclient.Config, req PlanRequest) (*Plan, error) {
@@ -78,6 +169,7 @@ func GeneratePlanWithConfig(ctx context.Context, cfg *llmclient.Config, req Plan
 	plan.OperatorPromptVersion = PromptVersion
 
 	groundPlan(plan, contextFacts)
+	ensureEndpointReviewAction(plan, req.UserMessage)
 
 	if plan.ResponseSummary == "" {
 		plan.ResponseSummary = "I prepared an approval-gated operator plan from the available target context and memory."
@@ -191,6 +283,50 @@ func buildContextFacts(targetContext map[string]interface{}, memoryContext map[s
 		facts = append(facts, "memory_count="+count)
 	}
 
+	if evidence, ok := memoryContext["controlled_runtime_evidence"].([]map[string]interface{}); ok {
+		for _, item := range evidence {
+			title := cleanString(item["title"])
+			summary := cleanString(item["summary"])
+			content := cleanString(item["content"])
+			fact := strings.TrimSpace(title + ": " + summary)
+			if fact == "" {
+				fact = content
+			}
+			if fact != "" {
+				if len([]rune(fact)) > 260 {
+					fact = string([]rune(fact)[:260])
+				}
+				facts = append(facts, "controlled_runtime_evidence="+fact)
+			}
+			if len(facts) >= 18 {
+				break
+			}
+		}
+	} else if raw, ok := memoryContext["controlled_runtime_evidence"].([]interface{}); ok {
+		for _, item := range raw {
+			memory, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			title := cleanString(memory["title"])
+			summary := cleanString(memory["summary"])
+			content := cleanString(memory["content"])
+			fact := strings.TrimSpace(title + ": " + summary)
+			if fact == "" {
+				fact = content
+			}
+			if fact != "" {
+				if len([]rune(fact)) > 260 {
+					fact = string([]rune(fact)[:260])
+				}
+				facts = append(facts, "controlled_runtime_evidence="+fact)
+			}
+			if len(facts) >= 18 {
+				break
+			}
+		}
+	}
+
 	if memories, ok := memoryContext["memories"].([]map[string]interface{}); ok {
 		for _, memory := range memories {
 			title := cleanString(memory["title"])
@@ -230,6 +366,25 @@ func buildContextFacts(targetContext map[string]interface{}, memoryContext map[s
 	return facts
 }
 
+func hasControlledRuntimeBlockedEvidence(facts []string) bool {
+	for _, fact := range facts {
+		text := strings.ToLower(fact)
+		if !strings.Contains(text, "controlled_runtime_evidence") {
+			continue
+		}
+		if strings.Contains(text, "inconclusive") ||
+			strings.Contains(text, "blocked") ||
+			strings.Contains(text, "challenged") ||
+			strings.Contains(text, "cloudflare") ||
+			strings.Contains(text, "waf") ||
+			strings.Contains(text, "403") ||
+			strings.Contains(text, "429") {
+			return true
+		}
+	}
+	return false
+}
+
 func groundPlan(plan *Plan, facts []string) {
 	if plan == nil {
 		return
@@ -239,9 +394,23 @@ func groundPlan(plan *Plan, facts []string) {
 		plan.ResponseSummary = "Using current target memory (" + strings.Join(firstStrings(facts, 5), ", ") + "), I prepared an approval-gated operator plan focused on the most relevant OWASP and evidence-review work."
 	}
 
+	if hasControlledRuntimeBlockedEvidence(facts) {
+		if isGenericOperatorText(plan.ResponseSummary) || !strings.Contains(strings.ToLower(plan.ResponseSummary), "controlled") {
+			plan.ResponseSummary = "The latest controlled runtime evidence shows an inconclusive or blocked response, not confirmed vulnerability proof. I will use that observation to propose the next controlled validation step."
+		}
+		if len(plan.RecommendedNextSteps) == 0 {
+			plan.RecommendedNextSteps = []string{
+				"Treat the challenged or blocked runtime result as inconclusive evidence rather than a confirmed vulnerability.",
+				"Review alternate live endpoints and collected URLs for less-protected validation targets.",
+				"Consider browser-aware or authenticated validation only if target policy and user approval allow it.",
+				"Keep the next action approval-gated and backed by captured evidence.",
+			}
+		}
+	}
+
 	if len(plan.RecommendedNextSteps) == 0 && len(facts) > 0 {
 		plan.RecommendedNextSteps = []string{
-			"Review stored findings and bug test results before running new checks.",
+			"Review stored findings, bug test results, and controlled runtime evidence before running new checks.",
 			"Prioritize endpoints and live assets from the current memory context.",
 			"Keep testing within the target policy and approval workflow.",
 		}
@@ -308,7 +477,7 @@ func defaultGuardrails() []string {
 		"chat responses do not execute tests directly",
 		"authorized controlled validation/exploitation must use approval-gated Agent Actions and audited runtime execution",
 		"active/risky actions require scope checks, policy checks, rate limits, and explicit approval",
-		"destructive, out-of-scope, brute-force, data-exfiltration, persistence, malware, credential theft, and uncontrolled payload execution remain blocked",
+		"destructive, out-of-scope, unauthorized brute-force, credential stuffing, password spraying, DoS-like testing, data-exfiltration, persistence, malware, credential theft, and uncontrolled payload execution remain blocked",
 	}
 }
 

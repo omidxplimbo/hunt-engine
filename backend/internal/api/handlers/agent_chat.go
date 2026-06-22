@@ -412,6 +412,38 @@ func buildAgentChatMemoryContext(targetID uint, ownerKey string) map[string]inte
 		})
 	}
 
+	controlledRuntimeItems := make([]models.TargetMemoryItem, 0)
+	_ = database.DB.
+		Where("target_id = ? AND owner_key = ? AND source_type = ?", targetID, ownerKey, models.TargetMemorySourceControlledTestResult).
+		Order("updated_at desc, importance desc").
+		Limit(6).
+		Find(&controlledRuntimeItems).Error
+
+	controlledRuntimeEvidence := make([]map[string]interface{}, 0, len(controlledRuntimeItems))
+	for _, item := range controlledRuntimeItems {
+		text := strings.TrimSpace(item.Summary)
+		if text == "" {
+			text = strings.TrimSpace(item.Content)
+		}
+		if len([]rune(text)) > 700 {
+			text = string([]rune(text)[:700]) + "..."
+		}
+		controlledRuntimeEvidence = append(controlledRuntimeEvidence, map[string]interface{}{
+			"id":          item.ID,
+			"memory_type": item.MemoryType,
+			"source_type": item.SourceType,
+			"source_id":   item.SourceID,
+			"title":       item.Title,
+			"summary":     item.Summary,
+			"content":     text,
+			"tags":        item.Tags,
+			"importance":  item.Importance,
+			"confidence":  item.Confidence,
+			"metadata":    item.Metadata,
+			"updated_at":  item.UpdatedAt,
+		})
+	}
+
 	chunks := make([]models.TargetMemoryChunk, 0)
 	if len(itemIDs) > 0 {
 		_ = database.DB.
@@ -437,10 +469,12 @@ func buildAgentChatMemoryContext(targetID uint, ownerKey string) map[string]inte
 	}
 
 	return map[string]interface{}{
-		"context_version": "agent-chat-memory-context-v1",
-		"memory_count":    len(memories),
-		"memories":        memories,
-		"chunks":          chunkOut,
+		"context_version":             "agent-chat-memory-context-v1",
+		"memory_count":                len(memories),
+		"memories":                    memories,
+		"controlled_runtime_evidence": controlledRuntimeEvidence,
+		"controlled_runtime_count":    len(controlledRuntimeEvidence),
+		"chunks":                      chunkOut,
 	}
 }
 
@@ -516,6 +550,451 @@ func boolPtr(value bool) *bool {
 	return &value
 }
 
+func chatActionInputMap(raw datatypes.JSON) map[string]interface{} {
+	out := map[string]interface{}{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &out)
+	}
+	return out
+}
+
+func uintFromAny(value interface{}) uint {
+	switch x := value.(type) {
+	case uint:
+		return x
+	case int:
+		return uint(x)
+	case int64:
+		return uint(x)
+	case float64:
+		return uint(x)
+	case json.Number:
+		n, _ := x.Int64()
+		return uint(n)
+	default:
+		return 0
+	}
+}
+
+func appendUniqueUintInterface(items []interface{}, id uint) []interface{} {
+	for _, item := range items {
+		if uintFromAny(item) == id {
+			return items
+		}
+	}
+	return append(items, id)
+}
+
+func uintListFromInterface(value interface{}) []interface{} {
+	if items, ok := value.([]interface{}); ok {
+		return items
+	}
+	return []interface{}{}
+}
+
+func markDuplicateActionReusedByChat(c *fiber.Ctx, target *models.Target, uid uint, ownerKey string, duplicate *models.AgentAction, req proposeAgentActionRequest) (*models.AgentAction, error) {
+	if duplicate == nil {
+		return nil, nil
+	}
+
+	input := chatActionInputMap(duplicate.InputJSON)
+	if input == nil {
+		input = map[string]interface{}{}
+	}
+
+	chatSessionID := uintFromAny(req.InputJSON["chat_session_id"])
+	userMessageID := uintFromAny(req.InputJSON["user_message_id"])
+
+	input["reused_by_chat"] = true
+	input["last_reused_by_chat"] = map[string]interface{}{
+		"chat_session_id": chatSessionID,
+		"user_message_id": userMessageID,
+		"owner_key":       ownerKey,
+		"source":          "agent_chat_duplicate_reuse",
+	}
+
+	if chatSessionID > 0 {
+		input["last_reused_chat_session_id"] = chatSessionID
+		input["related_chat_session_ids"] = appendUniqueUintInterface(uintListFromInterface(input["related_chat_session_ids"]), chatSessionID)
+	}
+	if userMessageID > 0 {
+		input["last_reused_user_message_id"] = userMessageID
+		input["related_user_message_ids"] = appendUniqueUintInterface(uintListFromInterface(input["related_user_message_ids"]), userMessageID)
+	}
+
+	for k, v := range req.InputJSON {
+		if _, exists := input[k]; !exists {
+			input[k] = v
+		}
+	}
+
+	if err := database.DB.Model(&models.AgentAction{}).
+		Where("id = ? AND target_id = ? AND owner_key = ?", duplicate.ID, target.ID, ownerKey).
+		Update("input_json", agentActionJSON(input)).Error; err != nil {
+		return nil, err
+	}
+
+	var updated models.AgentAction
+	if err := database.DB.Where("id = ? AND target_id = ? AND owner_key = ?", duplicate.ID, target.ID, ownerKey).First(&updated).Error; err != nil {
+		return duplicate, nil
+	}
+
+	return &updated, nil
+}
+
+func actionReusedForCurrentChat(action models.AgentAction, sessionID uint, messageID uint) bool {
+	input := chatActionInputMap(action.InputJSON)
+	reused, _ := input["reused_by_chat"].(bool)
+	if !reused {
+		return false
+	}
+
+	last, ok := input["last_reused_by_chat"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+
+	return uintFromAny(last["chat_session_id"]) == sessionID && uintFromAny(last["user_message_id"]) == messageID
+}
+
+func shouldReuseChatActionByType(actionType string) bool {
+	switch normalizeAgentActionType(actionType) {
+	case models.AgentActionTypeReviewBugTestResults,
+		models.AgentActionTypeInspectBugPatterns,
+		models.AgentActionTypeInspectBugPayloads,
+		models.AgentActionTypePromoteBugTestResults,
+		models.AgentActionTypeRunOWASPChecklist,
+		models.AgentActionTypeReviewEndpoint,
+		models.AgentActionTypeRunJSIntelligence,
+		models.AgentActionTypeRunSafeBugTests:
+		return true
+	default:
+		return false
+	}
+}
+
+type chatAutopilotResult struct {
+	Enabled           bool                     `json:"enabled"`
+	Mode              string                   `json:"mode"`
+	PolicySource      string                   `json:"policy_source"`
+	AutoExecuteLevel0 bool                     `json:"auto_execute_level_0"`
+	AutoExecuteLevel1 bool                     `json:"auto_execute_level_1"`
+	ExecutedActions   []uint                   `json:"executed_actions"`
+	SkippedActions    []map[string]interface{} `json:"skipped_actions"`
+	ControlledRuns    []uint                   `json:"controlled_runs"`
+	ControlledResults []uint                   `json:"controlled_results"`
+	MemoryIngested    bool                     `json:"memory_ingested"`
+	Errors            []string                 `json:"errors"`
+	Summary           []map[string]interface{} `json:"summary"`
+}
+
+type chatAutopilotPolicy struct {
+	OperatorMode          string `json:"operator_mode"`
+	PolicySource          string `json:"policy_source"`
+	AutoExecuteLevel0     bool   `json:"auto_execute_level_0"`
+	AutoExecuteLevel1     bool   `json:"auto_execute_level_1"`
+	RequireApprovalLevel2 bool   `json:"require_approval_level_2"`
+	RequireApprovalLevel3 bool   `json:"require_approval_level_3"`
+}
+
+func loadChatAutopilotPolicy(targetID uint) chatAutopilotPolicy {
+	policy := chatAutopilotPolicy{
+		OperatorMode:          "strict_approval",
+		PolicySource:          "missing_target_policy",
+		AutoExecuteLevel0:     false,
+		AutoExecuteLevel1:     false,
+		RequireApprovalLevel2: true,
+		RequireApprovalLevel3: true,
+	}
+
+	var row models.TargetPolicy
+	if err := database.DB.Where("target_id = ?", targetID).First(&row).Error; err != nil {
+		return policy
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(row.OperatorMode))
+	switch mode {
+	case "manual_only", "assisted_autopilot", "strict_approval":
+		policy.OperatorMode = mode
+	default:
+		policy.OperatorMode = "strict_approval"
+	}
+
+	policy.PolicySource = "target_policy"
+	policy.AutoExecuteLevel0 = row.AutoExecuteLevel0
+	policy.AutoExecuteLevel1 = row.AutoExecuteLevel1
+	policy.RequireApprovalLevel2 = row.RequireApprovalLevel2
+	policy.RequireApprovalLevel3 = row.RequireApprovalLevel3
+
+	return policy
+}
+
+func isChatAutopilotAllowedAction(action models.AgentAction, policy chatAutopilotPolicy) (bool, string) {
+	if policy.OperatorMode == "manual_only" {
+		return false, "operator_mode=manual_only disables autopilot"
+	}
+	if policy.OperatorMode == "strict_approval" {
+		return false, "operator_mode=strict_approval requires explicit approval"
+	}
+	if policy.OperatorMode != "assisted_autopilot" {
+		return false, "operator mode does not allow autopilot"
+	}
+	if action.TestLevel <= 0 && !policy.AutoExecuteLevel0 {
+		return false, "auto_execute_level_0 is disabled by target policy"
+	}
+	if action.TestLevel == 1 && !policy.AutoExecuteLevel1 {
+		return false, "auto_execute_level_1 is disabled by target policy"
+	}
+	if action.TestLevel >= 2 && policy.RequireApprovalLevel2 {
+		return false, "level 2+ actions require explicit approval"
+	}
+	if action.TestLevel >= 3 && policy.RequireApprovalLevel3 {
+		return false, "level 3 actions require explicit approval"
+	}
+
+	if normalizeAgentActionType(action.ActionType) != models.AgentActionTypeReviewEndpoint {
+		return false, "autopilot v1 only supports review_endpoint"
+	}
+	if action.Status == models.AgentActionStatusBlockedByPolicy || action.PolicyStatus == models.AgentActionPolicyStatusBlocked {
+		return false, "action is blocked by policy"
+	}
+	if strings.EqualFold(action.RiskLevel, models.AgentActionRiskHigh) || strings.EqualFold(action.RiskLevel, models.AgentActionRiskCritical) {
+		return false, "high/critical risk requires explicit approval"
+	}
+	if action.SafetyLevel > 1 || action.TestLevel > 1 || action.AutonomyLevel > 1 {
+		return false, "action level exceeds autopilot v1 limits"
+	}
+
+	input := chatActionInputMap(action.InputJSON)
+	if strings.TrimSpace(controlledCleanString(input["url"])) == "" {
+		return false, "review_endpoint action has no input_json.url"
+	}
+
+	return true, ""
+}
+
+func updateChatActionOutput(action *models.AgentAction, output map[string]interface{}, errorMessage string, status string, executedAt *time.Time, completedAt *time.Time) error {
+	if action == nil {
+		return nil
+	}
+
+	updates := map[string]interface{}{
+		"output_json":   agentActionJSON(output),
+		"error_message": strings.TrimSpace(errorMessage),
+	}
+	if strings.TrimSpace(status) != "" {
+		updates["status"] = status
+	}
+	if executedAt != nil {
+		updates["executed_at"] = executedAt
+	}
+	if completedAt != nil {
+		updates["completed_at"] = completedAt
+	}
+
+	if err := database.DB.Model(&models.AgentAction{}).
+		Where("id = ? AND target_id = ? AND owner_key = ?", action.ID, action.TargetID, action.OwnerKey).
+		Updates(updates).Error; err != nil {
+		return err
+	}
+
+	_ = database.DB.Where("id = ? AND target_id = ? AND owner_key = ?", action.ID, action.TargetID, action.OwnerKey).First(action).Error
+	return nil
+}
+
+func runAgentChatAutopilotForActions(c *fiber.Ctx, target *models.Target, uid uint, ownerKey string, actions []models.AgentAction) chatAutopilotResult {
+	policy := loadChatAutopilotPolicy(target.ID)
+
+	result := chatAutopilotResult{
+		Enabled:           policy.OperatorMode == "assisted_autopilot",
+		Mode:              policy.OperatorMode,
+		PolicySource:      policy.PolicySource,
+		AutoExecuteLevel0: policy.AutoExecuteLevel0,
+		AutoExecuteLevel1: policy.AutoExecuteLevel1,
+		ExecutedActions:   []uint{},
+		SkippedActions:    []map[string]interface{}{},
+		ControlledRuns:    []uint{},
+		ControlledResults: []uint{},
+		Errors:            []string{},
+		Summary:           []map[string]interface{}{},
+	}
+
+	if target == nil || strings.TrimSpace(ownerKey) == "" {
+		result.Errors = append(result.Errors, "target or owner scope missing")
+		return result
+	}
+
+	for _, action := range actions {
+		allowed, reason := isChatAutopilotAllowedAction(action, policy)
+		if !allowed {
+			result.SkippedActions = append(result.SkippedActions, map[string]interface{}{
+				"action_id":   action.ID,
+				"action_type": action.ActionType,
+				"reason":      reason,
+			})
+			continue
+		}
+
+		now := time.Now().UTC()
+
+		if action.Status == models.AgentActionStatusProposed {
+			if err := database.DB.Model(&models.AgentAction{}).
+				Where("id = ? AND target_id = ? AND owner_key = ?", action.ID, target.ID, ownerKey).
+				Updates(map[string]interface{}{
+					"status":              models.AgentActionStatusApproved,
+					"approved_by_user_id": uid,
+					"approved_at":         &now,
+					"reject_reason":       "",
+				}).Error; err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("auto approve action %d failed: %v", action.ID, err))
+				continue
+			}
+
+			action.Status = models.AgentActionStatusApproved
+			action.ApprovedByUserID = &uid
+			action.ApprovedAt = &now
+
+			entityID := action.ID
+			_ = auditlog.Record(auditlog.Entry{
+				ActorUserID: &uid,
+				Action:      "target.agent_action.auto_approve",
+				EntityType:  "agent_action",
+				EntityID:    &entityID,
+				TargetID:    &target.ID,
+				IPAddress:   auditlog.ClientIP(c),
+				UserAgent:   auditlog.UserAgent(c),
+				Metadata: map[string]interface{}{
+					"source":      "agent_chat_autopilot",
+					"mode":        result.Mode,
+					"policy":      result.PolicySource,
+					"reason":      "low-risk controlled endpoint review auto-approved by target policy",
+					"action_type": action.ActionType,
+				},
+			})
+		}
+
+		if action.Status != models.AgentActionStatusApproved {
+			result.SkippedActions = append(result.SkippedActions, map[string]interface{}{
+				"action_id":   action.ID,
+				"action_type": action.ActionType,
+				"reason":      "action is not approved after autopilot approval gate",
+			})
+			continue
+		}
+
+		preview := buildDispatchPreview(*target, action, false, "agent chat autopilot dispatch")
+		run, runErr := CreateControlledTestRunFromAgentAction(target, &action, uid)
+		if runErr != nil {
+			preview["controlled_runtime"] = map[string]interface{}{
+				"attempted": true,
+				"error":     runErr.Error(),
+			}
+			_ = updateChatActionOutput(&action, preview, runErr.Error(), "", nil, &now)
+			result.Errors = append(result.Errors, fmt.Sprintf("create controlled run for action %d failed: %v", action.ID, runErr))
+			continue
+		}
+
+		result.ControlledRuns = append(result.ControlledRuns, run.ID)
+
+		executedAt := time.Now().UTC()
+		runAfterExecute, runtimeResult, output, execErr := ExecuteControlledTestRunInternal(
+			target.ID,
+			run.ID,
+			ownerKey,
+			uid,
+			"agent chat autopilot execute controlled endpoint review",
+			8000,
+			256*1024,
+			"agent_chat_autopilot",
+		)
+
+		if output == nil {
+			output = map[string]interface{}{}
+		}
+
+		controlledRuntime := map[string]interface{}{
+			"attempted":              true,
+			"controlled_test_run_id": run.ID,
+			"runtime_type":           run.RuntimeType,
+			"runtime_status":         run.Status,
+			"real_execution_pending": false,
+			"evidence_capture":       true,
+			"manual_review":          false,
+			"autopilot":              true,
+			"output":                 output,
+		}
+
+		if runAfterExecute != nil {
+			controlledRuntime["runtime_status"] = runAfterExecute.Status
+		}
+		if runtimeResult != nil {
+			controlledRuntime["controlled_test_result_id"] = runtimeResult.ID
+			controlledRuntime["result_status"] = runtimeResult.Status
+			controlledRuntime["confidence"] = runtimeResult.Confidence
+			controlledRuntime["severity_hint"] = runtimeResult.SeverityHint
+			result.ControlledResults = append(result.ControlledResults, runtimeResult.ID)
+		}
+		if mem, _ := output["memory_ingested"].(bool); mem {
+			result.MemoryIngested = true
+		}
+
+		preview["execution_enabled"] = true
+		preview["executed"] = true
+		preview["hard_blocked"] = false
+		preview["reason"] = "agent chat autopilot created and executed controlled runtime run"
+		preview["controlled_runtime"] = controlledRuntime
+		preview["autopilot"] = map[string]interface{}{
+			"enabled": true,
+			"mode":    result.Mode,
+			"source":  "agent_chat",
+		}
+
+		errorMessage := ""
+		if execErr != nil {
+			errorMessage = execErr.Error()
+			result.Errors = append(result.Errors, fmt.Sprintf("execute controlled run %d failed: %v", run.ID, execErr))
+		}
+
+		completedAt := time.Now().UTC()
+		if err := updateChatActionOutput(&action, preview, errorMessage, models.AgentActionStatusExecuted, &executedAt, &completedAt); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("update action %d autopilot output failed: %v", action.ID, err))
+		}
+
+		result.ExecutedActions = append(result.ExecutedActions, action.ID)
+		summary := map[string]interface{}{
+			"action_id":     action.ID,
+			"run_id":        run.ID,
+			"status":        output["status"],
+			"status_code":   output["status_code"],
+			"memory_ingest": output["memory_ingested"],
+			"error":         errorMessage,
+		}
+		if runtimeResult != nil {
+			summary["result_id"] = runtimeResult.ID
+		}
+		result.Summary = append(result.Summary, summary)
+
+		entityID := action.ID
+		_ = auditlog.Record(auditlog.Entry{
+			ActorUserID: &uid,
+			Action:      "target.agent_action.autopilot_execute",
+			EntityType:  "agent_action",
+			EntityID:    &entityID,
+			TargetID:    &target.ID,
+			IPAddress:   auditlog.ClientIP(c),
+			UserAgent:   auditlog.UserAgent(c),
+			Metadata: map[string]interface{}{
+				"source":            "agent_chat_autopilot",
+				"mode":              result.Mode,
+				"controlled_run_id": run.ID,
+				"memory_ingested":   result.MemoryIngested,
+			},
+		})
+	}
+
+	return result
+}
+
 func createActionFromChat(c *fiber.Ctx, target *models.Target, uid uint, ownerKey string, req proposeAgentActionRequest) (*models.AgentAction, error) {
 	actionType := normalizeAgentActionType(req.ActionType)
 	if actionType == "" {
@@ -531,7 +1010,21 @@ func createActionFromChat(c *fiber.Ctx, target *models.Target, uid uint, ownerKe
 	if duplicateErr != nil {
 		return nil, duplicateErr
 	}
+	if duplicate == nil && shouldReuseChatActionByType(actionType) {
+		duplicate, duplicateErr = findDuplicateAgentAction(target.ID, actionType, "")
+		if duplicateErr != nil {
+			return nil, duplicateErr
+		}
+	}
 	if duplicate != nil {
+		updatedDuplicate, reuseErr := markDuplicateActionReusedByChat(c, target, uid, ownerKey, duplicate, req)
+		if reuseErr != nil {
+			return nil, reuseErr
+		}
+		if updatedDuplicate != nil {
+			duplicate = updatedDuplicate
+		}
+
 		entityID := duplicate.ID
 		_ = auditlog.Record(auditlog.Entry{
 			ActorUserID: &uid,
@@ -542,14 +1035,15 @@ func createActionFromChat(c *fiber.Ctx, target *models.Target, uid uint, ownerKe
 			IPAddress:   auditlog.ClientIP(c),
 			UserAgent:   auditlog.UserAgent(c),
 			Metadata: map[string]interface{}{
-				"target_id":     target.ID,
-				"root_domain":   target.RootDomain,
-				"source":        "agent_chat",
-				"action_type":   duplicate.ActionType,
-				"status":        duplicate.Status,
-				"policy_status": duplicate.PolicyStatus,
-				"risk_level":    duplicate.RiskLevel,
-				"duplicate":     true,
+				"target_id":      target.ID,
+				"root_domain":    target.RootDomain,
+				"source":         "agent_chat",
+				"action_type":    duplicate.ActionType,
+				"status":         duplicate.Status,
+				"policy_status":  duplicate.PolicyStatus,
+				"risk_level":     duplicate.RiskLevel,
+				"duplicate":      true,
+				"reused_by_chat": true,
 			},
 		})
 		return duplicate, nil
@@ -859,6 +1353,8 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 	var userMessage models.AgentChatMessage
 	var assistantMessage models.AgentChatMessage
 	createdActions := make([]models.AgentAction, 0)
+	reusedActionIDs := make([]uint, 0)
+	reusedActionCount := 0
 
 	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
 		userMessage = models.AgentChatMessage{
@@ -893,6 +1389,14 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 		actionIDs := make([]uint, 0, len(createdActions))
 		for _, action := range createdActions {
 			actionIDs = append(actionIDs, action.ID)
+			if actionReusedForCurrentChat(action, session.ID, userMessage.ID) {
+				reusedActionCount++
+				reusedActionIDs = append(reusedActionIDs, action.ID)
+			}
+		}
+
+		if reusedActionCount > 0 {
+			assistantText = strings.TrimSpace(assistantText + "\n" + fmt.Sprintf("I reused %d existing similar approval-gated operator action(s) and linked them to this chat session instead of creating duplicates.", reusedActionCount))
 		}
 
 		assistantMessage = models.AgentChatMessage{
@@ -915,12 +1419,14 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 				"operator_plan":     operatorPlan,
 				"operator_error":    operatorError,
 				"llm_assisted":      operatorMode == "llm_operator_plan",
-				"actions_created":   len(actionIDs),
+				"actions_created":   len(actionIDs) - reusedActionCount,
+				"actions_reused":    reusedActionCount,
+				"reused_action_ids": reusedActionIDs,
 				"execution_enabled": false,
 				"guardrails": []string{
-					"chat agent creates approval-gated action proposals only",
-					"v3.11.0 operator actions are approval-gated; direct chat execution remains disabled",
-					"blocked_by_policy actions cannot be approved",
+					"low-risk controlled actions may be auto-executed by Operator Autopilot when target policy permits",
+					"higher-risk, active, exploit, payload, auth, rate-limit, or brute-force actions require explicit approval",
+					"blocked_by_policy actions cannot be approved or executed",
 				},
 			}),
 		}
@@ -944,6 +1450,33 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": txErr.Error()})
 	}
 
+	autopilot := runAgentChatAutopilotForActions(c, target, uid, ownerKey, createdActions)
+
+	assistantOutput := map[string]interface{}{}
+	if len(assistantMessage.OutputJSON) > 0 {
+		_ = json.Unmarshal(assistantMessage.OutputJSON, &assistantOutput)
+	}
+
+	if len(autopilot.ExecutedActions) > 0 {
+		assistantMessage.Content = strings.ReplaceAll(
+			assistantMessage.Content,
+			"I proposed 1 approval-gated operator action(s). Review and approve before dispatch.",
+			"I routed the low-risk endpoint review through Operator Autopilot instead of requiring manual approval.",
+		)
+		assistantMessage.Content = strings.TrimSpace(assistantMessage.Content + "\n" + fmt.Sprintf("Autopilot executed %d low-risk controlled action(s), captured evidence, and updated target memory where applicable. Higher-risk actions still require explicit approval.", len(autopilot.ExecutedActions)))
+	}
+
+	assistantOutput["autopilot"] = autopilot
+	assistantOutput["execution_enabled"] = len(autopilot.ExecutedActions) > 0
+
+	_ = database.DB.Model(&models.AgentChatMessage{}).
+		Where("id = ?", assistantMessage.ID).
+		Updates(map[string]interface{}{
+			"content":     assistantMessage.Content,
+			"output_json": chatJSON(assistantOutput),
+		}).Error
+	_ = database.DB.First(&assistantMessage, assistantMessage.ID)
+
 	_ = maybeCreateChatMemoryFromMessage(uid, target, session.ID, userMessage, len(createdActions))
 	_ = maybeCreateChatMemoryFromMessage(uid, target, session.ID, assistantMessage, len(createdActions))
 
@@ -962,6 +1495,7 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 			"session_id":      session.ID,
 			"user_message_id": userMessage.ID,
 			"action_count":    len(createdActions),
+			"autopilot":       true,
 		},
 	})
 

@@ -16,6 +16,7 @@ import {
   approveTargetAgentAction,
   dispatchTargetAgentAction,
   deleteTargetAgentAction,
+  executeTargetControlledTestRun,
   getTargetAgentActions,
   proposeTargetAgentAction,
   rejectTargetAgentAction,
@@ -107,6 +108,7 @@ const ActionCard = ({
   onApprove,
   onReject,
   onDispatch,
+  onExecuteRun,
   onDelete,
 }: {
   action: TargetAgentAction;
@@ -114,14 +116,19 @@ const ActionCard = ({
   onApprove: (action: TargetAgentAction) => void;
   onReject: (action: TargetAgentAction) => void;
   onDispatch: (action: TargetAgentAction) => void;
+  onExecuteRun: (runId: number) => void;
   onDelete: (action: TargetAgentAction) => void;
 }) => {
   const policyCheck = parseJSONValue(action.policy_check_json);
   const actionOutput = parseJSONValue(action.output_json);
   const dispatchPreview = actionOutput?.dispatcher_version ? actionOutput : null;
+  const controlledRuntime = dispatchPreview?.controlled_runtime || null;
+  const controlledRunId = Number(controlledRuntime?.controlled_test_run_id || 0);
   const dispatchGuardrails = Array.isArray(dispatchPreview?.guardrails)
     ? dispatchPreview.guardrails
     : [];
+  const inputURL = action.input_json?.url || action.input_json?.endpoint_url;
+  const inputMethod = action.input_json?.method || "GET";
 
   const canApprove =
     action.status === "proposed" && action.policy_status !== "blocked";
@@ -157,6 +164,17 @@ const ActionCard = ({
 
       {action.description && (
         <p className="mt-3 text-sm text-hack-dim">{action.description}</p>
+      )}
+
+      {inputURL && (
+        <div className="mt-3 border border-hack-primary/40 bg-hack-primary/10 p-2 font-mono text-xs text-hack-primary">
+          <div className="text-[10px] uppercase tracking-wider text-hack-dim">
+            Endpoint Intent
+          </div>
+          <div className="mt-1 break-all">
+            {inputMethod} {inputURL}
+          </div>
+        </div>
       )}
 
       <div className="mt-3 grid gap-2 md:grid-cols-4">
@@ -257,6 +275,32 @@ const ActionCard = ({
             </div>
           )}
 
+          {controlledRuntime && (
+            <div className="mt-3 border border-hack-primary/50 bg-hack-primary/10 p-3">
+              <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-hack-primary">
+                Controlled Runtime
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Pill tone="primary">run: #{controlledRunId || "-"}</Pill>
+                <Pill>runtime: {controlledRuntime.runtime_type || "-"}</Pill>
+                <Pill tone={controlledRuntime.runtime_status === "queued" ? "warning" : "primary"}>
+                  status: {controlledRuntime.runtime_status || "-"}
+                </Pill>
+                <Pill tone={controlledRuntime.evidence_capture ? "primary" : "neutral"}>
+                  evidence: {String(Boolean(controlledRuntime.evidence_capture))}
+                </Pill>
+              </div>
+              <button
+                type="button"
+                onClick={() => onExecuteRun(controlledRunId)}
+                disabled={!controlledRunId || busy}
+                className="mt-3 hack-btn border border-hack-primary px-3 py-1 text-[10px] uppercase tracking-wider text-hack-primary disabled:opacity-50"
+              >
+                <PlayCircle className="h-3 w-3" /> Execute Controlled Run
+              </button>
+            </div>
+          )}
+
           {dispatchGuardrails.length > 0 && (
             <details className="mt-3">
               <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-wider text-hack-dim hover:text-white">
@@ -312,7 +356,7 @@ const ActionCard = ({
           className="hack-btn-ghost border border-hack-warning/70 px-3 py-1 text-[10px] uppercase tracking-wider text-hack-warning disabled:opacity-50"
           title="Record dispatcher preview. Real execution requires controlled runtime approval."
         >
-          <PlayCircle className="h-3 w-3" /> Dispatch Preview
+          <PlayCircle className="h-3 w-3" /> Dispatch
         </button>
 
         <button
@@ -419,6 +463,22 @@ const AgentActionsPanel = ({ targetId, enabled = true }: Props) => {
     },
   });
 
+  const executeRunMutation = useMutation({
+    mutationFn: (runId: number) =>
+      executeTargetControlledTestRun(
+        targetId,
+        runId,
+        "controlled runtime execution requested from target analysis UI",
+      ),
+    onSuccess: (data) => {
+      const output = data?.output || {};
+      setMessage(
+        `Controlled runtime run executed: status=${output.status || "-"} status_code=${output.status_code || "-"} memory=${String(Boolean(output.memory_ingested))}`,
+      );
+      refresh();
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: (action: TargetAgentAction) => deleteTargetAgentAction(targetId, action.id),
     onSuccess: () => {
@@ -432,6 +492,7 @@ const AgentActionsPanel = ({ targetId, enabled = true }: Props) => {
     approveMutation.isPending ||
     rejectMutation.isPending ||
     dispatchMutation.isPending ||
+    executeRunMutation.isPending ||
     deleteMutation.isPending;
 
   if (!enabled) {
@@ -486,17 +547,19 @@ const AgentActionsPanel = ({ targetId, enabled = true }: Props) => {
         </div>
       )}
 
-      {(proposeMutation.error || approveMutation.error || rejectMutation.error || dispatchMutation.error || deleteMutation.error) && (
+      {(proposeMutation.error || approveMutation.error || rejectMutation.error || dispatchMutation.error || executeRunMutation.error || deleteMutation.error) && (
         <div className="mb-3 border border-hack-danger/60 bg-hack-danger/10 p-3 font-mono text-sm text-hack-danger">
           {(proposeMutation.error as any)?.response?.data?.message ||
             (approveMutation.error as any)?.response?.data?.message ||
             (rejectMutation.error as any)?.response?.data?.message ||
             (dispatchMutation.error as any)?.response?.data?.message ||
+            (executeRunMutation.error as any)?.response?.data?.message ||
             (deleteMutation.error as any)?.response?.data?.message ||
             (proposeMutation.error as any)?.message ||
             (approveMutation.error as any)?.message ||
             (rejectMutation.error as any)?.message ||
             (dispatchMutation.error as any)?.message ||
+            (executeRunMutation.error as any)?.message ||
             (deleteMutation.error as any)?.message ||
             "Agent action operation failed"}
         </div>
@@ -555,6 +618,7 @@ const AgentActionsPanel = ({ targetId, enabled = true }: Props) => {
               onApprove={(item) => approveMutation.mutate(item)}
               onReject={(item) => rejectMutation.mutate(item)}
               onDispatch={(item) => dispatchMutation.mutate(item)}
+              onExecuteRun={(runId) => executeRunMutation.mutate(runId)}
               onDelete={(item) => {
                 if (window.confirm(`Delete agent action #${item.id}? This is a soft delete.`)) {
                   deleteMutation.mutate(item);

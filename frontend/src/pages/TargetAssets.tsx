@@ -982,6 +982,7 @@ const TargetAssets = () => {
             <AgentChatPanel
               targetId={targetId}
               enabled={featureAgentChat}
+              onJumpToActions={() => setActiveAnalysisSection("actions")}
             />
           )}
         </div>

@@ -1,4 +1,63 @@
-# Hunt Engine
+<!-- HUNT_V3_12_0_START -->
+## v3.12.0 - Controlled Runtime & Operator Autopilot Policy Controls
+
+Hunt Engine v3.12.0 advances the RAG-backed LLM Pentest Operator from an advisory planner into a controlled, policy-gated execution workflow for supported low-risk actions.
+
+### Highlights
+
+- Added the Controlled Runtime foundation for approved operator actions.
+- Added Controlled HTTP Probe execution for low-risk endpoint review workflows.
+- Added structured evidence capture for request, response, matcher, metadata, and runtime classification.
+- Added WAF / Cloudflare / 403 / 429 / 5xx handling as inconclusive evidence rather than confirmed vulnerability proof.
+- Added Controlled Test Run, Result, and Event persistence.
+- Connected controlled runtime results into target RAG memory.
+- Updated the Operator to reason over controlled runtime evidence and avoid over-claiming blocked or inconclusive results.
+- Added endpoint URL intent detection in Attack Surface Chat, mapping single-endpoint requests to review_endpoint actions.
+- Added Operator Autopilot v1 for low-risk controlled endpoint review.
+- Added Target Policy controls for Operator automation: manual_only, assisted_autopilot, strict_approval, auto_execute_level_0, auto_execute_level_1, require_approval_level_2, and require_approval_level_3.
+- Added Target Policy UI controls for Operator Automation.
+- Added Chat UI visibility for Autopilot execution results, controlled run IDs, result IDs, memory ingestion, and runtime status.
+- Added action labels in Chat for Executed by Autopilot, Approval Required, and Proposed Action.
+- Clarified dispatcher wording so unsupported action classes are shown as dispatcher previews, while supported controlled-runtime actions may execute after policy and approval checks.
+- Added an official smoke script for Operator Autopilot policy behavior.
+
+### Operator Autopilot Behavior
+
+The Operator now supports policy-driven automation:
+
+- assisted_autopilot: low-risk Level 0 / Level 1 controlled actions may execute automatically when target policy permits.
+- strict_approval: actions are proposed but not executed automatically.
+- manual_only: Autopilot is disabled for the target.
+- Level 2 and Level 3 workflows remain approval-gated by default.
+
+Autopilot is intentionally narrow in v3.12.0. It currently supports low-risk review_endpoint actions through the controlled runtime. Higher-risk workflows such as exploit validation, payload execution, authentication testing, rate-limit testing, brute-force workflows, and unsupported action classes remain approval-gated or preview-only.
+
+### Smoke Test
+
+Run the official Autopilot policy smoke test:
+
+    ./scripts/smoke_operator_autopilot_policy.sh
+
+The smoke test validates:
+
+- assisted_autopilot executes a low-risk controlled endpoint review.
+- strict_approval does not auto-execute the same workflow.
+- blocked or inconclusive HTTP evidence is not treated as a confirmed vulnerability.
+- the original target policy is restored after the test.
+
+### Safety Model
+
+v3.12.0 keeps deterministic guardrails authoritative:
+
+- target policy controls execution eligibility.
+- out-of-scope and blocked actions cannot execute.
+- unsupported action classes remain dispatcher previews.
+- controlled runtime evidence is stored and fed back into target memory.
+- LLM output remains advisory and evidence-aware.
+- high-risk actions require explicit approval and stronger validation evidence.
+
+<!-- HUNT_V3_12_0_END -->
+\n\n# Hunt Engine
 
 Hunt Engine is a commercial-grade attack surface intelligence, reconnaissance, security finding, advisory analysis, and reporting platform. It is designed to help security teams and bug bounty hunters continuously discover assets, validate live exposure, collect evidence, prioritize findings, generate professional reports, and use policy-aware advisory agents without allowing uncontrolled AI execution or unsafe automated exploitation.
 
