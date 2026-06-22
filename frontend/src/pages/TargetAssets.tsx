@@ -148,6 +148,7 @@ const TargetAssets = () => {
   const [activeAnalysisSection, setActiveAnalysisSection] = useState<AnalysisSection>("overview");
   const [page, setPage] = useState(1);
   const [goToPage, setGoToPage] = useState("1");
+  const [lastKnownTotalRecords, setLastKnownTotalRecords] = useState(0);
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [sortBy, setSortBy] = useState("created_at");
@@ -298,30 +299,40 @@ const TargetAssets = () => {
         : false;
   const displayedAssets = assetsQuery.data?.data || [];
   const displayedUrls = urlsQuery.data?.data || [];
-  const totalRecords =
+  const rawTotalRecords =
     activeTab === "assets"
       ? ((assetsQuery.data as any)?.total_count ??
         (assetsQuery.data as any)?.total ??
-        displayedAssets.length ??
-        0)
+        undefined)
       : activeTab === "urls"
         ? ((urlsQuery.data as any)?.total_count ??
           (urlsQuery.data as any)?.total ??
-          displayedUrls.length ??
-          0)
+          undefined)
         : 0;
+
+  const totalRecords =
+    rawTotalRecords !== undefined
+      ? Number(rawTotalRecords || 0)
+      : lastKnownTotalRecords;
+
   const pageSize = 50;
   const totalPages = Math.max(1, Math.ceil(Number(totalRecords || 0) / pageSize));
+
+  useEffect(() => {
+    if (rawTotalRecords !== undefined) {
+      setLastKnownTotalRecords(Number(rawTotalRecords || 0));
+    }
+  }, [rawTotalRecords]);
 
   useEffect(() => {
     setGoToPage(String(page));
   }, [page]);
 
   useEffect(() => {
-    if (page > totalPages) {
+    if (!isFetching && page > totalPages) {
       setPage(totalPages);
     }
-  }, [page, totalPages]);
+  }, [isFetching, page, totalPages]);
 
   const handleGoToPage = () => {
     const next = Number.parseInt(goToPage, 10);
