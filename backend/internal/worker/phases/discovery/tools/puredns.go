@@ -1,13 +1,16 @@
 package tools
 
 import (
+	"bufio"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
+	workerruntime "github.com/omidxplimbo/hunt-engine/backend/internal/worker/runtime"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker/utils"
 )
 
@@ -30,12 +33,24 @@ func RunPureDNS(ctx Context, rootDomain string, wordlists []string) (map[string]
 		}
 	}
 
-	resolversFile := filepath.Join(tempDir, "puredns_resolvers.txt")
-	resolvers := trustedResolvers()
-	if err := utils.WriteSliceToFile(resolversFile, resolvers); err != nil {
-		return nil, fmt.Errorf("failed to write resolvers file: %v", err)
+	publicResolversFile, publicResolversCount, publicCleanup, err := preparePureDNSPublicResolversFile(tempDir)
+	if err != nil {
+		return nil, err
 	}
-	defer os.Remove(resolversFile)
+	if publicCleanup {
+		defer os.Remove(publicResolversFile)
+	}
+
+	trustedResolversFile := filepath.Join(tempDir, "puredns_trusted_resolvers.txt")
+	trusted := trustedResolvers()
+	if err := utils.WriteSliceToFile(trustedResolversFile, trusted); err != nil {
+		return nil, fmt.Errorf("failed to write trusted resolvers file: %v", err)
+	}
+	defer os.Remove(trustedResolversFile)
+
+	if publicResolversCount <= len(trusted) {
+		log.Printf("PureDNS public resolver list has only %d resolver(s); large bruteforce runs may be slow. Set PUREDNS_RESOLVERS_FILE to a larger resolver list.\n", publicResolversCount)
+	}
 
 	validWordlists := resolvePureDNSWordlistPaths(ctx, wordlists)
 
@@ -55,48 +70,78 @@ func RunPureDNS(ctx Context, rootDomain string, wordlists []string) (map[string]
 		ctx.updatePhase(fmt.Sprintf("PHASE 1: PUREDNS BRUTEFORCE WORDLIST %d/%d: %s", idx+1, len(validWordlists), baseName))
 		ctx.heartbeat()
 
-		log.Printf("🔍 Running PureDNS wordlist %d/%d for %s: %s\n", idx+1, len(validWordlists), rootDomain, wlPath)
+		outputFile := filepath.Join(tempDir, fmt.Sprintf("puredns_%06d_output.txt", idx+1))
+		_ = os.Remove(outputFile)
 
-		output, err := ctx.RunCommand(
-			ctx.TargetID,
-			"puredns",
+		args := []string{
 			"bruteforce",
 			wlPath,
 			rootDomain,
-			"-r", resolversFile,
-			"--trusted-only",
+			"-r", publicResolversFile,
+			"--resolvers-trusted", trustedResolversFile,
 			"--quiet",
+			"--write", outputFile,
+		}
+
+		startedAt := time.Now()
+		log.Printf(
+			"🔍 Running PureDNS wordlist %d/%d for %s: wordlist=%s size_bytes=%d public_resolvers=%d trusted_resolvers=%d output=%s command=%s\n",
+			idx+1,
+			len(validWordlists),
+			rootDomain,
+			wlPath,
+			fileSizeBytes(wlPath),
+			publicResolversCount,
+			len(trusted),
+			outputFile,
+			"puredns "+strings.Join(args, " "),
 		)
+
+		err := workerruntime.RunCommandNoCaptureWithKillSwitch(
+			ctx.TargetID,
+			func(uint) { ctx.heartbeat() },
+			func(uint) bool { return ctx.stopped() },
+			"puredns",
+			args...,
+		)
+		duration := time.Since(startedAt)
 		if err != nil {
 			if err.Error() == "process killed by user request" {
 				return nil, err
 			}
-			log.Printf("⚠️ PureDNS failed for wordlist %s: %v\n", wlPath, err)
+			log.Printf("⚠️ PureDNS failed for wordlist %s after %s: %v\n", wlPath, duration, err)
 			continue
 		}
 
 		ctx.updatePhase(fmt.Sprintf("PHASE 1: PUREDNS PARSING WORDLIST %d/%d: %s", idx+1, len(validWordlists), baseName))
 		ctx.heartbeat()
 
-		subdomains := parsePureDNSSubdomains(ctx, string(output), rootDomain)
+		subdomains := parsePureDNSSubdomainsFromFile(ctx, outputFile, rootDomain)
+		_ = os.Remove(outputFile)
 		if len(subdomains) == 0 {
-			log.Printf("ℹ️ PureDNS wordlist %s produced no candidates for %s\n", wlPath, rootDomain)
+			log.Printf("ℹ️ PureDNS wordlist %s produced no candidates for %s in %s\n", wlPath, rootDomain, duration)
 			continue
 		}
 
-		ctx.updatePhase(fmt.Sprintf("PHASE 1: PUREDNS DNSX VALIDATION WORDLIST %d/%d: %s", idx+1, len(validWordlists), baseName))
-		ctx.heartbeat()
+		if shouldValidatePureDNSWithDNSX() {
+			ctx.updatePhase(fmt.Sprintf("PHASE 1: PUREDNS OPTIONAL DNSX VALIDATION WORDLIST %d/%d: %s", idx+1, len(validWordlists), baseName))
+			ctx.heartbeat()
 
-		wordlistResults := resolvePureDNSSubdomains(ctx, tempDir, subdomains, idx+1)
-		mergePureDNSLiveResults(results, wordlistResults)
+			wordlistResults := resolvePureDNSSubdomains(ctx, tempDir, subdomains, idx+1)
+			mergePureDNSLiveResults(results, wordlistResults)
+		} else {
+			mergePureDNSResolvedHosts(results, subdomains)
+		}
 
 		log.Printf(
-			"✅ PureDNS wordlist %d/%d completed for %s: candidates=%d resolved_total=%d\n",
+			"✅ PureDNS wordlist %d/%d completed for %s in %s: candidates=%d resolved_total=%d post_dnsx_validation=%t\n",
 			idx+1,
 			len(validWordlists),
 			rootDomain,
+			duration,
 			len(subdomains),
 			len(results),
+			shouldValidatePureDNSWithDNSX(),
 		)
 	}
 
@@ -251,6 +296,67 @@ func resolveTargetOwnerPureDNSWordlistName(targetID uint, name string) string {
 	return strings.TrimSpace(row.StoragePath)
 }
 
+func preparePureDNSPublicResolversFile(tempDir string) (string, int, bool, error) {
+	if path := strings.TrimSpace(os.Getenv("PUREDNS_RESOLVERS_FILE")); path != "" {
+		count, err := countNonEmptyLines(path)
+		if err != nil {
+			return "", 0, false, fmt.Errorf("failed to read PUREDNS_RESOLVERS_FILE %s: %v", path, err)
+		}
+		if count == 0 {
+			return "", 0, false, fmt.Errorf("PUREDNS_RESOLVERS_FILE %s is empty", path)
+		}
+		return path, count, false, nil
+	}
+
+	resolvers := pureDNSPublicResolvers()
+	if len(resolvers) == 0 {
+		resolvers = trustedResolvers()
+	}
+
+	path := filepath.Join(tempDir, "puredns_public_resolvers.txt")
+	if err := utils.WriteSliceToFile(path, resolvers); err != nil {
+		return "", 0, true, fmt.Errorf("failed to write public resolvers file: %v", err)
+	}
+	return path, len(resolvers), true, nil
+}
+
+func pureDNSPublicResolvers() []string {
+	resolversStr := os.Getenv("PUREDNS_RESOLVERS")
+	parts := strings.Split(resolversStr, ",")
+	out := make([]string, 0, len(parts))
+	seen := make(map[string]bool)
+	for _, r := range parts {
+		r = strings.TrimSpace(r)
+		if r == "" || seen[r] {
+			continue
+		}
+		seen[r] = true
+		out = append(out, r)
+	}
+	return out
+}
+
+func countNonEmptyLines(path string) (int, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+
+	count := 0
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 1024), 1024*1024)
+	for scanner.Scan() {
+		if strings.TrimSpace(scanner.Text()) != "" {
+			count++
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return count, err
+	}
+	return count, nil
+}
+
 func trustedResolvers() []string {
 	resolversStr := os.Getenv("TRUSTED_RESOLVERS")
 	if resolversStr == "" {
@@ -296,6 +402,60 @@ func mergePureDNSLiveResults(dst map[string][]string, src map[string][]string) {
 
 		dst[host] = merged
 	}
+}
+
+func fileSizeBytes(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
+func shouldValidatePureDNSWithDNSX() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("PUREDNS_POST_DNSX_VALIDATE")))
+	return v == "1" || v == "true" || v == "yes"
+}
+
+func mergePureDNSResolvedHosts(dst map[string][]string, hosts []string) {
+	for _, host := range hosts {
+		host = strings.TrimSpace(host)
+		if host == "" {
+			continue
+		}
+		if _, exists := dst[host]; !exists {
+			dst[host] = []string{}
+		}
+	}
+}
+
+func parsePureDNSSubdomainsFromFile(ctx Context, path, rootDomain string) []string {
+	file, err := os.Open(path)
+	if err != nil {
+		log.Printf("⚠️ Failed to open PureDNS output file %s: %v\n", path, err)
+		return []string{}
+	}
+	defer file.Close()
+
+	seen := make(map[string]bool)
+	subdomains := make([]string, 0)
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 1024), 1024*1024)
+
+	for scanner.Scan() {
+		normalized := ctx.normalize(strings.TrimSpace(scanner.Text()), rootDomain)
+		if normalized == "" || seen[normalized] {
+			continue
+		}
+		seen[normalized] = true
+		subdomains = append(subdomains, normalized)
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Printf("⚠️ Failed reading PureDNS output file %s: %v\n", path, err)
+	}
+
+	return subdomains
 }
 
 func parsePureDNSSubdomains(ctx Context, output, rootDomain string) []string {
