@@ -113,7 +113,7 @@ func buildDispatchPreview(target models.Target, action models.AgentAction, dryRu
 		blockedReasons = append(blockedReasons, "action class is hard-blocked from execution by default")
 	}
 
-	reason := "dispatcher preview is active; real execution requires the approved controlled operator runtime"
+	reason := "dispatcher preview recorded; this action class is not executable yet through the controlled runtime"
 	if len(blockedReasons) > 0 {
 		reason = blockedReasons[0]
 	}
@@ -150,7 +150,7 @@ func buildDispatchPreview(target models.Target, action models.AgentAction, dryRu
 		},
 		"guardrails": []string{
 			"dispatcher preview does not execute commands, payloads, scans, report submission, or severity changes without controlled runtime approval",
-			"approved actions are converted into a dispatcher preview only",
+			"unsupported action classes are converted into dispatcher previews; supported controlled-runtime actions may execute after policy and approval checks",
 			"future real execution must be feature-flagged, policy-checked, approval-gated, rate-limited, and audited",
 			"hard-blocked action classes require explicit future controls before any execution path can be enabled",
 			"dispatcher preview is not proof of vulnerability validation or execution",
