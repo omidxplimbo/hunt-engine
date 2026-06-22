@@ -29,6 +29,12 @@ type targetPolicyRequest struct {
 	AuthRequired     bool   `json:"auth_required"`
 	SafeTestingNotes string `json:"safe_testing_notes"`
 
+	OperatorMode          string `json:"operator_mode"`
+	AutoExecuteLevel0     *bool  `json:"auto_execute_level_0"`
+	AutoExecuteLevel1     *bool  `json:"auto_execute_level_1"`
+	RequireApprovalLevel2 *bool  `json:"require_approval_level_2"`
+	RequireApprovalLevel3 *bool  `json:"require_approval_level_3"`
+
 	ReportingPreferences string `json:"reporting_preferences"`
 	BusinessContext      string `json:"business_context"`
 
@@ -114,6 +120,11 @@ func PutTargetPolicy(c *fiber.Ctx) error {
 		"high":     true,
 		"critical": true,
 	})
+	req.OperatorMode = normalizePolicyChoice(req.OperatorMode, "assisted_autopilot", map[string]bool{
+		"manual_only":        true,
+		"assisted_autopilot": true,
+		"strict_approval":    true,
+	})
 
 	req.RateLimitNotes = limitString(cleanPolicyText(req.RateLimitNotes), 8000)
 	req.SafeTestingNotes = limitString(cleanPolicyText(req.SafeTestingNotes), 8000)
@@ -151,6 +162,27 @@ func PutTargetPolicy(c *fiber.Ctx) error {
 	row.RateLimitNotes = req.RateLimitNotes
 	row.AuthRequired = req.AuthRequired
 	row.SafeTestingNotes = req.SafeTestingNotes
+	row.OperatorMode = req.OperatorMode
+	if req.AutoExecuteLevel0 != nil {
+		row.AutoExecuteLevel0 = *req.AutoExecuteLevel0
+	} else if isCreate {
+		row.AutoExecuteLevel0 = true
+	}
+	if req.AutoExecuteLevel1 != nil {
+		row.AutoExecuteLevel1 = *req.AutoExecuteLevel1
+	} else if isCreate {
+		row.AutoExecuteLevel1 = true
+	}
+	if req.RequireApprovalLevel2 != nil {
+		row.RequireApprovalLevel2 = *req.RequireApprovalLevel2
+	} else if isCreate {
+		row.RequireApprovalLevel2 = true
+	}
+	if req.RequireApprovalLevel3 != nil {
+		row.RequireApprovalLevel3 = *req.RequireApprovalLevel3
+	} else if isCreate {
+		row.RequireApprovalLevel3 = true
+	}
 	row.ReportingPreferences = req.ReportingPreferences
 	row.BusinessContext = req.BusinessContext
 	row.AssetCriticalityDefault = req.AssetCriticalityDefault
@@ -188,6 +220,11 @@ func PutTargetPolicy(c *fiber.Ctx) error {
 			"max_test_intensity":          row.MaxTestIntensity,
 			"auth_required":               row.AuthRequired,
 			"asset_criticality_default":   row.AssetCriticalityDefault,
+			"operator_mode":               row.OperatorMode,
+			"auto_execute_level_0":        row.AutoExecuteLevel0,
+			"auto_execute_level_1":        row.AutoExecuteLevel1,
+			"require_approval_level_2":    row.RequireApprovalLevel2,
+			"require_approval_level_3":    row.RequireApprovalLevel3,
 			"in_scope_patterns_count":     len(req.InScopePatterns),
 			"out_of_scope_patterns_count": len(req.OutOfScopePatterns),
 			"allowed_test_types_count":    len(req.AllowedTestTypes),

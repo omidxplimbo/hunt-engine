@@ -676,6 +676,9 @@ func shouldReuseChatActionByType(actionType string) bool {
 type chatAutopilotResult struct {
 	Enabled           bool                     `json:"enabled"`
 	Mode              string                   `json:"mode"`
+	PolicySource      string                   `json:"policy_source"`
+	AutoExecuteLevel0 bool                     `json:"auto_execute_level_0"`
+	AutoExecuteLevel1 bool                     `json:"auto_execute_level_1"`
 	ExecutedActions   []uint                   `json:"executed_actions"`
 	SkippedActions    []map[string]interface{} `json:"skipped_actions"`
 	ControlledRuns    []uint                   `json:"controlled_runs"`
@@ -685,7 +688,70 @@ type chatAutopilotResult struct {
 	Summary           []map[string]interface{} `json:"summary"`
 }
 
-func isChatAutopilotAllowedAction(action models.AgentAction) (bool, string) {
+type chatAutopilotPolicy struct {
+	OperatorMode          string `json:"operator_mode"`
+	PolicySource          string `json:"policy_source"`
+	AutoExecuteLevel0     bool   `json:"auto_execute_level_0"`
+	AutoExecuteLevel1     bool   `json:"auto_execute_level_1"`
+	RequireApprovalLevel2 bool   `json:"require_approval_level_2"`
+	RequireApprovalLevel3 bool   `json:"require_approval_level_3"`
+}
+
+func loadChatAutopilotPolicy(targetID uint) chatAutopilotPolicy {
+	policy := chatAutopilotPolicy{
+		OperatorMode:          "strict_approval",
+		PolicySource:          "missing_target_policy",
+		AutoExecuteLevel0:     false,
+		AutoExecuteLevel1:     false,
+		RequireApprovalLevel2: true,
+		RequireApprovalLevel3: true,
+	}
+
+	var row models.TargetPolicy
+	if err := database.DB.Where("target_id = ?", targetID).First(&row).Error; err != nil {
+		return policy
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(row.OperatorMode))
+	switch mode {
+	case "manual_only", "assisted_autopilot", "strict_approval":
+		policy.OperatorMode = mode
+	default:
+		policy.OperatorMode = "strict_approval"
+	}
+
+	policy.PolicySource = "target_policy"
+	policy.AutoExecuteLevel0 = row.AutoExecuteLevel0
+	policy.AutoExecuteLevel1 = row.AutoExecuteLevel1
+	policy.RequireApprovalLevel2 = row.RequireApprovalLevel2
+	policy.RequireApprovalLevel3 = row.RequireApprovalLevel3
+
+	return policy
+}
+
+func isChatAutopilotAllowedAction(action models.AgentAction, policy chatAutopilotPolicy) (bool, string) {
+	if policy.OperatorMode == "manual_only" {
+		return false, "operator_mode=manual_only disables autopilot"
+	}
+	if policy.OperatorMode == "strict_approval" {
+		return false, "operator_mode=strict_approval requires explicit approval"
+	}
+	if policy.OperatorMode != "assisted_autopilot" {
+		return false, "operator mode does not allow autopilot"
+	}
+	if action.TestLevel <= 0 && !policy.AutoExecuteLevel0 {
+		return false, "auto_execute_level_0 is disabled by target policy"
+	}
+	if action.TestLevel == 1 && !policy.AutoExecuteLevel1 {
+		return false, "auto_execute_level_1 is disabled by target policy"
+	}
+	if action.TestLevel >= 2 && policy.RequireApprovalLevel2 {
+		return false, "level 2+ actions require explicit approval"
+	}
+	if action.TestLevel >= 3 && policy.RequireApprovalLevel3 {
+		return false, "level 3 actions require explicit approval"
+	}
+
 	if normalizeAgentActionType(action.ActionType) != models.AgentActionTypeReviewEndpoint {
 		return false, "autopilot v1 only supports review_endpoint"
 	}
@@ -737,9 +803,14 @@ func updateChatActionOutput(action *models.AgentAction, output map[string]interf
 }
 
 func runAgentChatAutopilotForActions(c *fiber.Ctx, target *models.Target, uid uint, ownerKey string, actions []models.AgentAction) chatAutopilotResult {
+	policy := loadChatAutopilotPolicy(target.ID)
+
 	result := chatAutopilotResult{
-		Enabled:           true,
-		Mode:              "assisted_autopilot_v1",
+		Enabled:           policy.OperatorMode == "assisted_autopilot",
+		Mode:              policy.OperatorMode,
+		PolicySource:      policy.PolicySource,
+		AutoExecuteLevel0: policy.AutoExecuteLevel0,
+		AutoExecuteLevel1: policy.AutoExecuteLevel1,
 		ExecutedActions:   []uint{},
 		SkippedActions:    []map[string]interface{}{},
 		ControlledRuns:    []uint{},
@@ -754,7 +825,7 @@ func runAgentChatAutopilotForActions(c *fiber.Ctx, target *models.Target, uid ui
 	}
 
 	for _, action := range actions {
-		allowed, reason := isChatAutopilotAllowedAction(action)
+		allowed, reason := isChatAutopilotAllowedAction(action, policy)
 		if !allowed {
 			result.SkippedActions = append(result.SkippedActions, map[string]interface{}{
 				"action_id":   action.ID,
@@ -795,6 +866,7 @@ func runAgentChatAutopilotForActions(c *fiber.Ctx, target *models.Target, uid ui
 				Metadata: map[string]interface{}{
 					"source":      "agent_chat_autopilot",
 					"mode":        result.Mode,
+					"policy":      result.PolicySource,
 					"reason":      "low-risk controlled endpoint review auto-approved by target policy",
 					"action_type": action.ActionType,
 				},
