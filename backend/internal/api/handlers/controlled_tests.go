@@ -756,38 +756,25 @@ func executeControlledHTTPProbe(run *models.ControlledTestRun, uid uint, timeout
 	}, nil
 }
 
-func ExecuteTargetControlledTestRun(c *fiber.Ctx) error {
-	targetID, err := parseUintParam(c, "id")
-	if err != nil {
-		return err
+func ExecuteControlledTestRunInternal(targetID uint, runID uint, ownerKey string, uid uint, note string, timeoutMS int, maxBytes int64, source string) (*models.ControlledTestRun, *models.ControlledTestResult, map[string]interface{}, error) {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = "controlled_runtime_execute_internal"
 	}
-
-	user, target, ownerKey, err := controlledTestOwner(c, targetID)
-	if err != nil {
-		return err
-	}
-
-	runID, err := parseControlledRunIDParam(c)
-	if err != nil {
-		return err
-	}
-
-	req := new(executeControlledTestRunRequest)
-	_ = c.BodyParser(req)
 
 	var run models.ControlledTestRun
 	if err := database.DB.
-		Where("id = ? AND target_id = ? AND owner_key = ?", runID, target.ID, ownerKey).
+		Where("id = ? AND target_id = ? AND owner_key = ?", runID, targetID, ownerKey).
 		First(&run).Error; err != nil {
-		return fiber.NewError(fiber.StatusNotFound, "controlled test run not found")
+		return nil, nil, nil, fiber.NewError(fiber.StatusNotFound, "controlled test run not found")
 	}
 
 	if run.Status != models.ControlledTestRunStatusQueued && run.Status != models.ControlledTestRunStatusRunning {
-		return fiber.NewError(fiber.StatusConflict, "controlled test run is not executable")
+		return nil, nil, nil, fiber.NewError(fiber.StatusConflict, "controlled test run is not executable")
 	}
 
 	if run.RuntimeType != models.ControlledTestRuntimeHTTPProbe {
-		return fiber.NewError(fiber.StatusConflict, "controlled runtime worker for this runtime_type is not implemented yet")
+		return nil, nil, nil, fiber.NewError(fiber.StatusConflict, "controlled runtime worker for this runtime_type is not implemented yet")
 	}
 
 	now := time.Now().UTC()
@@ -799,19 +786,19 @@ func ExecuteTargetControlledTestRun(c *fiber.Ctx) error {
 		}).Error
 
 	startEvent := models.ControlledTestEvent{
-		UserID:    user.ID,
+		UserID:    uid,
 		OwnerKey:  ownerKey,
-		TargetID:  target.ID,
+		TargetID:  targetID,
 		RunID:     &run.ID,
 		EventType: models.ControlledTestEventStarted,
 		Metadata: controlledJSON(map[string]interface{}{
-			"source": "controlled_runtime_execute_api",
-			"note":   strings.TrimSpace(req.Note),
+			"source": source,
+			"note":   strings.TrimSpace(note),
 		}, "{}"),
 	}
 	_ = database.DB.Create(&startEvent).Error
 
-	result, output, execErr := executeControlledHTTPProbe(&run, user.ID, req.TimeoutMS, req.MaxBytes)
+	result, output, execErr := executeControlledHTTPProbe(&run, uid, timeoutMS, maxBytes)
 
 	completedAt := time.Now().UTC()
 	status := models.ControlledTestRunStatusCompleted
@@ -829,9 +816,9 @@ func ExecuteTargetControlledTestRun(c *fiber.Ctx) error {
 		resultCount = 1
 		resultID := result.ID
 		event := models.ControlledTestEvent{
-			UserID:    user.ID,
+			UserID:    uid,
 			OwnerKey:  ownerKey,
-			TargetID:  target.ID,
+			TargetID:  targetID,
 			RunID:     &run.ID,
 			ResultID:  &resultID,
 			EventType: models.ControlledTestEventResultCreated,
@@ -842,7 +829,7 @@ func ExecuteTargetControlledTestRun(c *fiber.Ctx) error {
 				"severity_hint": result.SeverityHint,
 			}, "{}"),
 			Metadata: controlledJSON(map[string]interface{}{
-				"source": "controlled_runtime_execute_api",
+				"source": source,
 			}, "{}"),
 		}
 		_ = database.DB.Create(&event).Error
@@ -878,7 +865,7 @@ func ExecuteTargetControlledTestRun(c *fiber.Ctx) error {
 	if err := database.DB.Model(&models.ControlledTestRun{}).
 		Where("id = ?", run.ID).
 		Updates(updates).Error; err != nil {
-		return err
+		return nil, result, output, err
 	}
 
 	finalEventType := models.ControlledTestEventCompleted
@@ -886,9 +873,9 @@ func ExecuteTargetControlledTestRun(c *fiber.Ctx) error {
 		finalEventType = models.ControlledTestEventFailed
 	}
 	finalEvent := models.ControlledTestEvent{
-		UserID:    user.ID,
+		UserID:    uid,
 		OwnerKey:  ownerKey,
-		TargetID:  target.ID,
+		TargetID:  targetID,
 		RunID:     &run.ID,
 		EventType: finalEventType,
 		AfterJSON: controlledJSON(map[string]interface{}{
@@ -897,12 +884,47 @@ func ExecuteTargetControlledTestRun(c *fiber.Ctx) error {
 			"error":        errorMessage,
 		}, "{}"),
 		Metadata: controlledJSON(map[string]interface{}{
-			"source": "controlled_runtime_execute_api",
+			"source": source,
 		}, "{}"),
 	}
 	_ = database.DB.Create(&finalEvent).Error
 
 	_ = database.DB.First(&run, run.ID)
+	return &run, result, output, execErr
+}
+
+func ExecuteTargetControlledTestRun(c *fiber.Ctx) error {
+	targetID, err := parseUintParam(c, "id")
+	if err != nil {
+		return err
+	}
+
+	user, target, ownerKey, err := controlledTestOwner(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	runID, err := parseControlledRunIDParam(c)
+	if err != nil {
+		return err
+	}
+
+	req := new(executeControlledTestRunRequest)
+	_ = c.BodyParser(req)
+
+	run, result, output, execErr := ExecuteControlledTestRunInternal(
+		target.ID,
+		runID,
+		ownerKey,
+		user.ID,
+		req.Note,
+		req.TimeoutMS,
+		req.MaxBytes,
+		"controlled_runtime_execute_api",
+	)
+	if execErr != nil && run == nil {
+		return execErr
+	}
 
 	return c.JSON(fiber.Map{
 		"status": "ok",

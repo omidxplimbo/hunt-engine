@@ -673,6 +673,256 @@ func shouldReuseChatActionByType(actionType string) bool {
 	}
 }
 
+type chatAutopilotResult struct {
+	Enabled           bool                     `json:"enabled"`
+	Mode              string                   `json:"mode"`
+	ExecutedActions   []uint                   `json:"executed_actions"`
+	SkippedActions    []map[string]interface{} `json:"skipped_actions"`
+	ControlledRuns    []uint                   `json:"controlled_runs"`
+	ControlledResults []uint                   `json:"controlled_results"`
+	MemoryIngested    bool                     `json:"memory_ingested"`
+	Errors            []string                 `json:"errors"`
+	Summary           []map[string]interface{} `json:"summary"`
+}
+
+func isChatAutopilotAllowedAction(action models.AgentAction) (bool, string) {
+	if normalizeAgentActionType(action.ActionType) != models.AgentActionTypeReviewEndpoint {
+		return false, "autopilot v1 only supports review_endpoint"
+	}
+	if action.Status == models.AgentActionStatusBlockedByPolicy || action.PolicyStatus == models.AgentActionPolicyStatusBlocked {
+		return false, "action is blocked by policy"
+	}
+	if strings.EqualFold(action.RiskLevel, models.AgentActionRiskHigh) || strings.EqualFold(action.RiskLevel, models.AgentActionRiskCritical) {
+		return false, "high/critical risk requires explicit approval"
+	}
+	if action.SafetyLevel > 1 || action.TestLevel > 1 || action.AutonomyLevel > 1 {
+		return false, "action level exceeds autopilot v1 limits"
+	}
+
+	input := chatActionInputMap(action.InputJSON)
+	if strings.TrimSpace(controlledCleanString(input["url"])) == "" {
+		return false, "review_endpoint action has no input_json.url"
+	}
+
+	return true, ""
+}
+
+func updateChatActionOutput(action *models.AgentAction, output map[string]interface{}, errorMessage string, status string, executedAt *time.Time, completedAt *time.Time) error {
+	if action == nil {
+		return nil
+	}
+
+	updates := map[string]interface{}{
+		"output_json":   agentActionJSON(output),
+		"error_message": strings.TrimSpace(errorMessage),
+	}
+	if strings.TrimSpace(status) != "" {
+		updates["status"] = status
+	}
+	if executedAt != nil {
+		updates["executed_at"] = executedAt
+	}
+	if completedAt != nil {
+		updates["completed_at"] = completedAt
+	}
+
+	if err := database.DB.Model(&models.AgentAction{}).
+		Where("id = ? AND target_id = ? AND owner_key = ?", action.ID, action.TargetID, action.OwnerKey).
+		Updates(updates).Error; err != nil {
+		return err
+	}
+
+	_ = database.DB.Where("id = ? AND target_id = ? AND owner_key = ?", action.ID, action.TargetID, action.OwnerKey).First(action).Error
+	return nil
+}
+
+func runAgentChatAutopilotForActions(c *fiber.Ctx, target *models.Target, uid uint, ownerKey string, actions []models.AgentAction) chatAutopilotResult {
+	result := chatAutopilotResult{
+		Enabled:           true,
+		Mode:              "assisted_autopilot_v1",
+		ExecutedActions:   []uint{},
+		SkippedActions:    []map[string]interface{}{},
+		ControlledRuns:    []uint{},
+		ControlledResults: []uint{},
+		Errors:            []string{},
+		Summary:           []map[string]interface{}{},
+	}
+
+	if target == nil || strings.TrimSpace(ownerKey) == "" {
+		result.Errors = append(result.Errors, "target or owner scope missing")
+		return result
+	}
+
+	for _, action := range actions {
+		allowed, reason := isChatAutopilotAllowedAction(action)
+		if !allowed {
+			result.SkippedActions = append(result.SkippedActions, map[string]interface{}{
+				"action_id":   action.ID,
+				"action_type": action.ActionType,
+				"reason":      reason,
+			})
+			continue
+		}
+
+		now := time.Now().UTC()
+
+		if action.Status == models.AgentActionStatusProposed {
+			if err := database.DB.Model(&models.AgentAction{}).
+				Where("id = ? AND target_id = ? AND owner_key = ?", action.ID, target.ID, ownerKey).
+				Updates(map[string]interface{}{
+					"status":              models.AgentActionStatusApproved,
+					"approved_by_user_id": uid,
+					"approved_at":         &now,
+					"reject_reason":       "",
+				}).Error; err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("auto approve action %d failed: %v", action.ID, err))
+				continue
+			}
+
+			action.Status = models.AgentActionStatusApproved
+			action.ApprovedByUserID = &uid
+			action.ApprovedAt = &now
+
+			entityID := action.ID
+			_ = auditlog.Record(auditlog.Entry{
+				ActorUserID: &uid,
+				Action:      "target.agent_action.auto_approve",
+				EntityType:  "agent_action",
+				EntityID:    &entityID,
+				TargetID:    &target.ID,
+				IPAddress:   auditlog.ClientIP(c),
+				UserAgent:   auditlog.UserAgent(c),
+				Metadata: map[string]interface{}{
+					"source":      "agent_chat_autopilot",
+					"mode":        result.Mode,
+					"reason":      "low-risk controlled endpoint review auto-approved by target policy",
+					"action_type": action.ActionType,
+				},
+			})
+		}
+
+		if action.Status != models.AgentActionStatusApproved {
+			result.SkippedActions = append(result.SkippedActions, map[string]interface{}{
+				"action_id":   action.ID,
+				"action_type": action.ActionType,
+				"reason":      "action is not approved after autopilot approval gate",
+			})
+			continue
+		}
+
+		preview := buildDispatchPreview(*target, action, false, "agent chat autopilot dispatch")
+		run, runErr := CreateControlledTestRunFromAgentAction(target, &action, uid)
+		if runErr != nil {
+			preview["controlled_runtime"] = map[string]interface{}{
+				"attempted": true,
+				"error":     runErr.Error(),
+			}
+			_ = updateChatActionOutput(&action, preview, runErr.Error(), "", nil, &now)
+			result.Errors = append(result.Errors, fmt.Sprintf("create controlled run for action %d failed: %v", action.ID, runErr))
+			continue
+		}
+
+		result.ControlledRuns = append(result.ControlledRuns, run.ID)
+
+		executedAt := time.Now().UTC()
+		runAfterExecute, runtimeResult, output, execErr := ExecuteControlledTestRunInternal(
+			target.ID,
+			run.ID,
+			ownerKey,
+			uid,
+			"agent chat autopilot execute controlled endpoint review",
+			8000,
+			256*1024,
+			"agent_chat_autopilot",
+		)
+
+		if output == nil {
+			output = map[string]interface{}{}
+		}
+
+		controlledRuntime := map[string]interface{}{
+			"attempted":              true,
+			"controlled_test_run_id": run.ID,
+			"runtime_type":           run.RuntimeType,
+			"runtime_status":         run.Status,
+			"real_execution_pending": false,
+			"evidence_capture":       true,
+			"manual_review":          false,
+			"autopilot":              true,
+			"output":                 output,
+		}
+
+		if runAfterExecute != nil {
+			controlledRuntime["runtime_status"] = runAfterExecute.Status
+		}
+		if runtimeResult != nil {
+			controlledRuntime["controlled_test_result_id"] = runtimeResult.ID
+			controlledRuntime["result_status"] = runtimeResult.Status
+			controlledRuntime["confidence"] = runtimeResult.Confidence
+			controlledRuntime["severity_hint"] = runtimeResult.SeverityHint
+			result.ControlledResults = append(result.ControlledResults, runtimeResult.ID)
+		}
+		if mem, _ := output["memory_ingested"].(bool); mem {
+			result.MemoryIngested = true
+		}
+
+		preview["execution_enabled"] = true
+		preview["executed"] = true
+		preview["hard_blocked"] = false
+		preview["reason"] = "agent chat autopilot created and executed controlled runtime run"
+		preview["controlled_runtime"] = controlledRuntime
+		preview["autopilot"] = map[string]interface{}{
+			"enabled": true,
+			"mode":    result.Mode,
+			"source":  "agent_chat",
+		}
+
+		errorMessage := ""
+		if execErr != nil {
+			errorMessage = execErr.Error()
+			result.Errors = append(result.Errors, fmt.Sprintf("execute controlled run %d failed: %v", run.ID, execErr))
+		}
+
+		completedAt := time.Now().UTC()
+		if err := updateChatActionOutput(&action, preview, errorMessage, models.AgentActionStatusExecuted, &executedAt, &completedAt); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("update action %d autopilot output failed: %v", action.ID, err))
+		}
+
+		result.ExecutedActions = append(result.ExecutedActions, action.ID)
+		summary := map[string]interface{}{
+			"action_id":     action.ID,
+			"run_id":        run.ID,
+			"status":        output["status"],
+			"status_code":   output["status_code"],
+			"memory_ingest": output["memory_ingested"],
+			"error":         errorMessage,
+		}
+		if runtimeResult != nil {
+			summary["result_id"] = runtimeResult.ID
+		}
+		result.Summary = append(result.Summary, summary)
+
+		entityID := action.ID
+		_ = auditlog.Record(auditlog.Entry{
+			ActorUserID: &uid,
+			Action:      "target.agent_action.autopilot_execute",
+			EntityType:  "agent_action",
+			EntityID:    &entityID,
+			TargetID:    &target.ID,
+			IPAddress:   auditlog.ClientIP(c),
+			UserAgent:   auditlog.UserAgent(c),
+			Metadata: map[string]interface{}{
+				"source":            "agent_chat_autopilot",
+				"mode":              result.Mode,
+				"controlled_run_id": run.ID,
+				"memory_ingested":   result.MemoryIngested,
+			},
+		})
+	}
+
+	return result
+}
+
 func createActionFromChat(c *fiber.Ctx, target *models.Target, uid uint, ownerKey string, req proposeAgentActionRequest) (*models.AgentAction, error) {
 	actionType := normalizeAgentActionType(req.ActionType)
 	if actionType == "" {
@@ -1128,6 +1378,27 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": txErr.Error()})
 	}
 
+	autopilot := runAgentChatAutopilotForActions(c, target, uid, ownerKey, createdActions)
+
+	assistantOutput := map[string]interface{}{}
+	if len(assistantMessage.OutputJSON) > 0 {
+		_ = json.Unmarshal(assistantMessage.OutputJSON, &assistantOutput)
+	}
+	assistantOutput["autopilot"] = autopilot
+	assistantOutput["execution_enabled"] = len(autopilot.ExecutedActions) > 0
+
+	if len(autopilot.ExecutedActions) > 0 {
+		assistantMessage.Content = strings.TrimSpace(assistantMessage.Content + "\n" + fmt.Sprintf("Autopilot executed %d low-risk controlled action(s), captured evidence, and updated target memory where applicable.", len(autopilot.ExecutedActions)))
+	}
+
+	_ = database.DB.Model(&models.AgentChatMessage{}).
+		Where("id = ?", assistantMessage.ID).
+		Updates(map[string]interface{}{
+			"content":     assistantMessage.Content,
+			"output_json": chatJSON(assistantOutput),
+		}).Error
+	_ = database.DB.First(&assistantMessage, assistantMessage.ID)
+
 	_ = maybeCreateChatMemoryFromMessage(uid, target, session.ID, userMessage, len(createdActions))
 	_ = maybeCreateChatMemoryFromMessage(uid, target, session.ID, assistantMessage, len(createdActions))
 
@@ -1146,6 +1417,7 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 			"session_id":      session.ID,
 			"user_message_id": userMessage.ID,
 			"action_count":    len(createdActions),
+			"autopilot":       true,
 		},
 	})
 
