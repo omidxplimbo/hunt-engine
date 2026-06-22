@@ -612,6 +612,11 @@ export interface TargetPolicy {
   asset_criticality_default: string;
   created_at: string;
   updated_at: string;
+  operator_mode?: string;
+  auto_execute_level_0?: boolean;
+  auto_execute_level_1?: boolean;
+  require_approval_level_2?: boolean;
+  require_approval_level_3?: boolean;
 }
 
 export interface TargetPolicyPayload {
@@ -628,6 +633,11 @@ export interface TargetPolicyPayload {
   reporting_preferences: string;
   business_context: string;
   asset_criticality_default: string;
+  operator_mode?: string;
+  auto_execute_level_0?: boolean;
+  auto_execute_level_1?: boolean;
+  require_approval_level_2?: boolean;
+  require_approval_level_3?: boolean;
 }
 
 export const getTargetPolicy = async (targetId: number) => {
