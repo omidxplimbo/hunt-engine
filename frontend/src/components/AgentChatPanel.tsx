@@ -79,6 +79,12 @@ const MessageBubble = ({
   const recommendedSteps = asArray(operatorPlan?.recommended_next_steps);
   const planActions = asArray(operatorPlan?.actions);
   const guardrails = asArray(output?.guardrails);
+  const autopilot = output?.autopilot || {};
+  const autopilotSummary = asArray(autopilot?.summary);
+  const autopilotErrors = asArray(autopilot?.errors);
+  const autopilotExecuted = asArray(autopilot?.executed_actions);
+  const autopilotRuns = asArray(autopilot?.controlled_runs);
+  const autopilotResults = asArray(autopilot?.controlled_results);
   const llmAssisted = Boolean(output?.llm_assisted);
   const operatorMode = String(output?.operator_mode || input?.operator_mode || "");
   const operatorError = String(output?.operator_error || input?.operator_error || "");
@@ -144,6 +150,84 @@ const MessageBubble = ({
         {!isUser && operatorError && (
           <div className="mt-3 border border-hack-warning/60 bg-hack-warning/10 p-2 font-mono text-[11px] text-hack-warning">
             Operator fallback reason: {truncateText(operatorError, 260)}
+          </div>
+        )}
+
+        {!isUser && autopilot?.enabled && (
+          <div className="mt-3 border border-hack-primary/50 bg-hack-primary/10 p-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="font-mono text-[10px] uppercase tracking-wider text-hack-primary">
+                Operator Autopilot
+              </div>
+              <div className="flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-wider">
+                <span className="border border-hack-primary/60 bg-black/30 px-2 py-1 text-hack-primary">
+                  mode: {autopilot.mode || "assisted_autopilot_v1"}
+                </span>
+                <span className="border border-hack-primary/60 bg-black/30 px-2 py-1 text-hack-primary">
+                  executed: {autopilotExecuted.length}
+                </span>
+                <span className="border border-hack-primary/60 bg-black/30 px-2 py-1 text-hack-primary">
+                  runs: {autopilotRuns.join(", ") || "-"}
+                </span>
+                <span className="border border-hack-primary/60 bg-black/30 px-2 py-1 text-hack-primary">
+                  results: {autopilotResults.join(", ") || "-"}
+                </span>
+                <span className={clsx(
+                  "border bg-black/30 px-2 py-1",
+                  autopilot.memory_ingested
+                    ? "border-hack-primary/60 text-hack-primary"
+                    : "border-hack-warning/60 text-hack-warning",
+                )}>
+                  memory: {autopilot.memory_ingested ? "ingested" : "not ingested"}
+                </span>
+              </div>
+            </div>
+
+            {autopilotSummary.length > 0 && (
+              <div className="space-y-2">
+                {autopilotSummary.slice(0, 4).map((item: any, index: number) => (
+                  <div key={`${message.id}-autopilot-${index}`} className="border border-hack-border bg-black/30 p-2">
+                    <div className="grid gap-2 font-mono text-[11px] md:grid-cols-5">
+                      <div>
+                        <div className="text-[10px] uppercase text-hack-dim">Action</div>
+                        <div className="text-white">#{item.action_id || "-"}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] uppercase text-hack-dim">Run</div>
+                        <div className="text-white">#{item.run_id || "-"}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] uppercase text-hack-dim">Result</div>
+                        <div className="text-white">#{item.result_id || "-"}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] uppercase text-hack-dim">Status</div>
+                        <div className="text-white">{item.status || "-"}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] uppercase text-hack-dim">HTTP</div>
+                        <div className="text-white">{item.status_code || "-"}</div>
+                      </div>
+                    </div>
+                    {item.error && (
+                      <div className="mt-2 border border-hack-danger/40 bg-hack-danger/10 p-2 text-xs text-hack-danger">
+                        {truncateText(item.error, 220)}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {autopilotErrors.length > 0 && (
+              <div className="mt-2 border border-hack-warning/50 bg-hack-warning/10 p-2 text-xs text-hack-warning">
+                {autopilotErrors.slice(0, 3).map((item: any, index: number) => (
+                  <div key={`${message.id}-autopilot-error-${index}`}>
+                    • {truncateText(item, 220)}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
