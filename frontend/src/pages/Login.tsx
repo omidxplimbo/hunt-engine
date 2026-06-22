@@ -15,7 +15,7 @@ const Login = () => {
     mutationFn: loginUser,
     onSuccess: (data) => {
       login(data.token, data.username, data.role);
-      navigate('/');
+      navigate('/dashboard');
     },
     onError: (err: any) => {
       const apiErr = err?.response?.data?.error;

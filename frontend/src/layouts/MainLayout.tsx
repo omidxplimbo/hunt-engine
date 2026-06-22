@@ -69,7 +69,7 @@ export const MainLayout = () => {
         <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
           <div className="px-4 py-2 text-[10px] text-hack-dim uppercase tracking-widest border-b border-hack-border/30 mb-2">Modules</div>
           <div onClick={handleNavClick}>
-            <NavItem to="/" icon={LayoutDashboard}>Dashboard</NavItem>
+            <NavItem to="/dashboard" icon={LayoutDashboard}>Dashboard</NavItem>
           </div>
           <div onClick={handleNavClick}>
             <NavItem to="/account" icon={User2}>Account</NavItem>

@@ -415,7 +415,7 @@ const NucleiTemplates = () => {
     setValidation(draft.validation || null);
   };
 
-  if (role !== "admin") return <Navigate to="/" replace />;
+  if (role !== "admin") return <Navigate to="/dashboard" replace />;
 
   const isBusy =
     templatesQuery.isLoading ||

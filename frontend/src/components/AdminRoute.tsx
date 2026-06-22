@@ -7,7 +7,7 @@ export const AdminRoute = () => {
   if (!isAuthenticated) return <Navigate to="/login" replace />;
 
   // if role is not hydrated yet, treat as non-admin
-  if (role !== 'admin') return <Navigate to="/" replace />;
+  if (role !== 'admin') return <Navigate to="/dashboard" replace />;
 
   return <Outlet />;
 };

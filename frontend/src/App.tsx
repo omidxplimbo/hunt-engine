@@ -5,7 +5,8 @@ import { MainLayout } from './layouts/MainLayout';
 import { AuthProvider } from './context/AuthContext'; // 👈
 import { ProtectedRoute } from './components/ProtectedRoute'; // 👈
 import { AdminRoute } from './components/AdminRoute';
-import Login from './pages/Login'; // 👈
+import Login from './pages/Login';
+import Landing from './pages/Landing'; // 👈
 import TargetsPage from './pages/TargetsPages';
 import TargetAssets from './pages/TargetAssets';
 import Settings from './pages/Settings';
@@ -59,19 +60,18 @@ function App() {
             }}
           />
           <Routes>
-            {/* روت عمومی لاگین */}
+            <Route path="/" element={<Landing />} />
             <Route path="/login" element={<Login />} />
 
-            {/* 👇 روت‌های محافظت شده (نیاز به لاگین دارن) */}
             <Route element={<ProtectedRoute />}>
-              <Route path="/" element={<MainLayout />}>
-                <Route index element={<Dashboard />} />
-                <Route path="account" element={<Account />} />
-                <Route path="targets" element={<TargetsPage />} />
-                <Route path="targets/:id" element={<TargetAssets />} />
+              <Route element={<MainLayout />}>
+                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/account" element={<Account />} />
+                <Route path="/targets" element={<TargetsPage />} />
+                <Route path="/targets/:id" element={<TargetAssets />} />
                 <Route element={<AdminRoute />}>
-                <Route path="nuclei-templates" element={<NucleiTemplates />} />
-<Route path="settings" element={<Settings />} />
+                  <Route path="/nuclei-templates" element={<NucleiTemplates />} />
+                  <Route path="/settings" element={<Settings />} />
                 </Route>
               </Route>
             </Route>
