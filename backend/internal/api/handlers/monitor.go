@@ -85,16 +85,10 @@ func GetMonitorData(c *fiber.Ctx) error {
 		if name == "" {
 			name = fmt.Sprintf("Target #%d", t.TargetID)
 		}
-		// Truncate command if too long
-		cmd := t.Command
-		if len(cmd) > 60 {
-			cmd = cmd[:57] + "..."
-		}
-
 		processes = append(processes, ProcessInfo{
 			TargetID:   t.TargetID,
 			TargetName: name,
-			Command:    cmd,
+			Command:    t.Command,
 			Duration:   time.Since(t.StartTime).Round(time.Second).String(),
 			PID:        t.PID,
 		})

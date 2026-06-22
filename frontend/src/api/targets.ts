@@ -140,7 +140,7 @@ export const getTargetAssets = async (
   if (filters?.sources && filters.sources.length > 0)
     params.sources = filters.sources.join(",");
 
-  const response = await apiClient.get<{ data: Asset[]; total: number }>(
+  const response = await apiClient.get<{ data: Asset[]; total_count: number; page_count?: number; total?: number }>(
     `/targets/${targetId}/assets`,
     { params },
   );
