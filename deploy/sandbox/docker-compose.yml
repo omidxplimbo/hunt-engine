@@ -1,0 +1,60 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: hunt-sandbox-postgres
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - sandbox_postgres_data:/var/lib/postgresql/data
+    networks:
+      - hunt-sandbox-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: hunt-sandbox-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - sandbox_redis_data:/data
+    networks:
+      - hunt-sandbox-net
+
+  backend:
+    image: ghcr.io/omidxplimbo/hunt-engine-backend:${HUNT_IMAGE_TAG}
+    container_name: hunt-sandbox-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./data:/tmp/hunt-engine
+      - ./wordlists:/data/wordlists
+      - ./reports:/data/reports
+    ports:
+      - "${BACKEND_PORT}:8080"
+    networks:
+      - hunt-sandbox-net
+
+  frontend:
+    image: ghcr.io/omidxplimbo/hunt-engine-frontend:${HUNT_IMAGE_TAG}
+    container_name: hunt-sandbox-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "${FRONTEND_PORT}:80"
+    networks:
+      - hunt-sandbox-net
+
+volumes:
+  sandbox_postgres_data:
+  sandbox_redis_data:
+
+networks:
+  hunt-sandbox-net:
+    name: hunt-sandbox-net
