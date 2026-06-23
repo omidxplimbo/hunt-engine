@@ -198,14 +198,31 @@ func MarkPaused(targetID uint, reason string) {
 }
 
 func MarkFailed(targetID uint, errMsg string) {
-	now := time.Now()
-	_ = database.DB.Model(&models.TargetScanState{}).
-		Where("target_id = ?", targetID).
-		Updates(map[string]interface{}{
-			"status":       "FAILED",
-			"heartbeat_at": &now,
-			"last_error":   errMsg,
-		}).Error
+	failedPhase := "FAILED"
+	if errMsg != "" {
+		failedPhase = "FAILED: " + errMsg
+	}
+
+	_ = database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&models.TargetScanState{}).
+			Where("target_id = ?", targetID).
+			Updates(map[string]interface{}{
+				"status":       "FAILED",
+				"last_error":   errMsg,
+				"heartbeat_at": time.Now(),
+			}).Error; err != nil {
+			return err
+		}
+
+		return tx.Model(&models.Target{}).
+			Where("id = ?", targetID).
+			Updates(map[string]interface{}{
+				"status":         "FAILED",
+				"current_phase":  failedPhase,
+				"stop_requested": false,
+				"updated_at":     time.Now(),
+			}).Error
+	})
 }
 
 func MarkStepDone(targetID uint, module, step string) {
