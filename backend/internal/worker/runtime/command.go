@@ -331,3 +331,45 @@ func RunCommandWithKillSwitchCombinedTimeout(
 		}
 	}
 }
+
+// ProgressFunc receives raw stdout/stderr chunks from a running command.
+type ProgressFunc func(chunk []byte)
+
+type progressWriter struct {
+	progress ProgressFunc
+}
+
+func (w progressWriter) Write(p []byte) (int, error) {
+	if w.progress != nil && len(p) > 0 {
+		cp := make([]byte, len(p))
+		copy(cp, p)
+		w.progress(cp)
+	}
+	return len(p), nil
+}
+
+// RunCommandWithProgressAndKillSwitch runs an external command without buffering
+// full output, but streams stdout/stderr chunks to a progress callback.
+func RunCommandWithProgressAndKillSwitch(
+	targetID uint,
+	heartbeat HeartbeatFunc,
+	shouldStop StopRequestedFunc,
+	progress ProgressFunc,
+	name string,
+	args ...string,
+) error {
+	cmd := exec.Command(name, args...)
+	prepareCommand(targetID, cmd)
+
+	var outBuf bytes.Buffer
+	writer := progressWriter{progress: progress}
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start command %s: %w", name, err)
+	}
+
+	_, err := waitCommandWithKillSwitch(targetID, cmd, heartbeat, shouldStop, name, args, &outBuf)
+	return err
+}

@@ -1495,3 +1495,26 @@ export const getBugPayloads = async (params?: {
 
   return response.data;
 };
+
+// --- Scan State / Runtime Progress ---
+
+export interface TargetScanState {
+  id?: number;
+  target_id?: number;
+  run_id?: string;
+  status?: string;
+  current_module?: string;
+  current_step?: string;
+  completed_steps?: string;
+  meta?: string;
+  heartbeat_at?: string | null;
+  last_error?: string;
+  exists?: boolean;
+}
+
+export const getTargetScanState = async (id: number) => {
+  const response = await apiClient.get<{ status: string; data: TargetScanState }>(
+    `/targets/${id}/scan-state`,
+  );
+  return response.data.data;
+};

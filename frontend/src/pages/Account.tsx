@@ -20,6 +20,7 @@ import {
 import { QueueManager } from "../components/QueueManager";
 import TelegramConfigPanel from "../components/TelegramConfigPanel";
 import VirusTotalConfigPanel from "../components/VirusTotalConfigPanel";
+import PureDNSResolverConfigPanel from "../components/PureDNSResolverConfigPanel";
 
 import { LLMProviderConfig } from "../components/LLMProviderConfig";
 import FeatureFlagsConfig from "../components/FeatureFlagsConfig";
@@ -222,6 +223,8 @@ const Account = () => {
 
       <FeatureFlagsConfig />
         <WordlistsConfig />
+
+      <PureDNSResolverConfigPanel />
 
       <VirusTotalConfigPanel />
 
