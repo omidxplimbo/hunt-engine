@@ -377,3 +377,42 @@ export const deleteMyVirusTotalConfig = async () => {
   );
   return res.data;
 };
+
+// PureDNS account-scoped public resolver config
+export interface PureDNSResolverConfig {
+  enabled: boolean;
+  has_resolvers: boolean;
+  resolver_count: number;
+  resolvers_text: string;
+  scope: string;
+  owner_key: string;
+}
+
+export interface PureDNSResolverConfigPayload {
+  enabled: boolean;
+  resolvers_text: string;
+}
+
+export const getMyPureDNSResolverConfig = async () => {
+  const res = await apiClient.get<{ status: string; data: PureDNSResolverConfig }>(
+    "/me/puredns-resolvers",
+  );
+  return res.data.data;
+};
+
+export const putMyPureDNSResolverConfig = async (
+  payload: PureDNSResolverConfigPayload,
+) => {
+  const res = await apiClient.put<{ status: string; data: PureDNSResolverConfig }>(
+    "/me/puredns-resolvers",
+    payload,
+  );
+  return res.data.data;
+};
+
+export const deleteMyPureDNSResolverConfig = async () => {
+  const res = await apiClient.delete<{ status: string; message: string }>(
+    "/me/puredns-resolvers",
+  );
+  return res.data;
+};

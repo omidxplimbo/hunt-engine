@@ -58,6 +58,7 @@ func Connect() {
 		&models.SystemConfig{},
 		&models.UserTelegramConfig{},
 		&models.UserVirusTotalConfig{},
+		&models.UserPureDNSResolverConfig{},
 		&models.UserLLMProviderConfig{},
 		&models.UserFeatureFlagConfig{},
 		&models.UserWordlist{},

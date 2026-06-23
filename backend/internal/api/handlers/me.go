@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -1025,4 +1026,178 @@ func DeleteMyVirusTotalConfig(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{"status": "success", "message": "VirusTotal config deleted"})
+}
+
+type pureDNSResolverConfigResponse struct {
+	Enabled       bool   `json:"enabled"`
+	HasResolvers  bool   `json:"has_resolvers"`
+	ResolverCount int    `json:"resolver_count"`
+	ResolversText string `json:"resolvers_text"`
+	Scope         string `json:"scope"`
+	OwnerKey      string `json:"owner_key"`
+}
+
+type putMyPureDNSResolverConfigRequest struct {
+	Enabled       bool   `json:"enabled"`
+	ResolversText string `json:"resolvers_text"`
+}
+
+func normalizePureDNSResolvers(raw string) ([]string, []string) {
+	lines := strings.Split(raw, "\n")
+	resolvers := make([]string, 0, len(lines))
+	errors := make([]string, 0)
+	seen := make(map[string]bool)
+
+	for idx, line := range lines {
+		value := strings.TrimSpace(line)
+		if value == "" || strings.HasPrefix(value, "#") {
+			continue
+		}
+		if hash := strings.Index(value, "#"); hash >= 0 {
+			value = strings.TrimSpace(value[:hash])
+		}
+		if value == "" {
+			continue
+		}
+
+		ip := net.ParseIP(value)
+		if ip == nil {
+			errors = append(errors, fmt.Sprintf("line %d: invalid resolver IP %q", idx+1, value))
+			continue
+		}
+
+		normalized := ip.String()
+		if seen[normalized] {
+			continue
+		}
+		seen[normalized] = true
+		resolvers = append(resolvers, normalized)
+	}
+
+	return resolvers, errors
+}
+
+func getOrDefaultPureDNSResolverConfig(user models.User) (models.UserPureDNSResolverConfig, string, string) {
+	ownerKey, scope, ownerUserID := featureflags.OwnerKeyForUser(user)
+
+	var cfg models.UserPureDNSResolverConfig
+	if err := database.DB.Where("owner_key = ?", ownerKey).First(&cfg).Error; err != nil {
+		cfg = models.UserPureDNSResolverConfig{
+			UserID:        ownerUserID,
+			OwnerKey:      ownerKey,
+			Enabled:       false,
+			ResolversText: "",
+			ResolverCount: 0,
+		}
+	}
+
+	return cfg, ownerKey, scope
+}
+
+func pureDNSResolverConfigDTO(cfg models.UserPureDNSResolverConfig, ownerKey string, scope string) pureDNSResolverConfigResponse {
+	return pureDNSResolverConfigResponse{
+		Enabled:       cfg.Enabled,
+		HasResolvers:  strings.TrimSpace(cfg.ResolversText) != "" && cfg.ResolverCount > 0,
+		ResolverCount: cfg.ResolverCount,
+		ResolversText: cfg.ResolversText,
+		Scope:         scope,
+		OwnerKey:      ownerKey,
+	}
+}
+
+// GetMyPureDNSResolverConfig returns the current account-scoped PureDNS public resolver config.
+func GetMyPureDNSResolverConfig(c *fiber.Ctx) error {
+	user, err := currentUser(c)
+	if err != nil {
+		return err
+	}
+
+	cfg, ownerKey, scope := getOrDefaultPureDNSResolverConfig(*user)
+
+	return c.JSON(fiber.Map{
+		"status": "success",
+		"data":   pureDNSResolverConfigDTO(cfg, ownerKey, scope),
+	})
+}
+
+// PutMyPureDNSResolverConfig creates or updates the current account-scoped PureDNS public resolver config.
+func PutMyPureDNSResolverConfig(c *fiber.Ctx) error {
+	user, err := currentUser(c)
+	if err != nil {
+		return err
+	}
+
+	req := new(putMyPureDNSResolverConfigRequest)
+	if err := c.BodyParser(req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "invalid request body"})
+	}
+
+	resolvers, validationErrors := normalizePureDNSResolvers(req.ResolversText)
+	if len(validationErrors) > 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status":  "error",
+			"message": "invalid resolver list",
+			"errors":  validationErrors,
+		})
+	}
+
+	if req.Enabled && len(resolvers) == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "at least one valid resolver is required when enabled"})
+	}
+
+	if len(resolvers) > 5000 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "resolver list exceeds maximum of 5000 entries"})
+	}
+
+	normalizedText := strings.Join(resolvers, "\n")
+	cfg, ownerKey, scope := getOrDefaultPureDNSResolverConfig(*user)
+	_, _, ownerUserID := featureflags.OwnerKeyForUser(*user)
+
+	if cfg.ID == 0 {
+		cfg = models.UserPureDNSResolverConfig{
+			UserID:        ownerUserID,
+			OwnerKey:      ownerKey,
+			Enabled:       req.Enabled,
+			ResolversText: normalizedText,
+			ResolverCount: len(resolvers),
+		}
+		if err := database.DB.Create(&cfg).Error; err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+		}
+	} else {
+		if err := database.DB.Model(&models.UserPureDNSResolverConfig{}).
+			Where("id = ?", cfg.ID).
+			Updates(map[string]interface{}{
+				"user_id":        ownerUserID,
+				"owner_key":      ownerKey,
+				"enabled":        req.Enabled,
+				"resolvers_text": normalizedText,
+				"resolver_count": len(resolvers),
+			}).Error; err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+		}
+		_ = database.DB.First(&cfg, cfg.ID).Error
+	}
+
+	return c.JSON(fiber.Map{
+		"status": "success",
+		"data":   pureDNSResolverConfigDTO(cfg, ownerKey, scope),
+	})
+}
+
+// DeleteMyPureDNSResolverConfig removes the current account-scoped PureDNS resolver config.
+func DeleteMyPureDNSResolverConfig(c *fiber.Ctx) error {
+	user, err := currentUser(c)
+	if err != nil {
+		return err
+	}
+
+	ownerKey, _, _ := featureflags.OwnerKeyForUser(*user)
+
+	if err := database.DB.Where("owner_key = ?", ownerKey).
+		Delete(&models.UserPureDNSResolverConfig{}).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	return c.JSON(fiber.Map{"status": "success", "message": "PureDNS resolver config deleted"})
 }

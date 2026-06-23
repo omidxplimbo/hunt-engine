@@ -8,6 +8,7 @@ import { EditTargetModal } from '../components/EditTargetModal';
 import { ImportTargetModal } from '../components/ImportTargetModal';
 import { ExportTargetModal } from '../components/ExportTargetModal';
 import type { Target } from '../types/target';
+import PureDNSProgress from "../components/PureDNSProgress";
 
 const TargetsPage = () => {
   const queryClient = useQueryClient();
@@ -119,6 +120,10 @@ const TargetsPage = () => {
                   <span className="border border-hack-primary/50 px-2 py-1 text-xs uppercase text-hack-primary">{target.status}</span>
                   {target.current_phase && target.current_phase !== 'IDLE' && (
                     <div className="mt-2 text-[11px] text-hack-dim uppercase">{target.current_phase}</div>
+                  )}
+
+                  {(target.status === 'SCANNING' || target.status === 'QUEUED') && (
+                    <PureDNSProgress targetId={target.id} />
                   )}
                 </td>
                 <td className="py-4 px-6 text-right">
