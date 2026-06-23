@@ -10,6 +10,16 @@ services:
     networks:
       - hunt-prod-net
 
+  redis:
+    image: redis:7-alpine
+    container_name: hunt-prod-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - prod_redis_data:/data
+    networks:
+      - hunt-prod-net
+
   backend:
     image: ghcr.io/omidxplimbo/hunt-engine-backend:${HUNT_IMAGE_TAG}
     container_name: hunt-prod-backend
@@ -18,6 +28,7 @@ services:
       - .env
     depends_on:
       - postgres
+      - redis
     volumes:
       - ./data:/tmp/hunt-engine
       - ./wordlists:/data/wordlists
@@ -40,6 +51,7 @@ services:
 
 volumes:
   prod_postgres_data:
+  prod_redis_data:
 
 networks:
   hunt-prod-net:
