@@ -58,8 +58,21 @@ export const PureDNSProgress = ({ targetId }: { targetId: number }) => {
   const progress = parseMeta(data?.meta);
   if (!progress) return null;
 
+  const scanStatus = String(data?.status || "").toUpperCase();
+  const currentModule = String(data?.current_module || "").toUpperCase();
+  const currentStep = String(data?.current_step || "").toUpperCase();
+
   const status = String(progress.status || "").toLowerCase();
   if (!["running", "stopping", "completed", "failed", "done"].includes(status)) {
+    return null;
+  }
+
+  const isActivePureDNSStep =
+    scanStatus === "RUNNING" &&
+    currentModule === "DISCOVERY" &&
+    currentStep === "PUREDNS";
+
+  if (!isActivePureDNSStep) {
     return null;
   }
 
