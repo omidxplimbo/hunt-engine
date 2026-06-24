@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import {
   ArrowRight,
   Cpu,
@@ -37,6 +37,12 @@ const bootLines = [
 ];
 
 const Landing = () => {
+  const isAuthenticated = !!localStorage.getItem("token");
+
+  if (isAuthenticated) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
   return (
     <div className="min-h-screen overflow-hidden bg-hack-bg bg-grid-pattern bg-[size:40px_40px] text-white relative">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_20%,rgba(0,255,65,0.16),transparent_34%),linear-gradient(to_bottom,transparent,rgba(0,0,0,0.86))]" />

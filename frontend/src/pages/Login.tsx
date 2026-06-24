@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { loginUser, type LoginPayload } from '../api/auth';
 import { useAuth } from '../context/AuthContext';
@@ -7,15 +7,21 @@ import { Lock, User, Terminal, ChevronRight, ShieldAlert } from 'lucide-react';
 
 const Login = () => {
   const [formData, setFormData] = useState<LoginPayload>({ username: '', password: '' });
-  const { login } = useAuth();
+  const { isAuthenticated, login } = useAuth();
   const navigate = useNavigate();
   const [errorMsg, setErrorMsg] = useState('');
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate('/dashboard', { replace: true });
+    }
+  }, [isAuthenticated, navigate]);
 
   const mutation = useMutation({
     mutationFn: loginUser,
     onSuccess: (data) => {
       login(data.token, data.username, data.role);
-      navigate('/dashboard');
+      navigate('/dashboard', { replace: true });
     },
     onError: (err: any) => {
       const apiErr = err?.response?.data?.error;
