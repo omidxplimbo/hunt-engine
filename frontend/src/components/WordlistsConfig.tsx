@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Download,
@@ -16,6 +16,7 @@ import {
   getMyWordlists,
   uploadMyWordlistFile,
   uploadMyWordlistURL,
+  getMyWordlistImportJob,
   type MyWordlist,
 } from "../api/me";
 
@@ -134,6 +135,7 @@ const WordlistsConfig = () => {
   const [url, setUrl] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [importJobId, setImportJobId] = useState<number | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadLoadedBytes, setUploadLoadedBytes] = useState(0);
   const [uploadTotalBytes, setUploadTotalBytes] = useState(0);
@@ -252,10 +254,11 @@ const WordlistsConfig = () => {
       if (!value) throw new Error("Enter a public .txt URL first");
       return uploadMyWordlistURL(value);
     },
-    onSuccess: (row) => {
+    onSuccess: (job) => {
       setUrl("");
+      setImportJobId(job.id);
       setErrorMsg(null);
-      setMessage(`Wordlist imported from URL: ${row.name}`);
+      setMessage(`Wordlist import queued: ${job.display_name}`);
       refreshAllWordlistQueries();
     },
     onError: (err: any) => {
@@ -267,6 +270,35 @@ const WordlistsConfig = () => {
       );
     },
   });
+
+  const importJobQuery = useQuery({
+    queryKey: ["my-wordlist-import-job", importJobId],
+    queryFn: () => getMyWordlistImportJob(importJobId as number),
+    enabled: importJobId !== null,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "queued" || status === "downloading" ? 2500 : false;
+    },
+  });
+
+  useEffect(() => {
+    const job = importJobQuery.data;
+    if (!job) return;
+
+    if (job.status === "completed") {
+      setMessage(`Wordlist import completed: ${job.display_name}`);
+      setErrorMsg(null);
+      setImportJobId(null);
+      refreshAllWordlistQueries();
+    }
+
+    if (job.status === "failed") {
+      setMessage(null);
+      setErrorMsg(job.error_message || `Wordlist import failed: ${job.display_name}`);
+      setImportJobId(null);
+      refreshAllWordlistQueries();
+    }
+  }, [importJobQuery.data]);
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => deleteMyWordlist(id),

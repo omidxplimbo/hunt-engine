@@ -72,7 +72,6 @@ services:
     container_name: hunt-nginx
     image: nginx:alpine
     ports:
-      - "8888:80"
       - "443:443"
       - "${NGINX_PORT:-4000}:80"
     volumes:
@@ -99,6 +98,7 @@ services:
       - backend
     networks:
       - hunt-net
+      - hunt-shared
     restart: unless-stopped
 
   # -----------------------------
@@ -163,6 +163,8 @@ services:
 
 # Networks & Volumes
 networks:
+  hunt-shared:
+    external: true
   hunt-net:
     driver: bridge
 

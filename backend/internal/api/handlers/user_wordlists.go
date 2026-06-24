@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -154,66 +153,7 @@ func UploadMyWordlistURL(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "invalid request body"})
 	}
 
-	rawURL := strings.TrimSpace(req.URL)
-	if rawURL == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": "url is required"})
-	}
-
-	displayName := strings.TrimSpace(req.Name)
-	if displayName == "" {
-		parsed, _ := url.Parse(rawURL)
-		displayName = filepath.Base(parsed.Path)
-	}
-
-	displayName, err = wordliststore.SafeDisplayName(displayName)
-	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
-	}
-
-	maxFile, maxTotal, unlimited := wordliststore.EffectiveLimits(*user)
-
-	currentTotal, err := wordliststore.CurrentTotalSize(user.ID)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
-	}
-
-	resp, err := safeFetchWordlistURL(rawURL, maxFile)
-	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
-	}
-	defer resp.Body.Close()
-
-	if resp.ContentLength > 0 {
-		if err := wordliststore.CheckQuota(currentTotal, resp.ContentLength, maxFile, maxTotal, unlimited); err != nil {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "message": err.Error()})
-		}
-	}
-
-	row, err := saveWordlistFromReader(user.ID, displayName, resp.Body, maxFile, currentTotal, maxTotal, unlimited, "url", rawURL)
-	if err != nil {
-		return wordlistUploadError(c, err)
-	}
-
-	_ = auditlog.Record(auditlog.Entry{
-		ActorUserID: &user.ID,
-		Action:      "account.wordlist.upload_url",
-		EntityType:  "user_wordlist",
-		EntityID:    &row.ID,
-		IPAddress:   auditlog.ClientIP(c),
-		UserAgent:   auditlog.UserAgent(c),
-		Metadata: map[string]interface{}{
-			"user_id":    user.ID,
-			"name":       row.DisplayName,
-			"size_bytes": row.SizeBytes,
-			"source":     row.Source,
-			"source_url": row.SourceURL,
-		},
-	})
-
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
-		"status": "success",
-		"data":   mapWordlist(row),
-	})
+	return queueWordlistURLImport(c, user, req)
 }
 
 func DownloadMyWordlist(c *fiber.Ctx) error {
