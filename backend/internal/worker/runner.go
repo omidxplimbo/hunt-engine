@@ -146,6 +146,7 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 
 	allFoundFile := filepath.Join(tempDir, "dnsx_all_found.txt")
 	dnsxOutputFile := filepath.Join(tempDir, "dnsx_output.json")
+	wildcardDNSXOutputFile := filepath.Join(tempDir, "wildcard_dnsx_output.json")
 	cdncheckInputFile := filepath.Join(tempDir, "cdncheck_input.txt")
 	nmapInputFile := filepath.Join(tempDir, "nmap_input.txt")
 	// checkpoint artifacts (persist across crashes so we can resume safely)
@@ -293,7 +294,7 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		var err error
 		mergeCandidateCount, err = discoverymerge.WriteCandidatesToFile(discoverymerge.CandidateFileInput{
 			PassiveResults:     passiveResults,
-			MutatedResultsFile: alterxResultsFile,
+			MutatedResultsFile: "",
 			PurednsResults:     purednsResults,
 			ExistingAssets:     existingAssets,
 			OutputFile:         allFoundFile,
@@ -322,6 +323,7 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 
 	// 4. Validation (DNSX)
 	var dnsxResults map[string][]string
+	wildcardIPs := map[string]struct{}{}
 	if scanIsStepDone(targetID, "DISCOVERY", "DNSX") {
 		dnsxResults = map[string][]string{}
 		_ = utils.ReadJSONFromFile(dnsxResultsFile, &dnsxResults)
@@ -345,9 +347,27 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		}
 		_ = os.Remove(dnsxOutputFile)
 
-		// Merge puredns results (already live) into dnsxResults.
+		wildcardIPs, err = discoverytools.DetectWildcardIPs(buildDiscoveryToolContext(targetID, rootDomain), rootDomain, wildcardDNSXOutputFile)
+		if err != nil {
+			if err.Error() == "process killed by user request" {
+				return
+			}
+			log.Printf("⚠️ Wildcard DNS check failed for %s: %v. Continuing without wildcard filtering.\n", rootDomain, err)
+			wildcardIPs = map[string]struct{}{}
+		}
+
+		beforeDNSXFilter := len(dnsxResults)
+		dnsxResults = discoverymerge.FilterWildcardLiveResults(dnsxResults, wildcardIPs)
+		beforePureDNSFilter := len(purednsResults)
+		purednsResults = discoverymerge.FilterWildcardLiveResults(purednsResults, wildcardIPs)
+		if len(wildcardIPs) > 0 {
+			log.Printf("⚠️ Wildcard DNS filter for %s: dnsx live %d -> %d, puredns live %d -> %d\n", rootDomain, beforeDNSXFilter, len(dnsxResults), beforePureDNSFilter, len(purednsResults))
+		}
+
+		// Merge puredns results (already live) into dnsxResults after wildcard filtering.
 		dnsxResults = discoverymerge.MergeLiveResults(dnsxResults, purednsResults)
 
+		_ = utils.WriteJSONToFile(purednsResultsFile, purednsResults)
 		_ = utils.WriteJSONToFile(dnsxResultsFile, dnsxResults)
 		scanMarkStepDone(targetID, "DISCOVERY", "DNSX")
 	}
@@ -420,6 +440,12 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 					return
 				}
 				_ = os.Remove(alterxDNSXOutputFile)
+
+				beforeAlterXFilter := len(alterxLiveResults)
+				alterxLiveResults = discoverymerge.FilterWildcardLiveResults(alterxLiveResults, wildcardIPs)
+				if len(wildcardIPs) > 0 {
+					log.Printf("⚠️ Wildcard DNS filter for %s: alterx live %d -> %d\n", rootDomain, beforeAlterXFilter, len(alterxLiveResults))
+				}
 
 				dnsxResults = discoverymerge.MergeLiveResults(dnsxResults, alterxLiveResults)
 

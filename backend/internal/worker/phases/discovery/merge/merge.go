@@ -213,6 +213,45 @@ func MergeFileSourcesForLive(dst map[string][]string, filename string, live map[
 	return scanner.Err()
 }
 
+// FilterWildcardLiveResults removes live DNS results that only resolve to known
+// wildcard/sinkhole IPs. If a host has at least one non-wildcard IP, the host is
+// kept with only its non-wildcard IPs.
+func FilterWildcardLiveResults(live map[string][]string, wildcardIPs map[string]struct{}) map[string][]string {
+	if len(live) == 0 || len(wildcardIPs) == 0 {
+		return live
+	}
+
+	filtered := make(map[string][]string)
+	for host, ips := range live {
+		keptIPs := make([]string, 0, len(ips))
+		seen := make(map[string]struct{})
+
+		for _, ip := range ips {
+			ip = strings.TrimSpace(ip)
+			if ip == "" {
+				continue
+			}
+			if _, isWildcard := wildcardIPs[ip]; isWildcard {
+				continue
+			}
+			if _, exists := seen[ip]; exists {
+				continue
+			}
+			seen[ip] = struct{}{}
+			keptIPs = append(keptIPs, ip)
+		}
+
+		if len(keptIPs) == 0 {
+			continue
+		}
+
+		sort.Strings(keptIPs)
+		filtered[host] = keptIPs
+	}
+
+	return filtered
+}
+
 // MergeLiveResults merges already-resolved live DNS results, de-duplicating IPs per host.
 // It is used after DNSX to inject PureDNS results that were resolved earlier and
 // should not be revalidated by DNSX.
