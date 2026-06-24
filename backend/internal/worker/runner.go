@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
@@ -145,12 +146,15 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 
 	allFoundFile := filepath.Join(tempDir, "dnsx_all_found.txt")
 	dnsxOutputFile := filepath.Join(tempDir, "dnsx_output.json")
+	wildcardDNSXOutputFile := filepath.Join(tempDir, "wildcard_dnsx_output.json")
 	cdncheckInputFile := filepath.Join(tempDir, "cdncheck_input.txt")
 	nmapInputFile := filepath.Join(tempDir, "nmap_input.txt")
 	// checkpoint artifacts (persist across crashes so we can resume safely)
 	passiveResultsFile := filepath.Join(tempDir, "passive_results.txt")
 	passiveSourcesFile := filepath.Join(tempDir, "passive_sources.json")
 	alterxResultsFile := filepath.Join(tempDir, "alterx_results.txt")
+	alterxLiveInputFile := filepath.Join(tempDir, "alterx_live_input.txt")
+	alterxDNSXOutputFile := filepath.Join(tempDir, "alterx_dnsx_output.json")
 	alterxSourcesFile := filepath.Join(tempDir, "alterx_sources.json")
 	purednsResultsFile := filepath.Join(tempDir, "puredns_results.json")
 	allSourcesFile := filepath.Join(tempDir, "all_sources.json")
@@ -200,48 +204,12 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		scanMarkStepDone(targetID, "DISCOVERY", "PASSIVE_ENUM")
 	}
 
-	// 2. Mutation (Alterx)
+	// 2. Mutation (AlterX) is deferred until after the first DNSX validation.
+	// Running AlterX against raw passive results can explode on large targets; it
+	// should mutate only live/resolved hosts and then be validated by DNSX again.
 	alterxCandidateCount := 0
 	mutatedSources := make(map[string][]string)
-	if scanIsStepDone(targetID, "DISCOVERY", "ALTERX") {
-		alterxCandidateCount = discoverytools.CountLines(alterxResultsFile)
-		_ = utils.ReadJSONFromFile(alterxSourcesFile, &mutatedSources)
-		log.Printf("⏩ Resume: skipping ALTERX (loaded %d candidates from checkpoint)\n", alterxCandidateCount)
-	} else if targetConf.UseAlterx {
-		if checkStopRequest(targetID) {
-			return
-		}
-		scanMarkRunning(targetID, "DISCOVERY", "ALTERX")
-		updateTargetPhase(targetID, "PHASE 1: MUTATION (ALTERX)")
-		_ = utils.WriteSliceToFile(allFoundFile, passiveResults)
 
-		var err error
-		alterxCandidateCount, err = runAlterx(targetID, allFoundFile, rootDomain, alterxResultsFile)
-		if err != nil {
-			if err.Error() == "process killed by user request" {
-				return
-			}
-			log.Printf("❌ Alterx failed: %v. Proceeding without mutations.\n", err)
-			alterxCandidateCount = 0
-			_ = utils.WriteSliceToFile(alterxResultsFile, []string{})
-		}
-
-		// Do not create a per-candidate Alterx source map here. Large targets can
-		// produce millions of candidates and a million-entry source map can exhaust
-		// backend memory. The full candidate list is preserved in alterx_results.txt.
-		mutatedSources = map[string][]string{}
-		if err := utils.WriteJSONToFile(alterxSourcesFile, mutatedSources); err != nil {
-			log.Printf("❌ Failed to write alterx sources checkpoint: %v\n", err)
-			scanMarkFailed(targetID, fmt.Sprintf("alterx sources checkpoint failed: %v", err))
-			return
-		}
-		scanMarkStepDone(targetID, "DISCOVERY", "ALTERX")
-	} else {
-		log.Printf("⏩ Skipping Alterx (Mutation) for %s based on target config.\n", rootDomain)
-		_ = utils.WriteSliceToFile(alterxResultsFile, []string{})
-		_ = utils.WriteJSONToFile(alterxSourcesFile, mutatedSources)
-		scanMarkStepDone(targetID, "DISCOVERY", "ALTERX")
-	}
 	// 2.5. Puredns Bruteforce (فقط subdomain‌های لایو)
 	var purednsResults map[string][]string
 	purednsSources := make(map[string][]string)
@@ -326,7 +294,7 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		var err error
 		mergeCandidateCount, err = discoverymerge.WriteCandidatesToFile(discoverymerge.CandidateFileInput{
 			PassiveResults:     passiveResults,
-			MutatedResultsFile: alterxResultsFile,
+			MutatedResultsFile: "",
 			PurednsResults:     purednsResults,
 			ExistingAssets:     existingAssets,
 			OutputFile:         allFoundFile,
@@ -355,6 +323,7 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 
 	// 4. Validation (DNSX)
 	var dnsxResults map[string][]string
+	wildcardIPs := map[string]struct{}{}
 	if scanIsStepDone(targetID, "DISCOVERY", "DNSX") {
 		dnsxResults = map[string][]string{}
 		_ = utils.ReadJSONFromFile(dnsxResultsFile, &dnsxResults)
@@ -378,23 +347,119 @@ func runDiscoveryPhase(targetID uint, rootDomain string) {
 		}
 		_ = os.Remove(dnsxOutputFile)
 
-		// Merge puredns results (already live) into dnsxResults.
+		wildcardIPs, err = discoverytools.DetectWildcardIPs(buildDiscoveryToolContext(targetID, rootDomain), rootDomain, wildcardDNSXOutputFile)
+		if err != nil {
+			if err.Error() == "process killed by user request" {
+				return
+			}
+			log.Printf("⚠️ Wildcard DNS check failed for %s: %v. Continuing without wildcard filtering.\n", rootDomain, err)
+			wildcardIPs = map[string]struct{}{}
+		}
+
+		beforeDNSXFilter := len(dnsxResults)
+		dnsxResults = discoverymerge.FilterWildcardLiveResults(dnsxResults, wildcardIPs)
+		beforePureDNSFilter := len(purednsResults)
+		purednsResults = discoverymerge.FilterWildcardLiveResults(purednsResults, wildcardIPs)
+		if len(wildcardIPs) > 0 {
+			log.Printf("⚠️ Wildcard DNS filter for %s: dnsx live %d -> %d, puredns live %d -> %d\n", rootDomain, beforeDNSXFilter, len(dnsxResults), beforePureDNSFilter, len(purednsResults))
+		}
+
+		// Merge puredns results (already live) into dnsxResults after wildcard filtering.
 		dnsxResults = discoverymerge.MergeLiveResults(dnsxResults, purednsResults)
 
+		_ = utils.WriteJSONToFile(purednsResultsFile, purednsResults)
 		_ = utils.WriteJSONToFile(dnsxResultsFile, dnsxResults)
 		scanMarkStepDone(targetID, "DISCOVERY", "DNSX")
 	}
 
 	if targetConf.UseAlterx {
-		updateTargetPhase(targetID, "PHASE 1: ALTERX LIVE SOURCE ATTRIBUTION")
-		if err := discoverymerge.MergeFileSourcesForLive(allSources, alterxResultsFile, dnsxResults, "alterx"); err != nil {
-			log.Printf("⚠️ Failed to apply live-only AlterX sources: %v\n", err)
+		if scanIsStepDone(targetID, "DISCOVERY", "ALTERX") {
+			alterxCandidateCount = discoverytools.CountLines(alterxResultsFile)
+			_ = utils.ReadJSONFromFile(alterxSourcesFile, &mutatedSources)
+			log.Printf("⏩ Resume: skipping ALTERX (loaded %d live-derived candidates from checkpoint)\n", alterxCandidateCount)
 		} else {
-			_ = utils.WriteJSONToFile(allSourcesFile, allSources)
+			if checkStopRequest(targetID) {
+				return
+			}
+			scanMarkRunning(targetID, "DISCOVERY", "ALTERX")
+			updateTargetPhase(targetID, "PHASE 1: MUTATION (ALTERX ON LIVE DNSX HOSTS)")
+
+			liveHosts := make([]string, 0, len(dnsxResults))
+			for host := range dnsxResults {
+				liveHosts = append(liveHosts, host)
+			}
+			sort.Strings(liveHosts)
+
+			if len(liveHosts) == 0 {
+				log.Printf("⏩ Skipping AlterX for %s: no DNSX-live hosts to mutate.\n", rootDomain)
+				_ = utils.WriteSliceToFile(alterxResultsFile, []string{})
+			} else {
+				if err := utils.WriteSliceToFile(alterxLiveInputFile, liveHosts); err != nil {
+					log.Printf("❌ Failed to write AlterX live input: %v\n", err)
+					scanMarkFailed(targetID, fmt.Sprintf("alterx live input failed: %v", err))
+					return
+				}
+
+				var err error
+				alterxCandidateCount, err = runAlterx(targetID, alterxLiveInputFile, rootDomain, alterxResultsFile)
+				if err != nil {
+					if err.Error() == "process killed by user request" {
+						return
+					}
+					log.Printf("❌ AlterX failed on live hosts: %v. Proceeding without mutations.\n", err)
+					alterxCandidateCount = 0
+					_ = utils.WriteSliceToFile(alterxResultsFile, []string{})
+				}
+			}
+
+			mutatedSources = map[string][]string{}
+			if err := utils.WriteJSONToFile(alterxSourcesFile, mutatedSources); err != nil {
+				log.Printf("❌ Failed to write alterx sources checkpoint: %v\n", err)
+				scanMarkFailed(targetID, fmt.Sprintf("alterx sources checkpoint failed: %v", err))
+				return
+			}
+			scanMarkStepDone(targetID, "DISCOVERY", "ALTERX")
+		}
+
+		if alterxCandidateCount > 0 {
+			if scanIsStepDone(targetID, "DISCOVERY", "ALTERX_DNSX") {
+				log.Printf("⏩ Resume: skipping ALTERX_DNSX validation\n")
+			} else {
+				if checkStopRequest(targetID) {
+					return
+				}
+				scanMarkRunning(targetID, "DISCOVERY", "ALTERX_DNSX")
+				updateTargetPhase(targetID, "PHASE 1: DNSX VALIDATION FOR ALTERX")
+				alterxLiveResults, err := runDnsx(targetID, alterxResultsFile, alterxDNSXOutputFile)
+				if err != nil {
+					if err.Error() == "process killed by user request" {
+						return
+					}
+					log.Printf("❌ AlterX DNSX validation failed: %v\n", err)
+					scanMarkFailed(targetID, fmt.Sprintf("alterx dnsx failed: %v", err))
+					return
+				}
+				_ = os.Remove(alterxDNSXOutputFile)
+
+				beforeAlterXFilter := len(alterxLiveResults)
+				alterxLiveResults = discoverymerge.FilterWildcardLiveResults(alterxLiveResults, wildcardIPs)
+				if len(wildcardIPs) > 0 {
+					log.Printf("⚠️ Wildcard DNS filter for %s: alterx live %d -> %d\n", rootDomain, beforeAlterXFilter, len(alterxLiveResults))
+				}
+
+				dnsxResults = discoverymerge.MergeLiveResults(dnsxResults, alterxLiveResults)
+
+				if err := discoverymerge.MergeFileSourcesForLive(allSources, alterxResultsFile, alterxLiveResults, "alterx"); err != nil {
+					log.Printf("⚠️ Failed to apply live-only AlterX sources: %v\n", err)
+				}
+				_ = utils.WriteJSONToFile(allSourcesFile, allSources)
+				_ = utils.WriteJSONToFile(dnsxResultsFile, dnsxResults)
+				scanMarkStepDone(targetID, "DISCOVERY", "ALTERX_DNSX")
+			}
 		}
 	}
 
-	log.Printf("✅ [Stage 3] Confirmed %d LIVE subdomains with IPs (including %d from puredns).\n", len(dnsxResults), len(purednsResults))
+	log.Printf("✅ [Stage 3] Confirmed %d LIVE subdomains with IPs (including %d from puredns and AlterX-live mutations).\n", len(dnsxResults), len(purednsResults))
 
 	// 5. Saving
 	if scanIsStepDone(targetID, "DISCOVERY", "SAVE") {

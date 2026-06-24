@@ -70,7 +70,7 @@ export const UserModal = ({ isOpen, onClose, user }: Props) => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-      <div className="w-full max-w-lg border border-hack-primary/60 bg-hack-bg shadow-[0_0_30px_rgba(0,255,65,0.2)]">
+      <div className="flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden border border-hack-primary/60 bg-hack-bg shadow-[0_0_30px_rgba(0,255,65,0.2)]">
         <div className="flex items-center justify-between border-b border-hack-border p-5">
           <h2 className="font-mono text-xl uppercase tracking-wider text-hack-primary flex items-center gap-2">
             <UserPlus size={22} /> {user ? 'MODIFY_USER' : 'ADD_USER'}
@@ -86,8 +86,9 @@ export const UserModal = ({ isOpen, onClose, user }: Props) => {
             setErrorMsg(null);
             mutation.mutate(formData);
           }}
-          className="p-6 space-y-5"
+          className="flex min-h-0 flex-1 flex-col"
         >
+          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-6 pr-7">
           {errorMsg && (
             <div className="border border-hack-danger/60 bg-hack-danger/10 p-3 text-sm text-hack-danger font-mono">
               {errorMsg}
@@ -215,7 +216,9 @@ export const UserModal = ({ isOpen, onClose, user }: Props) => {
             </div>
 
 
-          <div className="flex gap-3 pt-4">
+          </div>
+
+          <div className="flex shrink-0 gap-3 border-t border-hack-border/50 bg-hack-bg p-6 pt-4">
             <button type="button" onClick={onClose} className="hack-btn-ghost flex-1 border border-hack-border py-3">
               CANCEL
             </button>
