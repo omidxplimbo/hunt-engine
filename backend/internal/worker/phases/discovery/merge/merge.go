@@ -59,17 +59,12 @@ type Result struct {
 	Sources    map[string][]string
 }
 
-// Build creates the Discovery master list and merged source map from passive,
-// mutation, optional puredns, and existing asset inputs.
+// Build creates the Discovery DNSX candidate list and merged source map from passive,
+// mutation, and existing asset inputs. PureDNS results are already resolved and are
+// merged into final live results later, so they are intentionally excluded from
+// the DNSX candidate file to avoid duplicate validation work.
 func Build(input Input) Result {
 	masterList := workerhelpers.MergeUnique(input.PassiveResults, input.MutatedResults)
-
-	purednsSubdomains := make([]string, 0, len(input.PurednsResults))
-	for subdomain := range input.PurednsResults {
-		purednsSubdomains = append(purednsSubdomains, subdomain)
-	}
-
-	masterList = workerhelpers.MergeUnique(masterList, purednsSubdomains)
 	masterList = workerhelpers.MergeUnique(masterList, input.ExistingAssets)
 
 	sources := make(map[string][]string)
@@ -85,7 +80,7 @@ func Build(input Input) Result {
 // them all into a slice first.
 func BuildFromFiles(input FileInput) (Result, error) {
 	seen := make(map[string]struct{})
-	masterList := make([]string, 0, len(input.PassiveResults)+len(input.ExistingAssets)+len(input.PurednsResults))
+	masterList := make([]string, 0, len(input.PassiveResults)+len(input.ExistingAssets))
 
 	add := func(value string) {
 		value = strings.TrimSpace(value)
@@ -107,10 +102,6 @@ func BuildFromFiles(input FileInput) (Result, error) {
 		if err := addFile(input.MutatedResultsFile, add); err != nil {
 			return Result{}, err
 		}
-	}
-
-	for subdomain := range input.PurednsResults {
-		add(subdomain)
 	}
 
 	for _, value := range input.ExistingAssets {
@@ -220,6 +211,45 @@ func MergeFileSourcesForLive(dst map[string][]string, filename string, live map[
 	}
 
 	return scanner.Err()
+}
+
+// FilterWildcardLiveResults removes live DNS results that only resolve to known
+// wildcard/sinkhole IPs. If a host has at least one non-wildcard IP, the host is
+// kept with only its non-wildcard IPs.
+func FilterWildcardLiveResults(live map[string][]string, wildcardIPs map[string]struct{}) map[string][]string {
+	if len(live) == 0 || len(wildcardIPs) == 0 {
+		return live
+	}
+
+	filtered := make(map[string][]string)
+	for host, ips := range live {
+		keptIPs := make([]string, 0, len(ips))
+		seen := make(map[string]struct{})
+
+		for _, ip := range ips {
+			ip = strings.TrimSpace(ip)
+			if ip == "" {
+				continue
+			}
+			if _, isWildcard := wildcardIPs[ip]; isWildcard {
+				continue
+			}
+			if _, exists := seen[ip]; exists {
+				continue
+			}
+			seen[ip] = struct{}{}
+			keptIPs = append(keptIPs, ip)
+		}
+
+		if len(keptIPs) == 0 {
+			continue
+		}
+
+		sort.Strings(keptIPs)
+		filtered[host] = keptIPs
+	}
+
+	return filtered
 }
 
 // MergeLiveResults merges already-resolved live DNS results, de-duplicating IPs per host.
