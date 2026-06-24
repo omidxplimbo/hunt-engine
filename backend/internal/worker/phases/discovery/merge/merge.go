@@ -59,17 +59,12 @@ type Result struct {
 	Sources    map[string][]string
 }
 
-// Build creates the Discovery master list and merged source map from passive,
-// mutation, optional puredns, and existing asset inputs.
+// Build creates the Discovery DNSX candidate list and merged source map from passive,
+// mutation, and existing asset inputs. PureDNS results are already resolved and are
+// merged into final live results later, so they are intentionally excluded from
+// the DNSX candidate file to avoid duplicate validation work.
 func Build(input Input) Result {
 	masterList := workerhelpers.MergeUnique(input.PassiveResults, input.MutatedResults)
-
-	purednsSubdomains := make([]string, 0, len(input.PurednsResults))
-	for subdomain := range input.PurednsResults {
-		purednsSubdomains = append(purednsSubdomains, subdomain)
-	}
-
-	masterList = workerhelpers.MergeUnique(masterList, purednsSubdomains)
 	masterList = workerhelpers.MergeUnique(masterList, input.ExistingAssets)
 
 	sources := make(map[string][]string)
@@ -85,7 +80,7 @@ func Build(input Input) Result {
 // them all into a slice first.
 func BuildFromFiles(input FileInput) (Result, error) {
 	seen := make(map[string]struct{})
-	masterList := make([]string, 0, len(input.PassiveResults)+len(input.ExistingAssets)+len(input.PurednsResults))
+	masterList := make([]string, 0, len(input.PassiveResults)+len(input.ExistingAssets))
 
 	add := func(value string) {
 		value = strings.TrimSpace(value)
@@ -107,10 +102,6 @@ func BuildFromFiles(input FileInput) (Result, error) {
 		if err := addFile(input.MutatedResultsFile, add); err != nil {
 			return Result{}, err
 		}
-	}
-
-	for subdomain := range input.PurednsResults {
-		add(subdomain)
 	}
 
 	for _, value := range input.ExistingAssets {
