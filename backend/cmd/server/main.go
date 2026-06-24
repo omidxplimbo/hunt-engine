@@ -179,6 +179,8 @@ func main() {
 	api.Get("/me/wordlists", handlers.GetMyWordlists)
 	api.Post("/me/wordlists/upload", handlers.UploadMyWordlistFile)
 	api.Post("/me/wordlists/upload-url", handlers.UploadMyWordlistURL)
+	api.Get("/me/wordlists/import-jobs", handlers.ListMyWordlistImportJobs)
+	api.Get("/me/wordlists/import-jobs/:id", handlers.GetMyWordlistImportJob)
 	api.Get("/me/wordlists/:id/download", handlers.DownloadMyWordlist)
 	api.Delete("/me/wordlists/:id", handlers.DeleteMyWordlist)
 	// 👇👇👇 روت‌های مدیریت کاربران (فقط ادمین)

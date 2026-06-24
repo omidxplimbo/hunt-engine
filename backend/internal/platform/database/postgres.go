@@ -62,6 +62,7 @@ func Connect() {
 		&models.UserLLMProviderConfig{},
 		&models.UserFeatureFlagConfig{},
 		&models.UserWordlist{},
+		&models.UserWordlistImportJob{},
 		&models.Finding{},
 		&models.AIAnalysis{},
 		&models.AIRecommendation{},

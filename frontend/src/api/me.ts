@@ -245,6 +245,24 @@ export const isAccountFeatureEnabled = (
 // -----------------------------
 export type UploadProgressCallback = (percent: number, loaded: number, total?: number) => void;
 
+export interface MyWordlistImportJob {
+  id: number;
+  user_id: number;
+  wordlist_id?: number;
+  display_name: string;
+  source_url: string;
+  status: "queued" | "downloading" | "completed" | "failed";
+  error_message?: string;
+  bytes_downloaded: number;
+  size_bytes: number;
+  lines: number;
+  sha256?: string;
+  created_at: string;
+  updated_at: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
 export interface MyWordlist {
   id: number;
   user_id: number;
@@ -305,8 +323,26 @@ export const uploadMyWordlistFile = async (
 export const uploadMyWordlistURL = async (url: string) => {
   const res = await apiClient.post<{
     status: string;
-    data: MyWordlist;
+    data: MyWordlistImportJob;
   }>("/me/wordlists/upload-url", { url });
+
+  return res.data.data;
+};
+
+export const getMyWordlistImportJob = async (id: number) => {
+  const res = await apiClient.get<{
+    status: string;
+    data: MyWordlistImportJob;
+  }>(`/me/wordlists/import-jobs/${id}`);
+
+  return res.data.data;
+};
+
+export const listMyWordlistImportJobs = async () => {
+  const res = await apiClient.get<{
+    status: string;
+    data: MyWordlistImportJob[];
+  }>("/me/wordlists/import-jobs");
 
   return res.data.data;
 };
