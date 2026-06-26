@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -74,6 +76,7 @@ func RunPureDNS(ctx Context, rootDomain string, wordlists []string) (map[string]
 		ctx.heartbeat()
 
 		outputFile := filepath.Join(tempDir, fmt.Sprintf("puredns_%06d_output.txt", idx+1))
+		massdnsOutputFile := filepath.Join(tempDir, fmt.Sprintf("puredns_%06d_massdns.txt", idx+1))
 		_ = os.Remove(outputFile)
 
 		totalLines, totalLinesErr := countNonEmptyLines(wlPath)
@@ -89,6 +92,7 @@ func RunPureDNS(ctx Context, rootDomain string, wordlists []string) (map[string]
 			"-r", publicResolversFile,
 			"--resolvers-trusted", trustedResolversFile,
 			"--write", outputFile,
+			"--write-massdns", massdnsOutputFile,
 		}
 
 		startedAt := time.Now()
@@ -158,32 +162,24 @@ func RunPureDNS(ctx Context, rootDomain string, wordlists []string) (map[string]
 		ctx.updatePhase(fmt.Sprintf("PHASE 1: PUREDNS PARSING WORDLIST %d/%d: %s", idx+1, len(validWordlists), baseName))
 		ctx.heartbeat()
 
-		subdomains := parsePureDNSSubdomainsFromFile(ctx, outputFile, rootDomain)
+		wordlistResults := parsePureDNSResolvedResultsFromFile(ctx, massdnsOutputFile, rootDomain)
 		_ = os.Remove(outputFile)
-		if len(subdomains) == 0 {
-			log.Printf("ℹ️ PureDNS wordlist %s produced no candidates for %s in %s\n", wlPath, rootDomain, duration)
+		_ = os.Remove(massdnsOutputFile)
+		if len(wordlistResults) == 0 {
+			log.Printf("ℹ️ PureDNS wordlist %s produced no resolved host/IP results for %s in %s; skipping host-only results to avoid storing dead PureDNS assets\n", wlPath, rootDomain, duration)
 			continue
 		}
 
-		if shouldValidatePureDNSWithDNSX() {
-			ctx.updatePhase(fmt.Sprintf("PHASE 1: PUREDNS OPTIONAL DNSX VALIDATION WORDLIST %d/%d: %s", idx+1, len(validWordlists), baseName))
-			ctx.heartbeat()
-
-			wordlistResults := resolvePureDNSSubdomains(ctx, tempDir, subdomains, idx+1)
-			mergePureDNSLiveResults(results, wordlistResults)
-		} else {
-			mergePureDNSResolvedHosts(results, subdomains)
-		}
+		mergePureDNSLiveResults(results, wordlistResults)
 
 		log.Printf(
-			"✅ PureDNS wordlist %d/%d completed for %s in %s: candidates=%d resolved_total=%d post_dnsx_validation=%t\n",
+			"✅ PureDNS wordlist %d/%d completed for %s in %s: resolved_with_ips=%d resolved_total=%d post_dnsx_validation=false\n",
 			idx+1,
 			len(validWordlists),
 			rootDomain,
 			duration,
-			len(subdomains),
+			len(wordlistResults),
 			len(results),
-			shouldValidatePureDNSWithDNSX(),
 		)
 	}
 
@@ -543,21 +539,94 @@ func fileSizeBytes(path string) int64 {
 	return info.Size()
 }
 
-func shouldValidatePureDNSWithDNSX() bool {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv("PUREDNS_POST_DNSX_VALIDATE")))
-	return v == "1" || v == "true" || v == "yes"
-}
+func parsePureDNSResolvedResultsFromFile(ctx Context, path, rootDomain string) map[string][]string {
+	file, err := os.Open(path)
+	if err != nil {
+		log.Printf("⚠️ Failed to open PureDNS output file %s: %v\n", path, err)
+		return map[string][]string{}
+	}
+	defer file.Close()
 
-func mergePureDNSResolvedHosts(dst map[string][]string, hosts []string) {
-	for _, host := range hosts {
-		host = strings.TrimSpace(host)
+	results := make(map[string][]string)
+	hostOnlyCount := 0
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 1024), 1024*1024)
+
+	for scanner.Scan() {
+		raw := strings.TrimSpace(scanner.Text())
+		if raw == "" {
+			continue
+		}
+
+		host, ips := parsePureDNSResolvedLine(ctx, raw, rootDomain)
 		if host == "" {
 			continue
 		}
-		if _, exists := dst[host]; !exists {
-			dst[host] = []string{}
+		if len(ips) == 0 {
+			hostOnlyCount++
+			continue
+		}
+
+		mergePureDNSLiveResults(results, map[string][]string{host: ips})
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Printf("⚠️ Failed reading PureDNS output file %s: %v\n", path, err)
+	}
+
+	if hostOnlyCount > 0 {
+		log.Printf("⚠️ PureDNS output file %s contained %d host-only rows without captured IPs; skipped them to avoid storing PureDNS assets as dead/without DNS IP\n", path, hostOnlyCount)
+	}
+
+	return results
+}
+
+func parsePureDNSResolvedLine(ctx Context, raw, rootDomain string) (string, []string) {
+	fields := strings.Fields(strings.TrimSpace(raw))
+	if len(fields) == 0 {
+		return "", nil
+	}
+
+	host := ""
+	ips := make([]string, 0)
+
+	for _, field := range fields {
+		clean := strings.Trim(field, "[](),;\"'")
+		clean = strings.TrimSuffix(clean, ".")
+
+		if ip := net.ParseIP(clean); ip != nil {
+			ips = append(ips, ip.String())
+			continue
+		}
+
+		if host == "" {
+			normalized := ctx.normalize(clean, rootDomain)
+			if normalized != "" {
+				host = normalized
+			}
 		}
 	}
+
+	if host == "" {
+		host = ctx.normalize(fields[0], rootDomain)
+	}
+
+	if len(ips) == 0 {
+		return host, nil
+	}
+
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		if ip == "" || seen[ip] {
+			continue
+		}
+		seen[ip] = true
+		out = append(out, ip)
+	}
+	sort.Strings(out)
+
+	return host, out
 }
 
 func parsePureDNSSubdomainsFromFile(ctx Context, path, rootDomain string) []string {
@@ -600,37 +669,6 @@ func parsePureDNSSubdomains(ctx Context, output, rootDomain string) []string {
 	}
 
 	return subdomains
-}
-
-func resolvePureDNSSubdomains(ctx Context, tempDir string, subdomains []string, batchNo int) map[string][]string {
-	results := make(map[string][]string)
-	if len(subdomains) == 0 {
-		return results
-	}
-
-	purednsInputFile := filepath.Join(tempDir, fmt.Sprintf("puredns_dnsx_%06d_input.txt", batchNo))
-	if err := utils.WriteSliceToFile(purednsInputFile, subdomains); err != nil {
-		log.Printf("⚠️ Failed to write puredns input for dnsx: %v\n", err)
-		for _, subdomain := range subdomains {
-			results[subdomain] = []string{}
-		}
-		return results
-	}
-
-	purednsDNSXOutputFile := filepath.Join(tempDir, fmt.Sprintf("puredns_dnsx_%06d_output.json", batchNo))
-	dnsxResults, dnsxErr := RunDNSX(ctx, purednsInputFile, purednsDNSXOutputFile)
-	if dnsxErr == nil {
-		results = dnsxResults
-	} else {
-		for _, subdomain := range subdomains {
-			results[subdomain] = []string{}
-		}
-	}
-
-	_ = os.Remove(purednsInputFile)
-	_ = os.Remove(purednsDNSXOutputFile)
-
-	return results
 }
 
 func appendPureDNSProgressBuffer(existing string, chunk []byte) string {
