@@ -659,7 +659,8 @@ func actionReusedForCurrentChat(action models.AgentAction, sessionID uint, messa
 
 func shouldReuseChatActionByType(actionType string) bool {
 	switch normalizeAgentActionType(actionType) {
-	case models.AgentActionTypeReviewBugTestResults,
+	case models.AgentActionTypeRunCrawling,
+		models.AgentActionTypeReviewBugTestResults,
 		models.AgentActionTypeInspectBugPatterns,
 		models.AgentActionTypeInspectBugPayloads,
 		models.AgentActionTypePromoteBugTestResults,
@@ -752,9 +753,14 @@ func isChatAutopilotAllowedAction(action models.AgentAction, policy chatAutopilo
 		return false, "level 3 actions require explicit approval"
 	}
 
-	if normalizeAgentActionType(action.ActionType) != models.AgentActionTypeReviewEndpoint {
-		return false, "autopilot v1 only supports review_endpoint"
+	actionType := normalizeAgentActionType(action.ActionType)
+	switch actionType {
+	case models.AgentActionTypeRunCrawling, models.AgentActionTypeReviewEndpoint:
+		// supported below
+	default:
+		return false, "autopilot currently supports run_crawling and review_endpoint"
 	}
+
 	if action.Status == models.AgentActionStatusBlockedByPolicy || action.PolicyStatus == models.AgentActionPolicyStatusBlocked {
 		return false, "action is blocked by policy"
 	}
@@ -762,12 +768,14 @@ func isChatAutopilotAllowedAction(action models.AgentAction, policy chatAutopilo
 		return false, "high/critical risk requires explicit approval"
 	}
 	if action.SafetyLevel > 1 || action.TestLevel > 1 || action.AutonomyLevel > 1 {
-		return false, "action level exceeds autopilot v1 limits"
+		return false, "action level exceeds autopilot limits"
 	}
 
-	input := chatActionInputMap(action.InputJSON)
-	if strings.TrimSpace(controlledCleanString(input["url"])) == "" {
-		return false, "review_endpoint action has no input_json.url"
+	if actionType == models.AgentActionTypeReviewEndpoint {
+		input := chatActionInputMap(action.InputJSON)
+		if strings.TrimSpace(controlledCleanString(input["url"])) == "" {
+			return false, "review_endpoint action has no input_json.url"
+		}
 	}
 
 	return true, ""
@@ -867,7 +875,7 @@ func runAgentChatAutopilotForActions(c *fiber.Ctx, target *models.Target, uid ui
 					"source":      "agent_chat_autopilot",
 					"mode":        result.Mode,
 					"policy":      result.PolicySource,
-					"reason":      "low-risk controlled endpoint review auto-approved by target policy",
+					"reason":      "low-risk controlled action auto-approved by target policy",
 					"action_type": action.ActionType,
 				},
 			})
@@ -883,6 +891,83 @@ func runAgentChatAutopilotForActions(c *fiber.Ctx, target *models.Target, uid ui
 		}
 
 		preview := buildDispatchPreview(*target, action, false, "agent chat autopilot dispatch")
+
+		if normalizeAgentActionType(action.ActionType) == models.AgentActionTypeRunCrawling {
+			bridgeOutput := dispatchRunCrawling(*target, action, uid)
+			queued, _ := bridgeOutput["queued"].(bool)
+			bridgeReason, _ := bridgeOutput["reason"].(string)
+
+			preview["execution_enabled"] = queued
+			preview["executed"] = queued
+			preview["hard_blocked"] = false
+			preview["reason"] = "agent chat autopilot queued controlled crawling workflow"
+			preview["bridge_output"] = bridgeOutput
+			preview["autopilot"] = map[string]interface{}{
+				"enabled": true,
+				"mode":    result.Mode,
+				"source":  "agent_chat",
+			}
+
+			errorMessage := ""
+			status := ""
+			var executedAt *time.Time
+			if queued {
+				executed := time.Now().UTC()
+				executedAt = &executed
+				status = models.AgentActionStatusExecuted
+			} else {
+				errorMessage = bridgeReason
+				if strings.TrimSpace(errorMessage) == "" {
+					errorMessage = "autopilot crawling dispatch did not queue a job"
+				}
+			}
+
+			completedAt := time.Now().UTC()
+			if err := updateChatActionOutput(&action, preview, errorMessage, status, executedAt, &completedAt); err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("update action %d crawling autopilot output failed: %v", action.ID, err))
+				continue
+			}
+
+			if queued {
+				result.ExecutedActions = append(result.ExecutedActions, action.ID)
+				result.MemoryIngested = true
+				result.Summary = append(result.Summary, map[string]interface{}{
+					"action_id":      action.ID,
+					"action_type":    action.ActionType,
+					"runtime_status": bridgeOutput["runtime_status"],
+					"job_payload":    bridgeOutput["job_payload"],
+					"queue_name":     bridgeOutput["queue_name"],
+					"memory_ingest":  "after_crawling_completion",
+				})
+			} else {
+				result.SkippedActions = append(result.SkippedActions, map[string]interface{}{
+					"action_id":   action.ID,
+					"action_type": action.ActionType,
+					"reason":      errorMessage,
+				})
+			}
+
+			entityID := action.ID
+			_ = auditlog.Record(auditlog.Entry{
+				ActorUserID: &uid,
+				Action:      "target.agent_action.autopilot_execute",
+				EntityType:  "agent_action",
+				EntityID:    &entityID,
+				TargetID:    &target.ID,
+				IPAddress:   auditlog.ClientIP(c),
+				UserAgent:   auditlog.UserAgent(c),
+				Metadata: map[string]interface{}{
+					"source":      "agent_chat_autopilot",
+					"mode":        result.Mode,
+					"action_type": action.ActionType,
+					"queued":      queued,
+					"job_payload": bridgeOutput["job_payload"],
+				},
+			})
+
+			continue
+		}
+
 		run, runErr := CreateControlledTestRunFromAgentAction(target, &action, uid)
 		if runErr != nil {
 			preview["controlled_runtime"] = map[string]interface{}{
@@ -1461,9 +1546,9 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 		assistantMessage.Content = strings.ReplaceAll(
 			assistantMessage.Content,
 			"I proposed 1 approval-gated operator action(s). Review and approve before dispatch.",
-			"I routed the low-risk endpoint review through Operator Autopilot instead of requiring manual approval.",
+			"I routed the low-risk controlled action through Operator Autopilot instead of requiring manual approval.",
 		)
-		assistantMessage.Content = strings.TrimSpace(assistantMessage.Content + "\n" + fmt.Sprintf("Autopilot executed %d low-risk controlled action(s), captured evidence, and updated target memory where applicable. Higher-risk actions still require explicit approval.", len(autopilot.ExecutedActions)))
+		assistantMessage.Content = strings.TrimSpace(assistantMessage.Content + "\n" + fmt.Sprintf("Autopilot executed %d low-risk controlled action(s). Queued workflows will update target memory when their worker phase completes; higher-risk actions still require explicit approval.", len(autopilot.ExecutedActions)))
 	}
 
 	assistantOutput["autopilot"] = autopilot
