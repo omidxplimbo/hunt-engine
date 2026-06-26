@@ -901,65 +901,91 @@ func StartProbing(c *fiber.Ctx) error {
 		"status": "success", "message": fmt.Sprintf("Phase 2 started for target: %s", target.Name)})
 }
 
-// DeleteTarget حذف کامل تارگت
+// DeleteTarget permanently deletes a target and all target-scoped data.
 func DeleteTarget(c *fiber.Ctx) error {
-	id := c.Params("id")
-	targetID := uint(0)
-	_, _ = fmt.Sscanf(id, "%d", &targetID)
-
-	uid, err := currentUserID(c)
-	if err != nil {
-		return err
+	uidRaw := c.Locals("user_id")
+	uid, ok := uidRaw.(uint)
+	if !ok || uid == 0 {
+		return c.Status(401).JSON(fiber.Map{"status": "error", "message": "Unauthorized"})
 	}
-	admin := isAdmin(c)
 
-	err = database.DB.Transaction(func(tx *gorm.DB) error {
-		var target models.Target
-		q := tx.Model(&models.Target{})
-		if !admin {
-			q = q.Where("created_by_user_id = ?", uid)
-		}
-		if err := q.First(&target, targetID).Error; err != nil {
-			return err
-		}
+	id := c.Params("id")
 
-		// Findings reference both targets and assets. Delete them before assets/found_urls
-		// so target deletion does not fail on fk_findings_asset/fk_findings_url.
-		if err := tx.Exec(`
-			DELETE FROM findings
-			WHERE target_id = ?
-			   OR asset_id IN (SELECT id FROM assets WHERE target_id = ?)
-			   OR url_id IN (SELECT id FROM found_urls WHERE target_id = ?)
-		`, targetID, targetID, targetID).Error; err != nil {
-			return err
-		}
+	var target models.Target
+	if err := database.DB.Where("id = ? AND created_by_user_id = ?", id, uid).First(&target).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"status": "error", "message": "Target not found"})
+	}
 
-		if err := tx.Exec("DELETE FROM target_scan_states WHERE target_id = ?", targetID).Error; err != nil {
-			return err
-		}
+	tx := database.DB.Begin()
+	if tx.Error != nil {
+		return c.Status(500).JSON(fiber.Map{"status": "error", "message": "Failed to start delete transaction"})
+	}
 
-		if err := tx.Exec("DELETE FROM asset_histories WHERE asset_id IN (SELECT id FROM assets WHERE target_id = ?)", targetID).Error; err != nil {
-			return err
-		}
-		if err := tx.Exec("DELETE FROM assets WHERE target_id = ?", targetID).Error; err != nil {
-			return err
-		}
-		if err := tx.Exec("DELETE FROM found_urls WHERE target_id = ?", targetID).Error; err != nil {
-			return err
-		}
-		if err := tx.Unscoped().Delete(&target).Error; err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+	rollback := func(err error) error {
+		tx.Rollback()
+		return c.Status(500).JSON(fiber.Map{
 			"status":  "error",
-			"message": "Failed to delete target (DB Error)",
+			"message": "Failed to delete target",
 			"details": err.Error(),
 		})
 	}
-	return c.JSON(fiber.Map{"status": "success", "message": "Target and all associated data deleted successfully"})
+
+	targetID := target.ID
+
+	// Delete tables with direct target foreign keys first.
+	targetScopedModels := []interface{}{
+		&models.AgentAction{},
+		&models.AgentChatMessage{},
+		&models.AgentChatSession{},
+		&models.AgentRun{},
+		&models.AIAnalysis{},
+		&models.AIRecommendation{},
+		&models.Asset{},
+		&models.AuditLog{},
+		&models.BugTestResult{},
+		&models.BugTestRun{},
+		&models.ControlledTestEvent{},
+		&models.ControlledTestResult{},
+		&models.ControlledTestRun{},
+		&models.Finding{},
+		&models.TargetPolicy{},
+	}
+
+	for _, model := range targetScopedModels {
+		if err := tx.Unscoped().Where("target_id = ?", targetID).Delete(model).Error; err != nil {
+			return rollback(err)
+		}
+	}
+
+	// Delete target-scoped tables that may not have database-level FK constraints.
+	targetScopedTables := []string{
+		"found_urls",
+		"target_scan_states",
+		"target_memory_chunks",
+		"target_memory_events",
+		"target_memory_items",
+	}
+
+	for _, table := range targetScopedTables {
+		if tx.Migrator().HasTable(table) {
+			if err := tx.Exec("DELETE FROM "+table+" WHERE target_id = ?", targetID).Error; err != nil {
+				return rollback(err)
+			}
+		}
+	}
+
+	if err := tx.Unscoped().Delete(&target).Error; err != nil {
+		return rollback(err)
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"status": "error", "message": "Failed to commit target delete", "details": err.Error()})
+	}
+
+	return c.JSON(fiber.Map{
+		"status":  "success",
+		"message": "Target and all target-scoped data deleted",
+	})
 }
 
 // StopScan درخواست توقف اسکن
