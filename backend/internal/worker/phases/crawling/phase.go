@@ -49,6 +49,7 @@ func Run(ctx Context) {
 		if err := workerfindings.GenerateURLFindings(ctx.TargetID); err != nil {
 			log.Printf("⚠️ Failed to generate URL findings for target %d: %v\n", ctx.TargetID, err)
 		}
+		ingestCrawlingMemory(ctx.TargetID, ctx.RootDomain)
 		if ctx.AfterCrawling != nil {
 			ctx.AfterCrawling(ctx.TargetID)
 		}
@@ -226,6 +227,7 @@ func Run(ctx Context) {
 	if err := workerfindings.GenerateURLFindings(ctx.TargetID); err != nil {
 		log.Printf("⚠️ Failed to generate URL findings for target %d: %v\n", ctx.TargetID, err)
 	}
+	ingestCrawlingMemory(ctx.TargetID, ctx.RootDomain)
 	if ctx.AfterCrawling != nil {
 		ctx.AfterCrawling(ctx.TargetID)
 	}

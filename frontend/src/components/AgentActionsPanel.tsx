@@ -224,8 +224,8 @@ const ActionCard = ({
       {dispatchPreview && (
         <div className="mt-3 border border-hack-warning/50 bg-hack-warning/10 p-3">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-hack-warning">
-              <AlertTriangle className="h-3 w-3" /> Dispatcher Preview
+            <div className={`flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider ${dispatchPreview.execution_enabled && dispatchPreview.executed ? "text-hack-primary" : "text-hack-warning"}`}>
+              <AlertTriangle className="h-3 w-3" /> {dispatchPreview.execution_enabled && dispatchPreview.executed ? "Controlled Execution" : "Dispatcher Preview"}
             </div>
             <div className="flex flex-wrap gap-2">
               <Pill tone={dispatchPreview.execution_enabled ? "primary" : "warning"}>
@@ -354,7 +354,7 @@ const ActionCard = ({
           onClick={() => onDispatch(action)}
           disabled={!canDispatch || busy}
           className="hack-btn-ghost border border-hack-warning/70 px-3 py-1 text-[10px] uppercase tracking-wider text-hack-warning disabled:opacity-50"
-          title="Record dispatcher preview. Real execution requires controlled runtime approval."
+          title="Dispatch this approved action. Supported action classes can execute controlled authorized workflows."
         >
           <PlayCircle className="h-3 w-3" /> Dispatch
         </button>
@@ -457,7 +457,7 @@ const AgentActionsPanel = ({ targetId, enabled = true }: Props) => {
       if (executed && safeBugTesting?.bug_test_run_id) {
         setMessage("Safe bug testing run created. Passive/stub execution completed.");
       } else {
-        setMessage("Dispatcher preview recorded. Real execution remains disabled for this action class.");
+        setMessage("Dispatcher completed. Supported action classes may execute controlled authorized workflows.");
       }
       refresh();
     },
