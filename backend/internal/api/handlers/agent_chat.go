@@ -810,6 +810,120 @@ func updateChatActionOutput(action *models.AgentAction, output map[string]interf
 	return nil
 }
 
+func uintFromInterface(value interface{}) uint {
+	switch v := value.(type) {
+	case uint:
+		return v
+	case int:
+		if v > 0 {
+			return uint(v)
+		}
+	case int64:
+		if v > 0 {
+			return uint(v)
+		}
+	case float64:
+		if v > 0 {
+			return uint(v)
+		}
+	case json.Number:
+		i, _ := v.Int64()
+		if i > 0 {
+			return uint(i)
+		}
+	case string:
+		n, err := strconv.ParseUint(strings.TrimSpace(v), 10, 64)
+		if err == nil && n > 0 {
+			return uint(n)
+		}
+	}
+	return 0
+}
+
+func linkBugTestResultToControlledRuntime(targetID uint, bugResultID uint, runID uint, controlledResultID uint, output map[string]interface{}, runtimeResult *models.ControlledTestResult) map[string]interface{} {
+	link := map[string]interface{}{
+		"attempted":                 true,
+		"bug_test_result_id":        bugResultID,
+		"controlled_test_run_id":    runID,
+		"controlled_test_result_id": controlledResultID,
+	}
+
+	var bugResult models.BugTestResult
+	if err := database.DB.Where("id = ? AND target_id = ?", bugResultID, targetID).First(&bugResult).Error; err != nil {
+		link["linked"] = false
+		link["error"] = err.Error()
+		return link
+	}
+
+	evidence := map[string]interface{}{}
+	if len(bugResult.EvidenceJSON) > 0 {
+		_ = json.Unmarshal(bugResult.EvidenceJSON, &evidence)
+	}
+
+	resultStatus := ""
+	resultConfidence := ""
+	resultSeverity := ""
+	if runtimeResult != nil {
+		resultStatus = runtimeResult.Status
+		resultConfidence = runtimeResult.Confidence
+		resultSeverity = runtimeResult.SeverityHint
+	}
+
+	controlledValidation := map[string]interface{}{
+		"attempted":                 true,
+		"linked":                    true,
+		"controlled_test_run_id":    runID,
+		"controlled_test_result_id": controlledResultID,
+		"runtime_result_status":     resultStatus,
+		"runtime_confidence":        resultConfidence,
+		"runtime_severity_hint":     resultSeverity,
+		"status_code":               output["status_code"],
+		"final_url":                 output["final_url"],
+		"classification":            output["classification"],
+		"duration_ms":               output["duration_ms"],
+		"memory_ingested":           output["memory_ingested"],
+		"operator_note":             "controlled runtime evidence collected; candidate still requires bug-specific validation before promotion",
+		"updated_at":                time.Now().UTC().Format(time.RFC3339),
+	}
+
+	evidence["controlled_validation"] = controlledValidation
+
+	newStatus := bugResult.Status
+	if runtimeResult != nil {
+		switch runtimeResult.Status {
+		case models.ControlledTestResultStatusBlocked:
+			newStatus = models.BugTestResultStatusBlocked
+		case models.ControlledTestResultStatusInconclusive, models.ControlledTestResultStatusNeedsManualReview, models.ControlledTestResultStatusFailed:
+			newStatus = models.BugTestResultStatusInconclusive
+		default:
+			if newStatus == models.BugTestResultStatusCandidate || newStatus == models.BugTestResultStatusNeedsManualValidation {
+				newStatus = models.BugTestResultStatusNeedsManualValidation
+			}
+		}
+	}
+
+	updates := map[string]interface{}{
+		"evidence_json": bugTestJSON(evidence),
+		"status":        newStatus,
+	}
+	if resultConfidence != "" && strings.EqualFold(bugResult.Confidence, "low") {
+		updates["confidence"] = resultConfidence
+	}
+
+	if err := database.DB.Model(&models.BugTestResult{}).
+		Where("id = ? AND target_id = ?", bugResult.ID, targetID).
+		Updates(updates).Error; err != nil {
+		link["linked"] = false
+		link["error"] = err.Error()
+		return link
+	}
+
+	link["linked"] = true
+	link["bug_test_status"] = newStatus
+	link["runtime_result_status"] = resultStatus
+	return link
+}
+
 func runAgentChatAutopilotForActions(c *fiber.Ctx, target *models.Target, uid uint, ownerKey string, actions []models.AgentAction) chatAutopilotResult {
 	policy := loadChatAutopilotPolicy(target.ID)
 
@@ -1121,6 +1235,13 @@ func runAgentChatAutopilotForActions(c *fiber.Ctx, target *models.Target, uid ui
 			controlledRuntime["confidence"] = runtimeResult.Confidence
 			controlledRuntime["severity_hint"] = runtimeResult.SeverityHint
 			result.ControlledResults = append(result.ControlledResults, runtimeResult.ID)
+
+			input := chatActionInputMap(action.InputJSON)
+			bugResultID := uintFromInterface(input["bug_test_result_id"])
+			if bugResultID > 0 {
+				linkOutput := linkBugTestResultToControlledRuntime(target.ID, bugResultID, run.ID, runtimeResult.ID, output, runtimeResult)
+				controlledRuntime["bug_test_result_link"] = linkOutput
+			}
 		}
 		if mem, _ := output["memory_ingested"].(bool); mem {
 			result.MemoryIngested = true
@@ -1181,6 +1302,88 @@ func runAgentChatAutopilotForActions(c *fiber.Ctx, target *models.Target, uid ui
 	}
 
 	return result
+}
+
+func maybeBuildBugTestValidationAction(target *models.Target, text string) *proposeAgentActionRequest {
+	if target == nil {
+		return nil
+	}
+
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return nil
+	}
+
+	wantsValidation := strings.Contains(lower, "validate") ||
+		strings.Contains(lower, "validation") ||
+		strings.Contains(lower, "verify") ||
+		strings.Contains(lower, "check candidate") ||
+		strings.Contains(lower, "test candidate") ||
+		strings.Contains(lower, "تایید") ||
+		strings.Contains(lower, "اعتبارسنج") ||
+		strings.Contains(lower, "ولید")
+
+	wantsBugCandidate := strings.Contains(lower, "bug") ||
+		strings.Contains(lower, "candidate") ||
+		strings.Contains(lower, "result") ||
+		strings.Contains(lower, "security header") ||
+		strings.Contains(lower, "header")
+
+	if !wantsValidation || !wantsBugCandidate {
+		return nil
+	}
+
+	var result models.BugTestResult
+	if err := database.DB.
+		Where("target_id = ? AND status = ? AND bug_type = ?", target.ID, models.BugTestResultStatusNeedsManualValidation, models.BugTypeSecurityHeaders).
+		Order("id DESC").
+		First(&result).Error; err != nil {
+		return nil
+	}
+
+	evidence := map[string]interface{}{}
+	if len(result.EvidenceJSON) > 0 {
+		_ = json.Unmarshal(result.EvidenceJSON, &evidence)
+	}
+
+	rawURL := strings.TrimSpace(controlledCleanString(evidence["final_url"]))
+	if rawURL == "" {
+		asset := strings.TrimSpace(controlledCleanString(evidence["asset"]))
+		if asset != "" {
+			rawURL = asset
+		}
+	}
+	if rawURL == "" {
+		return nil
+	}
+
+	if !strings.HasPrefix(strings.ToLower(rawURL), "http://") && !strings.HasPrefix(strings.ToLower(rawURL), "https://") {
+		rawURL = "https://" + rawURL
+	}
+
+	req := proposeAgentActionRequest{
+		ActionType:       models.AgentActionTypeReviewEndpoint,
+		Title:            fmt.Sprintf("Validate bug test candidate #%d", result.ID),
+		Description:      fmt.Sprintf("Run a controlled HTTP endpoint review for Safe Bug Testing candidate #%d (%s) to collect runtime evidence before validation or promotion.", result.ID, result.BugType),
+		RiskLevel:        models.AgentActionRiskLow,
+		SafetyLevel:      1,
+		TestLevel:        1,
+		AutonomyLevel:    1,
+		RequestedByAgent: boolPtr(true),
+		RequiresApproval: boolPtr(true),
+		InputJSON: map[string]interface{}{
+			"url":                rawURL,
+			"method":             "GET",
+			"source":             "bug_test_candidate_validation",
+			"bug_test_result_id": result.ID,
+			"bug_test_run_id":    result.RunID,
+			"bug_type":           result.BugType,
+			"candidate_status":   result.Status,
+			"validation_goal":    "collect controlled HTTP response/header evidence for candidate triage",
+		},
+	}
+
+	return &req
 }
 
 func createActionFromChat(c *fiber.Ctx, target *models.Target, uid uint, ownerKey string, req proposeAgentActionRequest) (*models.AgentAction, error) {
@@ -1572,6 +1775,13 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 				return err
 			}
 			createdActions = append(createdActions, *action)
+		}
+
+		if validationReq := maybeBuildBugTestValidationAction(target, req.Content); validationReq != nil {
+			action, err := createActionFromChat(c, target, uid, ownerKey, *validationReq)
+			if err == nil && action != nil {
+				createdActions = append(createdActions, *action)
+			}
 		}
 
 		actionIDs := make([]uint, 0, len(createdActions))
