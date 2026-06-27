@@ -755,10 +755,10 @@ func isChatAutopilotAllowedAction(action models.AgentAction, policy chatAutopilo
 
 	actionType := normalizeAgentActionType(action.ActionType)
 	switch actionType {
-	case models.AgentActionTypeRunCrawling, models.AgentActionTypeReviewEndpoint:
+	case models.AgentActionTypeRunCrawling, models.AgentActionTypeRunJSIntelligence, models.AgentActionTypeReviewEndpoint:
 		// supported below
 	default:
-		return false, "autopilot currently supports run_crawling and review_endpoint"
+		return false, "autopilot currently supports run_crawling, run_js_intelligence, and review_endpoint"
 	}
 
 	if action.Status == models.AgentActionStatusBlockedByPolicy || action.PolicyStatus == models.AgentActionPolicyStatusBlocked {
@@ -892,15 +892,26 @@ func runAgentChatAutopilotForActions(c *fiber.Ctx, target *models.Target, uid ui
 
 		preview := buildDispatchPreview(*target, action, false, "agent chat autopilot dispatch")
 
-		if normalizeAgentActionType(action.ActionType) == models.AgentActionTypeRunCrawling {
-			bridgeOutput := dispatchRunCrawling(*target, action, uid)
+		if normalizeAgentActionType(action.ActionType) == models.AgentActionTypeRunCrawling || normalizeAgentActionType(action.ActionType) == models.AgentActionTypeRunJSIntelligence {
+			var bridgeOutput map[string]interface{}
+			if normalizeAgentActionType(action.ActionType) == models.AgentActionTypeRunCrawling {
+				bridgeOutput = dispatchRunCrawling(*target, action, uid)
+			} else {
+				bridgeOutput = dispatchRunJSIntelligence(*target, action, uid)
+			}
 			queued, _ := bridgeOutput["queued"].(bool)
+			executed, _ := bridgeOutput["executed"].(bool)
+			workflowSucceeded := queued || executed
 			bridgeReason, _ := bridgeOutput["reason"].(string)
 
-			preview["execution_enabled"] = queued
-			preview["executed"] = queued
+			preview["execution_enabled"] = workflowSucceeded
+			preview["executed"] = workflowSucceeded
 			preview["hard_blocked"] = false
-			preview["reason"] = "agent chat autopilot queued controlled crawling workflow"
+			if normalizeAgentActionType(action.ActionType) == models.AgentActionTypeRunCrawling {
+				preview["reason"] = "agent chat autopilot queued controlled crawling workflow"
+			} else {
+				preview["reason"] = "agent chat autopilot executed controlled JS intelligence workflow"
+			}
 			preview["bridge_output"] = bridgeOutput
 			preview["autopilot"] = map[string]interface{}{
 				"enabled": true,
@@ -911,9 +922,9 @@ func runAgentChatAutopilotForActions(c *fiber.Ctx, target *models.Target, uid ui
 			errorMessage := ""
 			status := ""
 			var executedAt *time.Time
-			if queued {
-				executed := time.Now().UTC()
-				executedAt = &executed
+			if workflowSucceeded {
+				executedAtTime := time.Now().UTC()
+				executedAt = &executedAtTime
 				status = models.AgentActionStatusExecuted
 			} else {
 				errorMessage = bridgeReason
@@ -928,16 +939,18 @@ func runAgentChatAutopilotForActions(c *fiber.Ctx, target *models.Target, uid ui
 				continue
 			}
 
-			if queued {
+			if workflowSucceeded {
 				result.ExecutedActions = append(result.ExecutedActions, action.ID)
-				result.MemoryIngested = true
+				if mem, _ := bridgeOutput["memory_ingested"].(bool); mem {
+					result.MemoryIngested = true
+				}
 				result.Summary = append(result.Summary, map[string]interface{}{
 					"action_id":      action.ID,
 					"action_type":    action.ActionType,
 					"runtime_status": bridgeOutput["runtime_status"],
 					"job_payload":    bridgeOutput["job_payload"],
 					"queue_name":     bridgeOutput["queue_name"],
-					"memory_ingest":  "after_crawling_completion",
+					"memory_ingest":  bridgeOutput["memory_ingested"],
 				})
 			} else {
 				result.SkippedActions = append(result.SkippedActions, map[string]interface{}{
@@ -961,6 +974,8 @@ func runAgentChatAutopilotForActions(c *fiber.Ctx, target *models.Target, uid ui
 					"mode":        result.Mode,
 					"action_type": action.ActionType,
 					"queued":      queued,
+					"executed":    executed,
+					"succeeded":   workflowSucceeded,
 					"job_payload": bridgeOutput["job_payload"],
 				},
 			})
