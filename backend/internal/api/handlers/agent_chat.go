@@ -755,10 +755,10 @@ func isChatAutopilotAllowedAction(action models.AgentAction, policy chatAutopilo
 
 	actionType := normalizeAgentActionType(action.ActionType)
 	switch actionType {
-	case models.AgentActionTypeRunCrawling, models.AgentActionTypeRunJSIntelligence, models.AgentActionTypeReviewEndpoint:
+	case models.AgentActionTypeRunCrawling, models.AgentActionTypeRunJSIntelligence, models.AgentActionTypeRunSafeBugTests, models.AgentActionTypeReviewEndpoint:
 		// supported below
 	default:
-		return false, "autopilot currently supports run_crawling, run_js_intelligence, and review_endpoint"
+		return false, "autopilot currently supports run_crawling, run_js_intelligence, run_safe_bug_tests, and review_endpoint"
 	}
 
 	if action.Status == models.AgentActionStatusBlockedByPolicy || action.PolicyStatus == models.AgentActionPolicyStatusBlocked {
@@ -891,6 +891,94 @@ func runAgentChatAutopilotForActions(c *fiber.Ctx, target *models.Target, uid ui
 		}
 
 		preview := buildDispatchPreview(*target, action, false, "agent chat autopilot dispatch")
+
+		if normalizeAgentActionType(action.ActionType) == models.AgentActionTypeRunSafeBugTests {
+			preview := buildDispatchPreview(*target, action, false, "agent chat autopilot safe bug testing dispatch")
+
+			run, resultCount, runErr := CreateBugTestRunFromAgentAction(target, &action, uid)
+			if runErr != nil {
+				preview["execution_enabled"] = false
+				preview["executed"] = false
+				preview["hard_blocked"] = false
+				preview["reason"] = "agent chat autopilot failed to execute safe bug testing workflow"
+				preview["safe_bug_testing"] = map[string]interface{}{
+					"attempted": true,
+					"error":     runErr.Error(),
+				}
+
+				completedAt := time.Now().UTC()
+				if err := updateChatActionOutput(&action, preview, runErr.Error(), "", nil, &completedAt); err != nil {
+					result.Errors = append(result.Errors, fmt.Sprintf("update action %d safe bug autopilot failure failed: %v", action.ID, err))
+				}
+				result.Errors = append(result.Errors, fmt.Sprintf("safe bug testing action %d failed: %v", action.ID, runErr))
+				continue
+			}
+
+			runOutput := map[string]interface{}{}
+			if len(run.OutputJSON) > 0 {
+				_ = json.Unmarshal(run.OutputJSON, &runOutput)
+			}
+			activeTesting, _ := runOutput["active_testing"].(bool)
+			safeActiveHeaders, _ := runOutput["safe_active_security_headers_v1"].(bool)
+
+			preview["execution_enabled"] = true
+			preview["executed"] = true
+			preview["hard_blocked"] = false
+			preview["reason"] = "agent chat autopilot executed safe bug testing workflow"
+			preview["safe_bug_testing"] = map[string]interface{}{
+				"attempted":                       true,
+				"bug_test_run_id":                 run.ID,
+				"bug_test_status":                 run.Status,
+				"results_created":                 resultCount,
+				"active_testing":                  activeTesting,
+				"safe_active_security_headers_v1": safeActiveHeaders,
+				"manual_validation":               true,
+				"autopilot":                       true,
+			}
+			preview["autopilot"] = map[string]interface{}{
+				"enabled": true,
+				"mode":    result.Mode,
+				"source":  "agent_chat",
+			}
+
+			executedAt := time.Now().UTC()
+			completedAt := time.Now().UTC()
+			if err := updateChatActionOutput(&action, preview, "", models.AgentActionStatusExecuted, &executedAt, &completedAt); err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("update action %d safe bug autopilot output failed: %v", action.ID, err))
+				continue
+			}
+
+			result.ExecutedActions = append(result.ExecutedActions, action.ID)
+			result.Summary = append(result.Summary, map[string]interface{}{
+				"action_id":       action.ID,
+				"action_type":     action.ActionType,
+				"bug_test_run_id": run.ID,
+				"results_created": resultCount,
+				"status":          run.Status,
+				"active_testing":  activeTesting,
+				"memory_ingest":   "bug_test_results_available",
+			})
+
+			entityID := action.ID
+			_ = auditlog.Record(auditlog.Entry{
+				ActorUserID: &uid,
+				Action:      "target.agent_action.autopilot_execute",
+				EntityType:  "agent_action",
+				EntityID:    &entityID,
+				TargetID:    &target.ID,
+				IPAddress:   auditlog.ClientIP(c),
+				UserAgent:   auditlog.UserAgent(c),
+				Metadata: map[string]interface{}{
+					"source":          "agent_chat_autopilot",
+					"mode":            result.Mode,
+					"action_type":     action.ActionType,
+					"bug_test_run_id": run.ID,
+					"results_created": resultCount,
+				},
+			})
+
+			continue
+		}
 
 		if normalizeAgentActionType(action.ActionType) == models.AgentActionTypeRunCrawling || normalizeAgentActionType(action.ActionType) == models.AgentActionTypeRunJSIntelligence {
 			var bridgeOutput map[string]interface{}
