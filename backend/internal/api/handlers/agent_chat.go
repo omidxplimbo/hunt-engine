@@ -840,6 +840,154 @@ func uintFromInterface(value interface{}) uint {
 	return 0
 }
 
+func stringSliceFromInterface(value interface{}) []string {
+	out := make([]string, 0)
+	switch v := value.(type) {
+	case []string:
+		out = append(out, v...)
+	case []interface{}:
+		for _, item := range v {
+			text := strings.TrimSpace(fmt.Sprint(item))
+			if text != "" {
+				out = append(out, text)
+			}
+		}
+	case string:
+		if strings.TrimSpace(v) != "" {
+			out = append(out, strings.TrimSpace(v))
+		}
+	}
+	return out
+}
+
+func headerValuesFromMap(headers map[string]interface{}, name string) []string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return nil
+	}
+	for key, value := range headers {
+		if strings.ToLower(strings.TrimSpace(key)) == name {
+			return stringSliceFromInterface(value)
+		}
+	}
+	return nil
+}
+
+func hasHeader(headers map[string]interface{}, name string) bool {
+	return len(headerValuesFromMap(headers, name)) > 0
+}
+
+func joinedHeader(headers map[string]interface{}, name string) string {
+	return strings.ToLower(strings.Join(headerValuesFromMap(headers, name), " "))
+}
+
+func analyzeSecurityHeadersFromRuntime(runtimeResult *models.ControlledTestResult) map[string]interface{} {
+	analysis := map[string]interface{}{
+		"analyzer":  "security-headers-analyzer-v1",
+		"available": false,
+	}
+
+	if runtimeResult == nil {
+		analysis["reason"] = "runtime result is missing"
+		return analysis
+	}
+
+	response := map[string]interface{}{}
+	if len(runtimeResult.ResponseJSON) > 0 {
+		_ = json.Unmarshal(runtimeResult.ResponseJSON, &response)
+	}
+
+	headers := map[string]interface{}{}
+	if raw, ok := response["headers"].(map[string]interface{}); ok {
+		headers = raw
+	}
+	if len(headers) == 0 {
+		analysis["reason"] = "runtime response headers are missing"
+		return analysis
+	}
+
+	missing := make([]string, 0)
+	weak := make([]string, 0)
+	present := make([]string, 0)
+
+	if hasHeader(headers, "strict-transport-security") {
+		present = append(present, "strict-transport-security")
+		hsts := joinedHeader(headers, "strict-transport-security")
+		if !strings.Contains(hsts, "max-age=") {
+			weak = append(weak, "strict-transport-security:missing_max_age")
+		}
+	} else if strings.HasPrefix(strings.ToLower(runtimeResult.URL), "https://") {
+		missing = append(missing, "strict-transport-security")
+	}
+
+	csp := joinedHeader(headers, "content-security-policy")
+	if csp != "" {
+		present = append(present, "content-security-policy")
+		if strings.Contains(csp, "unsafe-inline") {
+			weak = append(weak, "content-security-policy:unsafe-inline")
+		}
+		if strings.Contains(csp, "unsafe-eval") {
+			weak = append(weak, "content-security-policy:unsafe-eval")
+		}
+	} else {
+		missing = append(missing, "content-security-policy")
+	}
+
+	xfo := joinedHeader(headers, "x-frame-options")
+	hasFrameAncestors := strings.Contains(csp, "frame-ancestors")
+	if xfo != "" {
+		present = append(present, "x-frame-options")
+	}
+	if xfo == "" && !hasFrameAncestors {
+		missing = append(missing, "x-frame-options-or-csp-frame-ancestors")
+	}
+
+	xcto := joinedHeader(headers, "x-content-type-options")
+	if xcto != "" {
+		present = append(present, "x-content-type-options")
+		if !strings.Contains(xcto, "nosniff") {
+			weak = append(weak, "x-content-type-options:not_nosniff")
+		}
+	} else {
+		missing = append(missing, "x-content-type-options")
+	}
+
+	if hasHeader(headers, "referrer-policy") {
+		present = append(present, "referrer-policy")
+	} else {
+		missing = append(missing, "referrer-policy")
+	}
+
+	if hasHeader(headers, "permissions-policy") {
+		present = append(present, "permissions-policy")
+	} else {
+		missing = append(missing, "permissions-policy")
+	}
+
+	status := "passed"
+	severity := "info"
+	confidence := "medium"
+	if len(missing) > 0 || len(weak) > 0 {
+		status = "validated"
+		severity = "low"
+		confidence = "medium"
+	}
+
+	analysis["available"] = true
+	analysis["status"] = status
+	analysis["severity_hint"] = severity
+	analysis["confidence"] = confidence
+	analysis["present"] = present
+	analysis["missing"] = missing
+	analysis["weak"] = weak
+	analysis["status_code"] = response["status_code"]
+	analysis["final_url"] = response["final_url"]
+	analysis["headers_seen"] = len(headers)
+	analysis["operator_note"] = "security headers were analyzed from controlled runtime response headers"
+
+	return analysis
+}
+
 func linkBugTestResultToControlledRuntime(targetID uint, bugResultID uint, runID uint, controlledResultID uint, output map[string]interface{}, runtimeResult *models.ControlledTestResult) map[string]interface{} {
 	link := map[string]interface{}{
 		"attempted":                 true,
@@ -888,6 +1036,14 @@ func linkBugTestResultToControlledRuntime(targetID uint, bugResultID uint, runID
 
 	evidence["controlled_validation"] = controlledValidation
 
+	if bugResult.BugType == models.BugTypeSecurityHeaders {
+		securityHeaderAnalysis := analyzeSecurityHeadersFromRuntime(runtimeResult)
+		evidence["security_header_analysis"] = securityHeaderAnalysis
+		if available, _ := securityHeaderAnalysis["available"].(bool); available {
+			link["security_header_analysis"] = securityHeaderAnalysis
+		}
+	}
+
 	newStatus := bugResult.Status
 	if runtimeResult != nil {
 		switch runtimeResult.Status {
@@ -906,8 +1062,27 @@ func linkBugTestResultToControlledRuntime(targetID uint, bugResultID uint, runID
 		"evidence_json": bugTestJSON(evidence),
 		"status":        newStatus,
 	}
+
+	if sha, ok := evidence["security_header_analysis"].(map[string]interface{}); ok {
+		if available, _ := sha["available"].(bool); available {
+			if shaStatus := strings.TrimSpace(controlledCleanString(sha["status"])); shaStatus == "validated" {
+				updates["status"] = models.BugTestResultStatusValidated
+			} else if shaStatus == "passed" {
+				updates["status"] = models.BugTestResultStatusPassed
+			}
+			if c := strings.TrimSpace(controlledCleanString(sha["confidence"])); c != "" {
+				updates["confidence"] = c
+			}
+			if sev := strings.TrimSpace(controlledCleanString(sha["severity_hint"])); sev != "" {
+				updates["severity_hint"] = sev
+			}
+		}
+	}
+
 	if resultConfidence != "" && strings.EqualFold(bugResult.Confidence, "low") {
-		updates["confidence"] = resultConfidence
+		if _, alreadySet := updates["confidence"]; !alreadySet {
+			updates["confidence"] = resultConfidence
+		}
 	}
 
 	if err := database.DB.Model(&models.BugTestResult{}).
