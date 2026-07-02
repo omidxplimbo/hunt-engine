@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -478,6 +479,70 @@ func buildAgentChatMemoryContext(targetID uint, ownerKey string) map[string]inte
 	}
 }
 
+func chatWantsPentestHypothesisMode(text string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	if t == "" {
+		return false
+	}
+	keywords := []string{
+		"real bug", "real bugs", "critical bug", "critical bugs",
+		"high impact", "high-value", "high value", "reportable",
+		"pentest", "hunt everything", "all bug classes",
+		"sqli", "sql injection", "command injection", "rce", "ssrf",
+		"idor", "xss", "crlf", "cache poisoning", "cache deception",
+		"auth bypass", "path traversal", "file upload",
+		"باگ واقعی", "باگ های واقعی", "باگ‌های واقعی",
+		"کریتیکال", "حیاتی", "مهم", "همه کلاس", "همه باگ", "نفوذ",
+	}
+	for _, keyword := range keywords {
+		if strings.Contains(t, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func replaceLowValueActionsForHypothesisMode(content string, actions []plannedChatAction, plan *operator.Plan) []plannedChatAction {
+	if !chatWantsPentestHypothesisMode(content) && (plan == nil || len(plan.Hypotheses) == 0) {
+		return actions
+	}
+
+	filtered := make([]plannedChatAction, 0, len(actions))
+	for _, action := range actions {
+		if normalizeAgentActionType(action.Request.ActionType) == models.AgentActionTypeRunSafeBugTests {
+			continue
+		}
+		filtered = append(filtered, action)
+	}
+
+	strategy := plannedChatAction{
+		Request: proposeAgentActionRequest{
+			ActionType:  models.AgentActionTypeGeneratePayload,
+			Title:       "Build controlled validation strategy for high-impact hypotheses",
+			Description: "Prepare a policy-aware controlled validation strategy for high-impact bug hypotheses across injection, SSRF, access-control, cache, XSS/CRLF, and file/path classes. This is plan-only; payload execution remains disabled until explicit approval and controlled runtime support.",
+			RiskLevel:   models.AgentActionRiskMedium,
+			SafetyLevel: 2,
+			TestLevel:   2,
+			InputJSON: map[string]interface{}{
+				"source":                  "pentest_hypothesis_agent_v1",
+				"execution_enabled":       false,
+				"payload_execution":       false,
+				"requires_policy":         true,
+				"requires_approval":       true,
+				"hypothesis_driven":       true,
+				"objective":               "turn high-impact hypotheses into controlled validation plans",
+				"blocked_from_autopilot":  true,
+				"validation_only_by_plan": true,
+			},
+			RequestedByAgent: boolPtr(true),
+			RequiresApproval: boolPtr(true),
+		},
+		Reason: "Critical/high-impact hunting mode should produce controlled validation strategy, not another low-value safe bug test run.",
+	}
+
+	return append([]plannedChatAction{strategy}, filtered...)
+}
+
 func convertOperatorPlanActions(plan *operator.Plan) []plannedChatAction {
 	if plan == nil {
 		return nil
@@ -511,6 +576,24 @@ func convertOperatorPlanActions(plan *operator.Plan) []plannedChatAction {
 	return out
 }
 
+func firstNonEmptyStrings(items []string, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	out := make([]string, 0, limit)
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		out = append(out, item)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
 func buildOperatorAssistantText(plan *operator.Plan) string {
 	if plan == nil {
 		return ""
@@ -536,6 +619,41 @@ func buildOperatorAssistantText(plan *operator.Plan) string {
 			}
 		}
 	}
+	if len(plan.Hypotheses) > 0 {
+		parts = append(parts, "Pentest hypotheses:")
+		for _, h := range plan.Hypotheses {
+			title := strings.TrimSpace(h.Title)
+			if title == "" {
+				title = strings.TrimSpace(h.BugClass)
+			}
+			if title == "" {
+				title = "Untitled hypothesis"
+			}
+
+			line := "- " + title
+			if strings.TrimSpace(h.BugClass) != "" {
+				line += " [" + strings.TrimSpace(h.BugClass) + "]"
+			}
+			if strings.TrimSpace(h.ImpactPotential) != "" {
+				line += " impact=" + strings.TrimSpace(h.ImpactPotential)
+			}
+			if strings.TrimSpace(h.Confidence) != "" {
+				line += " confidence=" + strings.TrimSpace(h.Confidence)
+			}
+			parts = append(parts, line)
+
+			if strings.TrimSpace(h.WhyThisMightBeReal) != "" {
+				parts = append(parts, "  why: "+strings.TrimSpace(h.WhyThisMightBeReal))
+			}
+			if strings.TrimSpace(h.SafeNextTest) != "" {
+				parts = append(parts, "  next: "+strings.TrimSpace(h.SafeNextTest))
+			}
+			if len(h.MissingEvidence) > 0 {
+				parts = append(parts, "  missing: "+strings.Join(firstNonEmptyStrings(h.MissingEvidence, 4), ", "))
+			}
+		}
+	}
+
 	if len(plan.Actions) > 0 {
 		parts = append(parts, fmt.Sprintf("I proposed %d approval-gated operator action(s). Review and approve before dispatch.", len(plan.Actions)))
 	}
@@ -1479,6 +1597,204 @@ func runAgentChatAutopilotForActions(c *fiber.Ctx, target *models.Target, uid ui
 	return result
 }
 
+func highValueSurfaceBugClasses(rawURL string) ([]string, []string) {
+	classes := make([]string, 0)
+	reasons := make([]string, 0)
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return classes, reasons
+	}
+
+	path := strings.ToLower(parsed.Path)
+	query := parsed.Query()
+
+	add := func(cls string, reason string) {
+		for _, existing := range classes {
+			if existing == cls {
+				return
+			}
+		}
+		classes = append(classes, cls)
+		reasons = append(reasons, reason)
+	}
+
+	if strings.Contains(path, "api") || strings.Contains(path, "graphql") {
+		add("api_authorization", "API-like endpoint path")
+	}
+	if strings.Contains(path, "admin") || strings.Contains(path, "dashboard") || strings.Contains(path, "account") || strings.Contains(path, "profile") {
+		add("idor", "account/admin/profile-like endpoint path")
+	}
+	if strings.Contains(path, "upload") || strings.Contains(path, "import") || strings.Contains(path, "attachment") {
+		add("file_upload_abuse", "upload/import/attachment-like endpoint path")
+	}
+	if strings.Contains(path, "download") || strings.Contains(path, "export") || strings.Contains(path, "file") || strings.Contains(path, "template") {
+		add("path_traversal", "download/export/file/template-like endpoint path")
+	}
+	if strings.Contains(path, "callback") || strings.Contains(path, "webhook") || strings.Contains(path, "fetch") || strings.Contains(path, "proxy") {
+		add("ssrf", "callback/webhook/fetch/proxy-like endpoint path")
+	}
+
+	for key := range query {
+		k := strings.ToLower(strings.TrimSpace(key))
+		switch k {
+		case "id", "user", "userid", "user_id", "account", "account_id", "org", "org_id", "team", "team_id", "role", "uid":
+			add("idor", "identifier-like query parameter: "+k)
+		case "url", "uri", "target", "dest", "destination", "callback", "webhook", "next", "return", "redirect", "redirect_uri", "image", "avatar", "proxy", "fetch":
+			add("ssrf", "URL/redirect/fetch-like query parameter: "+k)
+			add("open_redirect_chain", "redirect-like query parameter: "+k)
+		case "file", "path", "filename", "template", "download", "export", "doc", "document", "attachment":
+			add("path_traversal", "file/path-like query parameter: "+k)
+		case "q", "query", "search", "filter", "sort", "where", "select":
+			add("sqli", "query/filter/search-like query parameter: "+k)
+			add("xss", "reflectable search/query parameter: "+k)
+		case "cmd", "command", "exec", "ping", "host", "domain":
+			add("command_injection", "command/host-like query parameter: "+k)
+		case "html", "message", "msg", "comment", "name", "title", "text", "content":
+			add("xss", "HTML/text-like query parameter: "+k)
+		case "header", "returnurl", "return_url":
+			add("crlf", "header/return-like query parameter: "+k)
+		}
+	}
+
+	return classes, reasons
+}
+
+func maybeBuildHighValueSurfaceProbeAction(target *models.Target, text string) *proposeAgentActionRequest {
+	if target == nil || !chatWantsPentestHypothesisMode(text) {
+		return nil
+	}
+
+	type candidate struct {
+		URL     string
+		Score   int
+		Classes []string
+		Reasons []string
+		Source  string
+	}
+
+	candidates := make([]candidate, 0)
+
+	rows := make([]models.FoundURL, 0)
+	_ = database.DB.
+		Where("target_id = ?", target.ID).
+		Order("occurrence_count desc, id desc").
+		Limit(300).
+		Find(&rows).Error
+
+	for _, row := range rows {
+		raw := strings.TrimSpace(row.Value)
+		if raw == "" {
+			continue
+		}
+		if !strings.HasPrefix(strings.ToLower(raw), "http://") && !strings.HasPrefix(strings.ToLower(raw), "https://") {
+			continue
+		}
+		classes, reasons := highValueSurfaceBugClasses(raw)
+		if len(classes) == 0 {
+			continue
+		}
+		score := len(classes)*10 + len(reasons)*3
+		if strings.Contains(raw, "?") {
+			score += 15
+		}
+		candidates = append(candidates, candidate{
+			URL:     raw,
+			Score:   score,
+			Classes: classes,
+			Reasons: reasons,
+			Source:  "found_urls",
+		})
+	}
+
+	assets := make([]models.Asset, 0)
+	_ = database.DB.
+		Where("target_id = ? AND is_live = ?", target.ID, true).
+		Order("status_code asc, id desc").
+		Limit(200).
+		Find(&assets).Error
+
+	for _, asset := range assets {
+		raw := strings.TrimSpace(asset.FinalURL)
+		if raw == "" {
+			value := strings.TrimSpace(asset.Value)
+			if value == "" {
+				continue
+			}
+			raw = "https://" + value
+		}
+
+		classes, reasons := highValueSurfaceBugClasses(raw)
+		host := strings.ToLower(asset.Value)
+
+		if strings.Contains(host, "api") {
+			classes = append(classes, "api_authorization")
+			reasons = append(reasons, "api-like live asset hostname")
+		}
+		if strings.Contains(host, "admin") || strings.Contains(host, "dashboard") || strings.Contains(host, "sso") || strings.Contains(host, "auth") {
+			classes = append(classes, "auth_bypass")
+			reasons = append(reasons, "admin/auth/dashboard-like live asset hostname")
+		}
+		if strings.Contains(host, "dev") || strings.Contains(host, "stage") || strings.Contains(host, "staging") || strings.Contains(host, "test") {
+			classes = append(classes, "sensitive_data_exposure")
+			reasons = append(reasons, "dev/staging/test-like live asset hostname")
+		}
+		if len(classes) == 0 {
+			continue
+		}
+
+		score := len(classes)*10 + len(reasons)*3
+		if asset.StatusCode >= 200 && asset.StatusCode < 400 {
+			score += 5
+		}
+
+		candidates = append(candidates, candidate{
+			URL:     raw,
+			Score:   score,
+			Classes: classes,
+			Reasons: reasons,
+			Source:  "live_assets",
+		})
+	}
+
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	best := candidates[0]
+	for _, c := range candidates[1:] {
+		if c.Score > best.Score {
+			best = c
+		}
+	}
+
+	return &proposeAgentActionRequest{
+		ActionType:       models.AgentActionTypeReviewEndpoint,
+		Title:            "Probe high-value surface candidate",
+		Description:      "Run a controlled baseline HTTP probe against a high-value surface candidate selected from crawled URLs/live assets. This collects real runtime evidence before bug-class-specific validation.",
+		RiskLevel:        models.AgentActionRiskLow,
+		SafetyLevel:      1,
+		TestLevel:        1,
+		AutonomyLevel:    1,
+		RequestedByAgent: boolPtr(true),
+		RequiresApproval: boolPtr(true),
+		InputJSON: map[string]interface{}{
+			"url":                   best.URL,
+			"method":                "GET",
+			"source":                "high_value_surface_miner_v1",
+			"hypothesis_driven":     true,
+			"surface_score":         best.Score,
+			"candidate_bug_classes": best.Classes,
+			"candidate_reasons":     best.Reasons,
+			"candidate_source":      best.Source,
+			"validation_goal":       "collect controlled baseline HTTP evidence for high-value bug hunting",
+			"payload_execution":     false,
+			"exploit_validation":    false,
+			"operator_visible_step": "selected high-value candidate and ran controlled baseline probe",
+		},
+	}
+}
+
 func maybeBuildBugTestValidationAction(target *models.Target, text string) *proposeAgentActionRequest {
 	if target == nil {
 		return nil
@@ -1904,6 +2220,7 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 		MemoryContext: memoryContext,
 	}); err == nil && plan != nil {
 		llmActions := convertOperatorPlanActions(plan)
+		llmActions = replaceLowValueActionsForHypothesisMode(content, llmActions, plan)
 		if len(llmActions) > 0 {
 			plannedActions = llmActions
 			assistantText = buildOperatorAssistantText(plan)
@@ -1954,6 +2271,13 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 
 		if validationReq := maybeBuildBugTestValidationAction(target, req.Content); validationReq != nil {
 			action, err := createActionFromChat(c, target, uid, ownerKey, *validationReq)
+			if err == nil && action != nil {
+				createdActions = append(createdActions, *action)
+			}
+		}
+
+		if highValueReq := maybeBuildHighValueSurfaceProbeAction(target, req.Content); highValueReq != nil {
+			action, err := createActionFromChat(c, target, uid, ownerKey, *highValueReq)
 			if err == nil && action != nil {
 				createdActions = append(createdActions, *action)
 			}
@@ -2039,6 +2363,10 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 		assistantMessage.Content = strings.TrimSpace(assistantMessage.Content + "\n" + fmt.Sprintf("Autopilot executed %d low-risk controlled action(s). Queued workflows will update target memory when their worker phase completes; higher-risk actions still require explicit approval.", len(autopilot.ExecutedActions)))
 	}
 
+	if operatorPlan != nil && len(operatorPlan.Hypotheses) > 0 {
+		assistantOutput["hypotheses"] = operatorPlan.Hypotheses
+		assistantOutput["hypothesis_count"] = len(operatorPlan.Hypotheses)
+	}
 	assistantOutput["autopilot"] = autopilot
 	assistantOutput["execution_enabled"] = len(autopilot.ExecutedActions) > 0
 
