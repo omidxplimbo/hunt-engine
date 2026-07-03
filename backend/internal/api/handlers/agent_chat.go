@@ -2223,6 +2223,250 @@ func createActionFromChat(c *fiber.Ctx, target *models.Target, uid uint, ownerKe
 	return &row, nil
 }
 
+func huntingLoopActions(actions []models.AgentAction) []models.AgentAction {
+	out := make([]models.AgentAction, 0)
+	for _, action := range actions {
+		input := chatActionInputMap(action.InputJSON)
+		source := strings.TrimSpace(fmt.Sprint(input["source"]))
+		if source == "high_value_hunting_loop_v1" {
+			out = append(out, action)
+		}
+	}
+	return out
+}
+
+func huntingLoopInputString(input map[string]interface{}, key string) string {
+	if input == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(input[key]))
+}
+
+func huntingLoopInputBool(input map[string]interface{}, key string) bool {
+	if input == nil {
+		return false
+	}
+	switch v := input[key].(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "true")
+	default:
+		return false
+	}
+}
+
+func huntingLoopInputStringSlice(input map[string]interface{}, key string) []string {
+	if input == nil {
+		return nil
+	}
+	raw, ok := input[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	out := make([]string, 0)
+	switch values := raw.(type) {
+	case []string:
+		for _, value := range values {
+			value = strings.TrimSpace(value)
+			if value != "" {
+				out = append(out, value)
+			}
+		}
+	case []interface{}:
+		for _, value := range values {
+			text := strings.TrimSpace(fmt.Sprint(value))
+			if text != "" && text != "<nil>" {
+				out = append(out, text)
+			}
+		}
+	default:
+		text := strings.TrimSpace(fmt.Sprint(values))
+		if text != "" && text != "<nil>" {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+func buildHuntingLoopAssistantText(actions []models.AgentAction) string {
+	loopActions := huntingLoopActions(actions)
+	if len(loopActions) == 0 {
+		return ""
+	}
+
+	lines := []string{
+		"Controlled baseline hunting loop:",
+		"",
+	}
+
+	for _, action := range loopActions {
+		input := chatActionInputMap(action.InputJSON)
+		step := huntingLoopInputString(input, "hunting_step")
+		total := huntingLoopInputString(input, "hunting_total_steps")
+		if step == "" || step == "<nil>" {
+			step = "?"
+		}
+		if total == "" || total == "<nil>" {
+			total = fmt.Sprint(len(loopActions))
+		}
+
+		urlValue := huntingLoopInputString(input, "hunting_candidate_url")
+		if urlValue == "" || urlValue == "<nil>" {
+			urlValue = huntingLoopInputString(input, "url")
+		}
+
+		reasons := huntingLoopInputStringSlice(input, "candidate_reasons")
+		reason := "selected as a high-value surface candidate from target evidence"
+		if len(reasons) > 0 {
+			reason = reasons[0]
+		}
+
+		classes := huntingLoopInputStringSlice(input, "candidate_bug_classes")
+		next := "analyze controlled runtime evidence and only then propose class-specific validation."
+		if len(classes) > 0 {
+			next = "baseline evidence will guide next validation path for: " + strings.Join(classes, ", ")
+		}
+
+		lines = append(lines,
+			fmt.Sprintf("- Hunting step %s/%s", step, total),
+			fmt.Sprintf("  Candidate: %s", urlValue),
+			fmt.Sprintf("  Why selected: %s", reason),
+			"  Action: controlled baseline HTTP probe",
+			fmt.Sprintf("  Action ID: #%d status=%s", action.ID, action.Status),
+			"  Payload/exploit execution: disabled",
+			"  Next: "+next,
+			"",
+		)
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func buildHuntingSessionOutput(actions []models.AgentAction) map[string]interface{} {
+	loopActions := huntingLoopActions(actions)
+	steps := make([]map[string]interface{}, 0, len(loopActions))
+	actionIDs := make([]uint, 0, len(loopActions))
+
+	for _, action := range loopActions {
+		input := chatActionInputMap(action.InputJSON)
+		actionIDs = append(actionIDs, action.ID)
+
+		steps = append(steps, map[string]interface{}{
+			"step":                  huntingLoopInputString(input, "hunting_step"),
+			"total_steps":           huntingLoopInputString(input, "hunting_total_steps"),
+			"action_id":             action.ID,
+			"action_type":           action.ActionType,
+			"action_status":         action.Status,
+			"risk_level":            action.RiskLevel,
+			"safety_level":          action.SafetyLevel,
+			"test_level":            action.TestLevel,
+			"autonomy_level":        action.AutonomyLevel,
+			"candidate_url":         huntingLoopInputString(input, "hunting_candidate_url"),
+			"url":                   huntingLoopInputString(input, "url"),
+			"candidate_source":      huntingLoopInputString(input, "candidate_source"),
+			"candidate_bug_classes": huntingLoopInputStringSlice(input, "candidate_bug_classes"),
+			"candidate_reasons":     huntingLoopInputStringSlice(input, "candidate_reasons"),
+			"surface_score":         huntingLoopInputString(input, "surface_score"),
+			"hunting_action_key":    huntingLoopInputString(input, "hunting_action_key"),
+			"validation_goal":       huntingLoopInputString(input, "validation_goal"),
+			"payload_execution":     huntingLoopInputBool(input, "payload_execution"),
+			"exploit_validation":    huntingLoopInputBool(input, "exploit_validation"),
+			"result":                "pending_runtime_evidence",
+			"learned":               "waiting for controlled runtime result analysis",
+		})
+	}
+
+	return map[string]interface{}{
+		"version":            "small_controlled_baseline_hunting_loop_v1",
+		"active":             len(loopActions) > 0,
+		"objective":          "collect controlled baseline HTTP evidence across multiple high-value candidates",
+		"created_action_ids": actionIDs,
+		"candidate_count":    len(loopActions),
+		"max_candidates":     highValueHuntingLoopMaxCandidates,
+		"steps":              steps,
+		"payload_execution":  false,
+		"exploit_validation": false,
+		"next":               "analyze runtime results, learn from passed/failed/inconclusive probes, and propose class-specific validation paths when evidence supports them",
+	}
+}
+
+func formatAssistantTextForChatReadability(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return text
+	}
+
+	sectionPrefixes := []string{
+		"Clarifying questions:",
+		"Recommended next steps:",
+		"Pentest hypotheses:",
+		"Controlled baseline hunting loop:",
+		"Operator Autopilot:",
+		"Guardrails:",
+	}
+
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines)*2)
+
+	appendBlankIfNeeded := func() {
+		if len(out) == 0 {
+			return
+		}
+		if strings.TrimSpace(out[len(out)-1]) != "" {
+			out = append(out, "")
+		}
+	}
+
+	for _, rawLine := range lines {
+		line := strings.TrimRight(rawLine, " \t")
+		trimmed := strings.TrimSpace(line)
+
+		if trimmed == "" {
+			if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
+				out = append(out, "")
+			}
+			continue
+		}
+
+		for _, prefix := range sectionPrefixes {
+			if strings.HasPrefix(trimmed, prefix) {
+				appendBlankIfNeeded()
+				break
+			}
+		}
+
+		if strings.HasPrefix(trimmed, "I proposed ") ||
+			strings.HasPrefix(trimmed, "I reused ") ||
+			strings.HasPrefix(trimmed, "Autopilot executed ") ||
+			strings.HasPrefix(trimmed, "Autopilot did not execute ") {
+			appendBlankIfNeeded()
+		}
+
+		if strings.HasPrefix(trimmed, "- Potential ") && len(out) > 0 {
+			appendBlankIfNeeded()
+		}
+
+		out = append(out, line)
+	}
+
+	// Collapse excessive blank lines to at most one blank line.
+	collapsed := make([]string, 0, len(out))
+	previousBlank := false
+	for _, line := range out {
+		blank := strings.TrimSpace(line) == ""
+		if blank && previousBlank {
+			continue
+		}
+		collapsed = append(collapsed, line)
+		previousBlank = blank
+	}
+
+	return strings.TrimSpace(strings.Join(collapsed, "\n"))
+}
+
 // GetTargetAgentChatSessions lists chat sessions for a target.
 func GetTargetAgentChatSessions(c *fiber.Ctx) error {
 	if err := ensureAgentChatEnabled(c); err != nil {
@@ -2524,6 +2768,8 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 			assistantText = strings.TrimSpace(assistantText + "\n" + fmt.Sprintf("I reused %d existing similar approval-gated operator action(s) and linked them to this chat session instead of creating duplicates.", reusedActionCount))
 		}
 
+		assistantText = formatAssistantTextForChatReadability(assistantText)
+
 		assistantMessage = models.AgentChatMessage{
 			SessionID:       session.ID,
 			TargetID:        target.ID,
@@ -2547,6 +2793,7 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 				"actions_created":   len(actionIDs) - reusedActionCount,
 				"actions_reused":    reusedActionCount,
 				"reused_action_ids": reusedActionIDs,
+				"hunting_session":   buildHuntingSessionOutput(createdActions),
 				"execution_enabled": false,
 				"guardrails": []string{
 					"low-risk controlled actions may be auto-executed by Operator Autopilot when target policy permits",
