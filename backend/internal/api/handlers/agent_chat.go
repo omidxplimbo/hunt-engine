@@ -2467,6 +2467,270 @@ func formatAssistantTextForChatReadability(text string) string {
 	return strings.TrimSpace(strings.Join(collapsed, "\n"))
 }
 
+func controlledEvidenceMap(result models.ControlledTestResult) map[string]interface{} {
+	out := map[string]interface{}{}
+	if len(result.EvidenceJSON) == 0 {
+		return out
+	}
+	_ = json.Unmarshal(result.EvidenceJSON, &out)
+	return out
+}
+
+func controlledEvidenceString(evidence map[string]interface{}, key string) string {
+	if evidence == nil {
+		return ""
+	}
+	value, ok := evidence[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func controlledEvidenceBool(evidence map[string]interface{}, key string) bool {
+	if evidence == nil {
+		return false
+	}
+	switch v := evidence[key].(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "true")
+	default:
+		return false
+	}
+}
+
+func controlledEvidenceInt(evidence map[string]interface{}, key string) int {
+	if evidence == nil {
+		return 0
+	}
+	switch v := evidence[key].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case json.Number:
+		n, _ := v.Int64()
+		return int(n)
+	case string:
+		var n int
+		_, _ = fmt.Sscanf(strings.TrimSpace(v), "%d", &n)
+		return n
+	default:
+		return 0
+	}
+}
+
+func analyzeControlledProbeResult(result models.ControlledTestResult) map[string]interface{} {
+	evidence := controlledEvidenceMap(result)
+
+	httpStatus := controlledEvidenceInt(evidence, "status_code")
+	classification := controlledEvidenceString(evidence, "classification")
+	errorText := controlledEvidenceString(evidence, "error")
+	finalURL := controlledEvidenceString(evidence, "final_url")
+	durationMS := controlledEvidenceInt(evidence, "duration_ms")
+
+	cloudflareChallenge := controlledEvidenceBool(evidence, "cloudflare_challenge") ||
+		strings.EqualFold(controlledEvidenceString(evidence, "cf_mitigated"), "challenge") ||
+		strings.Contains(strings.ToLower(classification), "challenged")
+
+	status := strings.TrimSpace(result.Status)
+	if status == "" {
+		status = "inconclusive"
+	}
+
+	analysisStatus := status
+	why := "Controlled baseline probe completed and produced runtime evidence."
+	learned := "The candidate has baseline runtime evidence available for follow-up reasoning."
+	next := "Use this baseline result to decide whether class-specific validation is justified."
+	usefulForNextValidation := false
+	avoidRetesting := false
+	avoidReason := ""
+
+	switch {
+	case errorText != "":
+		analysisStatus = "inconclusive"
+		why = "The controlled HTTP request failed before a useful baseline response was collected."
+		learned = "This candidate is currently unreliable for unauthenticated baseline validation."
+		next = "Avoid repeating the same probe immediately unless DNS/TLS/connectivity context changes."
+		avoidRetesting = true
+		avoidReason = errorText
+
+	case cloudflareChallenge:
+		analysisStatus = "blocked"
+		why = "The endpoint returned a Cloudflare/WAF challenge instead of normal application content."
+		learned = "The response is blocked/challenged evidence, not proof of a vulnerability."
+		next = "Do not promote this as a finding. Skip unauthenticated retest or ask for approved context if this surface is important."
+		avoidRetesting = true
+		avoidReason = "cloudflare_or_waf_challenge"
+
+	case httpStatus == 401 || httpStatus == 403:
+		analysisStatus = "inconclusive"
+		why = fmt.Sprintf("The endpoint returned HTTP %d, so baseline access is blocked or requires authorization.", httpStatus)
+		learned = "This candidate likely needs auth/session context before meaningful validation."
+		next = "Ask for authenticated context or move to another candidate for unauthenticated low-risk hunting."
+		avoidRetesting = true
+		avoidReason = fmt.Sprintf("http_%d_requires_context", httpStatus)
+
+	case httpStatus == 429:
+		analysisStatus = "blocked"
+		why = "The endpoint returned HTTP 429 rate limiting."
+		learned = "Further probing may create noisy or rate-limited behavior."
+		next = "Stop retesting this candidate until the rate-limit window and policy budget are clear."
+		avoidRetesting = true
+		avoidReason = "rate_limited"
+
+	case httpStatus >= 500:
+		analysisStatus = "inconclusive"
+		why = fmt.Sprintf("The endpoint returned HTTP %d server-side error during baseline probing.", httpStatus)
+		learned = "The candidate may be unstable or backend-protected; this is not enough to claim a vulnerability."
+		next = "Avoid immediate repetition. Revisit only if there is a strong hypothesis and a strict request budget."
+		avoidRetesting = true
+		avoidReason = fmt.Sprintf("http_%d_server_error", httpStatus)
+
+	case httpStatus >= 200 && httpStatus < 400:
+		analysisStatus = "passed"
+		why = fmt.Sprintf("The endpoint returned HTTP %d and is reachable with a normal baseline response.", httpStatus)
+		learned = "This candidate is suitable for later class-specific controlled validation if its parameters, headers, or behavior support a hypothesis."
+		next = "Prioritize parameter inventory, reflection/context checks, cache/header review, or open-redirect/path baseline depending on URL shape and evidence."
+		usefulForNextValidation = true
+
+	default:
+		analysisStatus = "inconclusive"
+		if httpStatus > 0 {
+			why = fmt.Sprintf("The endpoint returned HTTP %d, which does not provide enough confidence for validation.", httpStatus)
+		}
+		learned = "The probe did not establish a useful positive baseline."
+		next = "Move to a better candidate unless new target-specific evidence appears."
+		avoidRetesting = true
+		avoidReason = "weak_or_unknown_baseline"
+	}
+
+	return map[string]interface{}{
+		"status":                     analysisStatus,
+		"why":                        why,
+		"learned":                    learned,
+		"next":                       next,
+		"useful_for_next_validation": usefulForNextValidation,
+		"avoid_retesting":            avoidRetesting,
+		"avoid_reason":               avoidReason,
+		"http_status":                httpStatus,
+		"classification":             classification,
+		"final_url":                  finalURL,
+		"duration_ms":                durationMS,
+		"runtime_result_status":      result.Status,
+	}
+}
+
+func enrichHuntingSessionWithRuntimeResults(session map[string]interface{}, autopilot chatAutopilotResult) map[string]interface{} {
+	if session == nil {
+		return session
+	}
+
+	rawSteps, ok := session["steps"].([]map[string]interface{})
+	if !ok || len(rawSteps) == 0 || len(autopilot.ControlledResults) == 0 {
+		return session
+	}
+
+	results := make([]models.ControlledTestResult, 0)
+	if err := database.DB.
+		Where("id IN ?", autopilot.ControlledResults).
+		Order("id asc").
+		Find(&results).Error; err != nil {
+		return session
+	}
+
+	byActionID := map[uint]models.ControlledTestResult{}
+	for _, result := range results {
+		if result.AgentActionID != nil {
+			byActionID[*result.AgentActionID] = result
+		}
+	}
+
+	analyzedCount := 0
+	for _, step := range rawSteps {
+		actionID := uintFromAny(step["action_id"])
+		if actionID == 0 {
+			continue
+		}
+
+		result, exists := byActionID[actionID]
+		if !exists {
+			continue
+		}
+
+		analysis := analyzeControlledProbeResult(result)
+		step["controlled_result_id"] = result.ID
+		step["controlled_run_id"] = result.RunID
+		step["runtime_status"] = result.Status
+		step["http_status"] = analysis["http_status"]
+		step["classification"] = analysis["classification"]
+		step["final_url"] = analysis["final_url"]
+		step["duration_ms"] = analysis["duration_ms"]
+		step["result"] = analysis["status"]
+		step["learned"] = analysis["learned"]
+		step["analysis"] = analysis
+		analyzedCount++
+	}
+
+	session["steps"] = rawSteps
+	session["analyzed_result_count"] = analyzedCount
+	session["controlled_results"] = autopilot.ControlledResults
+	session["controlled_runs"] = autopilot.ControlledRuns
+	session["memory_ingested"] = autopilot.MemoryIngested
+	return session
+}
+
+func buildHuntingRuntimeAnalysisText(session map[string]interface{}) string {
+	if session == nil {
+		return ""
+	}
+	rawSteps, ok := session["steps"].([]map[string]interface{})
+	if !ok || len(rawSteps) == 0 {
+		return ""
+	}
+
+	lines := []string{"Runtime analysis:", ""}
+	hasAnalysis := false
+
+	for _, step := range rawSteps {
+		analysis, _ := step["analysis"].(map[string]interface{})
+		if len(analysis) == 0 {
+			continue
+		}
+		hasAnalysis = true
+
+		stepNo := strings.TrimSpace(fmt.Sprint(step["step"]))
+		total := strings.TrimSpace(fmt.Sprint(step["total_steps"]))
+		candidate := strings.TrimSpace(fmt.Sprint(step["candidate_url"]))
+		if candidate == "" || candidate == "<nil>" {
+			candidate = strings.TrimSpace(fmt.Sprint(step["url"]))
+		}
+
+		status := strings.TrimSpace(fmt.Sprint(analysis["status"]))
+		httpStatus := strings.TrimSpace(fmt.Sprint(analysis["http_status"]))
+		learned := strings.TrimSpace(fmt.Sprint(analysis["learned"]))
+		next := strings.TrimSpace(fmt.Sprint(analysis["next"]))
+
+		lines = append(lines,
+			fmt.Sprintf("- Hunting step %s/%s", stepNo, total),
+			fmt.Sprintf("  Candidate: %s", candidate),
+			fmt.Sprintf("  Result: %s, HTTP %s", status, httpStatus),
+			fmt.Sprintf("  Learned: %s", learned),
+			fmt.Sprintf("  Next: %s", next),
+			"",
+		)
+	}
+
+	if !hasAnalysis {
+		return ""
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
 // GetTargetAgentChatSessions lists chat sessions for a target.
 func GetTargetAgentChatSessions(c *fiber.Ctx) error {
 	if err := ensureAgentChatEnabled(c); err != nil {
@@ -2842,6 +3106,14 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 		assistantOutput["hypotheses"] = operatorPlan.Hypotheses
 		assistantOutput["hypothesis_count"] = len(operatorPlan.Hypotheses)
 	}
+	huntingSession := buildHuntingSessionOutput(createdActions)
+	huntingSession = enrichHuntingSessionWithRuntimeResults(huntingSession, autopilot)
+	if runtimeAnalysisText := buildHuntingRuntimeAnalysisText(huntingSession); runtimeAnalysisText != "" {
+		assistantMessage.Content = strings.TrimSpace(assistantMessage.Content + "\n\n" + runtimeAnalysisText)
+		assistantMessage.Content = formatAssistantTextForChatReadability(assistantMessage.Content)
+	}
+
+	assistantOutput["hunting_session"] = huntingSession
 	assistantOutput["autopilot"] = autopilot
 	assistantOutput["execution_enabled"] = len(autopilot.ExecutedActions) > 0
 
