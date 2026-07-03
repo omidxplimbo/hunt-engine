@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1660,20 +1661,228 @@ func highValueSurfaceBugClasses(rawURL string) ([]string, []string) {
 	return classes, reasons
 }
 
-func maybeBuildHighValueSurfaceProbeAction(target *models.Target, text string) *proposeAgentActionRequest {
+const highValueHuntingLoopMaxCandidates = 3
+
+type highValueSurfaceCandidate struct {
+	URL     string
+	Score   int
+	Classes []string
+	Reasons []string
+	Source  string
+}
+
+func appendUniqueHighValueString(items []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return items
+	}
+	for _, item := range items {
+		if item == value {
+			return items
+		}
+	}
+	return append(items, value)
+}
+
+func highValueCandidateKey(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ""
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return strings.ToLower(rawURL)
+	}
+	parsed.Fragment = ""
+	return strings.ToLower(parsed.String())
+}
+
+func candidateLooksRecentlyBad(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return false
+	}
+
+	badSignals := []string{
+		"tls mismatch",
+		"certificate",
+		"connection error",
+		"timeout",
+		"deadline exceeded",
+		"no such host",
+		"429",
+		"rate limit",
+		"cloudflare",
+		"waf",
+		"blocked",
+		"inconclusive",
+		"forbidden",
+		" 403",
+		"status_code:403",
+		"status code 403",
+		" 5xx",
+		"status_code:5",
+		"status code 5",
+	}
+
+	for _, signal := range badSignals {
+		if strings.Contains(text, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+func badHighValueCandidateURLsFromMemory(targetID uint, candidates []highValueSurfaceCandidate) map[string]bool {
+	bad := map[string]bool{}
+	if targetID == 0 || len(candidates) == 0 {
+		return bad
+	}
+
+	items := make([]models.TargetMemoryItem, 0)
+	_ = database.DB.
+		Where("target_id = ? AND source_type = ?", targetID, models.TargetMemorySourceControlledTestResult).
+		Order("updated_at desc, importance desc").
+		Limit(80).
+		Find(&items).Error
+
+	for _, item := range items {
+		text := strings.ToLower(strings.Join([]string{
+			item.Title,
+			item.Summary,
+			item.Content,
+		}, " "))
+
+		if !candidateLooksRecentlyBad(text) {
+			continue
+		}
+
+		for _, candidate := range candidates {
+			key := highValueCandidateKey(candidate.URL)
+			if key == "" {
+				continue
+			}
+			if strings.Contains(text, key) || strings.Contains(text, strings.ToLower(candidate.URL)) {
+				bad[key] = true
+			}
+		}
+	}
+
+	return bad
+}
+
+func dedupeAndRankHighValueCandidates(targetID uint, candidates []highValueSurfaceCandidate) []highValueSurfaceCandidate {
+	if len(candidates) == 0 {
+		return candidates
+	}
+
+	badURLs := badHighValueCandidateURLsFromMemory(targetID, candidates)
+	byURL := map[string]highValueSurfaceCandidate{}
+
+	for _, candidate := range candidates {
+		candidate.URL = strings.TrimSpace(candidate.URL)
+		if candidate.URL == "" {
+			continue
+		}
+
+		key := highValueCandidateKey(candidate.URL)
+		if key == "" || badURLs[key] {
+			continue
+		}
+
+		existing, exists := byURL[key]
+		if !exists {
+			classes := []string{}
+			for _, cls := range candidate.Classes {
+				classes = appendUniqueHighValueString(classes, cls)
+			}
+
+			reasons := []string{}
+			for _, reason := range candidate.Reasons {
+				reasons = appendUniqueHighValueString(reasons, reason)
+			}
+
+			candidate.Classes = classes
+			candidate.Reasons = reasons
+			byURL[key] = candidate
+			continue
+		}
+
+		if candidate.Score > existing.Score {
+			existing.Score = candidate.Score
+			existing.Source = candidate.Source
+		}
+
+		for _, cls := range candidate.Classes {
+			existing.Classes = appendUniqueHighValueString(existing.Classes, cls)
+		}
+		for _, reason := range candidate.Reasons {
+			existing.Reasons = appendUniqueHighValueString(existing.Reasons, reason)
+		}
+
+		byURL[key] = existing
+	}
+
+	out := make([]highValueSurfaceCandidate, 0, len(byURL))
+	for _, candidate := range byURL {
+		out = append(out, candidate)
+	}
+
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Score == out[j].Score {
+			return out[i].URL < out[j].URL
+		}
+		return out[i].Score > out[j].Score
+	})
+
+	if len(out) > highValueHuntingLoopMaxCandidates {
+		out = out[:highValueHuntingLoopMaxCandidates]
+	}
+
+	return out
+}
+
+func buildHighValueSurfaceProbeAction(candidate highValueSurfaceCandidate, stepNumber int, totalSteps int) proposeAgentActionRequest {
+	return proposeAgentActionRequest{
+		ActionType:       models.AgentActionTypeReviewEndpoint,
+		Title:            fmt.Sprintf("Hunting step %d/%d: controlled baseline probe", stepNumber, totalSteps),
+		Description:      "Run a controlled baseline HTTP probe against a high-value surface candidate selected from crawled URLs/live assets. This collects real runtime evidence before bug-class-specific validation.",
+		RiskLevel:        models.AgentActionRiskLow,
+		SafetyLevel:      1,
+		TestLevel:        1,
+		AutonomyLevel:    1,
+		RequestedByAgent: boolPtr(true),
+		RequiresApproval: boolPtr(true),
+		InputJSON: map[string]interface{}{
+			"url":                   candidate.URL,
+			"method":                "GET",
+			"source":                "high_value_hunting_loop_v1",
+			"previous_source":       "high_value_surface_miner_v1",
+			"hypothesis_driven":     true,
+			"hunting_loop":          true,
+			"hunting_loop_version":  "small_controlled_baseline_hunting_loop_v1",
+			"hunting_step":          stepNumber,
+			"hunting_total_steps":   totalSteps,
+			"hunting_candidate_url": candidate.URL,
+			"hunting_action_key":    fmt.Sprintf("high_value_hunting_loop_v1:%d:%s", stepNumber, highValueCandidateKey(candidate.URL)),
+			"surface_score":         candidate.Score,
+			"candidate_bug_classes": candidate.Classes,
+			"candidate_reasons":     candidate.Reasons,
+			"candidate_source":      candidate.Source,
+			"validation_goal":       "collect controlled baseline HTTP evidence for high-value bug hunting",
+			"payload_execution":     false,
+			"exploit_validation":    false,
+			"operator_visible_step": fmt.Sprintf("Hunting step %d/%d: selected high-value candidate and ran controlled baseline probe", stepNumber, totalSteps),
+		},
+	}
+}
+
+func maybeBuildHighValueSurfaceProbeActions(target *models.Target, text string) []proposeAgentActionRequest {
 	if target == nil || !chatWantsPentestHypothesisMode(text) {
 		return nil
 	}
 
-	type candidate struct {
-		URL     string
-		Score   int
-		Classes []string
-		Reasons []string
-		Source  string
-	}
-
-	candidates := make([]candidate, 0)
+	candidates := make([]highValueSurfaceCandidate, 0)
 
 	rows := make([]models.FoundURL, 0)
 	_ = database.DB.
@@ -1687,18 +1896,23 @@ func maybeBuildHighValueSurfaceProbeAction(target *models.Target, text string) *
 		if raw == "" {
 			continue
 		}
-		if !strings.HasPrefix(strings.ToLower(raw), "http://") && !strings.HasPrefix(strings.ToLower(raw), "https://") {
+
+		lowerRaw := strings.ToLower(raw)
+		if !strings.HasPrefix(lowerRaw, "http://") && !strings.HasPrefix(lowerRaw, "https://") {
 			continue
 		}
+
 		classes, reasons := highValueSurfaceBugClasses(raw)
 		if len(classes) == 0 {
 			continue
 		}
+
 		score := len(classes)*10 + len(reasons)*3
 		if strings.Contains(raw, "?") {
 			score += 15
 		}
-		candidates = append(candidates, candidate{
+
+		candidates = append(candidates, highValueSurfaceCandidate{
 			URL:     raw,
 			Score:   score,
 			Classes: classes,
@@ -1725,19 +1939,19 @@ func maybeBuildHighValueSurfaceProbeAction(target *models.Target, text string) *
 		}
 
 		classes, reasons := highValueSurfaceBugClasses(raw)
-		host := strings.ToLower(asset.Value)
+		host := strings.ToLower(strings.TrimSpace(asset.Value))
 
 		if strings.Contains(host, "api") {
-			classes = append(classes, "api_authorization")
-			reasons = append(reasons, "api-like live asset hostname")
+			classes = appendUniqueHighValueString(classes, "api_authorization")
+			reasons = appendUniqueHighValueString(reasons, "api-like live asset hostname")
 		}
 		if strings.Contains(host, "admin") || strings.Contains(host, "dashboard") || strings.Contains(host, "sso") || strings.Contains(host, "auth") {
-			classes = append(classes, "auth_bypass")
-			reasons = append(reasons, "admin/auth/dashboard-like live asset hostname")
+			classes = appendUniqueHighValueString(classes, "auth_bypass")
+			reasons = appendUniqueHighValueString(reasons, "admin/auth/dashboard-like live asset hostname")
 		}
 		if strings.Contains(host, "dev") || strings.Contains(host, "stage") || strings.Contains(host, "staging") || strings.Contains(host, "test") {
-			classes = append(classes, "sensitive_data_exposure")
-			reasons = append(reasons, "dev/staging/test-like live asset hostname")
+			classes = appendUniqueHighValueString(classes, "sensitive_data_exposure")
+			reasons = appendUniqueHighValueString(reasons, "dev/staging/test-like live asset hostname")
 		}
 		if len(classes) == 0 {
 			continue
@@ -1748,7 +1962,7 @@ func maybeBuildHighValueSurfaceProbeAction(target *models.Target, text string) *
 			score += 5
 		}
 
-		candidates = append(candidates, candidate{
+		candidates = append(candidates, highValueSurfaceCandidate{
 			URL:     raw,
 			Score:   score,
 			Classes: classes,
@@ -1757,42 +1971,19 @@ func maybeBuildHighValueSurfaceProbeAction(target *models.Target, text string) *
 		})
 	}
 
+	candidates = dedupeAndRankHighValueCandidates(target.ID, candidates)
 	if len(candidates) == 0 {
 		return nil
 	}
 
-	best := candidates[0]
-	for _, c := range candidates[1:] {
-		if c.Score > best.Score {
-			best = c
-		}
+	actions := make([]proposeAgentActionRequest, 0, len(candidates))
+	totalSteps := len(candidates)
+
+	for i, candidate := range candidates {
+		actions = append(actions, buildHighValueSurfaceProbeAction(candidate, i+1, totalSteps))
 	}
 
-	return &proposeAgentActionRequest{
-		ActionType:       models.AgentActionTypeReviewEndpoint,
-		Title:            "Probe high-value surface candidate",
-		Description:      "Run a controlled baseline HTTP probe against a high-value surface candidate selected from crawled URLs/live assets. This collects real runtime evidence before bug-class-specific validation.",
-		RiskLevel:        models.AgentActionRiskLow,
-		SafetyLevel:      1,
-		TestLevel:        1,
-		AutonomyLevel:    1,
-		RequestedByAgent: boolPtr(true),
-		RequiresApproval: boolPtr(true),
-		InputJSON: map[string]interface{}{
-			"url":                   best.URL,
-			"method":                "GET",
-			"source":                "high_value_surface_miner_v1",
-			"hypothesis_driven":     true,
-			"surface_score":         best.Score,
-			"candidate_bug_classes": best.Classes,
-			"candidate_reasons":     best.Reasons,
-			"candidate_source":      best.Source,
-			"validation_goal":       "collect controlled baseline HTTP evidence for high-value bug hunting",
-			"payload_execution":     false,
-			"exploit_validation":    false,
-			"operator_visible_step": "selected high-value candidate and ran controlled baseline probe",
-		},
-	}
+	return actions
 }
 
 func maybeBuildBugTestValidationAction(target *models.Target, text string) *proposeAgentActionRequest {
@@ -1877,6 +2068,26 @@ func maybeBuildBugTestValidationAction(target *models.Target, text string) *prop
 	return &req
 }
 
+func chatActionRequestSource(req proposeAgentActionRequest) string {
+	if req.InputJSON == nil {
+		return ""
+	}
+	value, ok := req.InputJSON["source"]
+	if !ok || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func shouldBypassChatActionDuplicateReuse(req proposeAgentActionRequest) bool {
+	switch chatActionRequestSource(req) {
+	case "high_value_hunting_loop_v1":
+		return true
+	default:
+		return false
+	}
+}
+
 func createActionFromChat(c *fiber.Ctx, target *models.Target, uid uint, ownerKey string, req proposeAgentActionRequest) (*models.AgentAction, error) {
 	actionType := normalizeAgentActionType(req.ActionType)
 	if actionType == "" {
@@ -1888,14 +2099,18 @@ func createActionFromChat(c *fiber.Ctx, target *models.Target, uid uint, ownerKe
 		title = actionType
 	}
 
-	duplicate, duplicateErr := findDuplicateAgentAction(target.ID, actionType, title)
-	if duplicateErr != nil {
-		return nil, duplicateErr
-	}
-	if duplicate == nil && shouldReuseChatActionByType(actionType) {
-		duplicate, duplicateErr = findDuplicateAgentAction(target.ID, actionType, "")
+	var duplicate *models.AgentAction
+	var duplicateErr error
+	if !shouldBypassChatActionDuplicateReuse(req) {
+		duplicate, duplicateErr = findDuplicateAgentAction(target.ID, actionType, title)
 		if duplicateErr != nil {
 			return nil, duplicateErr
+		}
+		if duplicate == nil && shouldReuseChatActionByType(actionType) {
+			duplicate, duplicateErr = findDuplicateAgentAction(target.ID, actionType, "")
+			if duplicateErr != nil {
+				return nil, duplicateErr
+			}
 		}
 	}
 	if duplicate != nil {
@@ -2276,9 +2491,22 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 			}
 		}
 
-		if highValueReq := maybeBuildHighValueSurfaceProbeAction(target, req.Content); highValueReq != nil {
-			action, err := createActionFromChat(c, target, uid, ownerKey, *highValueReq)
+		seenHighValueActionIDs := map[uint]bool{}
+		for _, highValueReq := range maybeBuildHighValueSurfaceProbeActions(target, req.Content) {
+			highValueReq.InputJSON = mergeChatActionInput(highValueReq.InputJSON, map[string]interface{}{
+				"chat_session_id": session.ID,
+				"user_message_id": userMessage.ID,
+				"chat_reason":     "High-impact hunting mode selected this endpoint as part of the controlled baseline hunting loop.",
+				"owner_key":       ownerKey,
+			})
+			action, err := createActionFromChat(c, target, uid, ownerKey, highValueReq)
 			if err == nil && action != nil {
+				if action.ID > 0 && seenHighValueActionIDs[action.ID] {
+					continue
+				}
+				if action.ID > 0 {
+					seenHighValueActionIDs[action.ID] = true
+				}
 				createdActions = append(createdActions, *action)
 			}
 		}
