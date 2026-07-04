@@ -3374,6 +3374,47 @@ func buildSkillExecutionText(skillExecution map[string]interface{}) string {
 		lines = append(lines, "  Next: use observations to choose class-specific controlled validation skills for authorized exploitation workflows.")
 	}
 
+	if httpRaw, ok := skillExecution["http_evidence_analysis"]; ok && httpRaw != nil {
+		if httpOutput, ok := httpRaw.(map[string]interface{}); ok {
+			status := strings.TrimSpace(fmt.Sprint(httpOutput["status"]))
+			runCount := strings.TrimSpace(fmt.Sprint(httpOutput["run_count"]))
+			resultCount := strings.TrimSpace(fmt.Sprint(httpOutput["result_count"]))
+			if status == "" || status == "<nil>" {
+				status = "completed"
+			}
+			if runCount == "" || runCount == "<nil>" {
+				runCount = "0"
+			}
+			if resultCount == "" || resultCount == "<nil>" {
+				resultCount = "0"
+			}
+
+			lines = append(lines, fmt.Sprintf("- HTTP Evidence Analysis: status=%s, runs=%s, controlled_results=%s", status, runCount, resultCount))
+
+			if runsRaw, ok := httpOutput["runs"].([]map[string]interface{}); ok && len(runsRaw) > 0 {
+				run := runsRaw[0]
+				observationCount := strings.TrimSpace(fmt.Sprint(run["observation_count"]))
+				memoryItemID := strings.TrimSpace(fmt.Sprint(run["memory_item_id"]))
+				memoryIngested := strings.TrimSpace(fmt.Sprint(run["memory_ingested"]))
+				if observationCount == "" || observationCount == "<nil>" {
+					observationCount = "0"
+				}
+				lines = append(lines, fmt.Sprintf("  Observations: %s", observationCount))
+				if memoryItemID != "" && memoryItemID != "<nil>" && memoryItemID != "0" {
+					lines = append(lines, fmt.Sprintf("  Memory: ingested=%s memory_item_id=%s", memoryIngested, memoryItemID))
+				}
+			}
+
+			if resultCount == "0" {
+				lines = append(lines, "  Learned: no controlled runtime HTTP evidence was available for this target at execution time.")
+				lines = append(lines, "  Next: run controlled baseline probes before relying on HTTP evidence analysis.")
+			} else {
+				lines = append(lines, "  Learned: controlled runtime evidence has been analyzed for follow-up authorized validation decisions.")
+				lines = append(lines, "  Next: use evidence observations to avoid overclaiming blocked/inconclusive results and select class-specific validation.")
+			}
+		}
+	}
+
 	return strings.Join(lines, "\n")
 }
 

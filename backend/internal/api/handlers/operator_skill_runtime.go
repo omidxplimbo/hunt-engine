@@ -11,7 +11,10 @@ import (
 	"gorm.io/gorm"
 )
 
-const parameterInventorySkillSlug = "parameter_inventory"
+const (
+	parameterInventorySkillSlug   = "parameter_inventory"
+	httpEvidenceAnalysisSkillSlug = "http_evidence_analysis"
+)
 
 type parameterInventoryCandidate struct {
 	Name       string
@@ -310,6 +313,381 @@ func persistParameterInventorySkillMemory(uid uint, ownerKey string, target *mod
 	return row.ID, wasCreated, nil
 }
 
+func httpEvidenceObservationSeverity(result models.ControlledTestResult) string {
+	hint := strings.ToLower(strings.TrimSpace(result.SeverityHint))
+	switch hint {
+	case models.FindingSeverityCritical, models.FindingSeverityHigh, models.FindingSeverityMedium, models.FindingSeverityLow, models.FindingSeverityInfo:
+		return hint
+	}
+
+	switch result.Status {
+	case models.ControlledTestResultStatusVulnerable:
+		return models.FindingSeverityHigh
+	case models.ControlledTestResultStatusPassed:
+		return models.FindingSeverityInfo
+	case models.ControlledTestResultStatusBlocked, models.ControlledTestResultStatusInconclusive, models.ControlledTestResultStatusNeedsManualReview:
+		return models.FindingSeverityInfo
+	case models.ControlledTestResultStatusFailed:
+		return models.FindingSeverityLow
+	default:
+		return models.FindingSeverityInfo
+	}
+}
+
+func httpEvidenceObservationConfidence(result models.ControlledTestResult) int {
+	switch result.Status {
+	case models.ControlledTestResultStatusVulnerable:
+		return 90
+	case models.ControlledTestResultStatusPassed:
+		return 75
+	case models.ControlledTestResultStatusNeedsManualReview:
+		return 65
+	case models.ControlledTestResultStatusFailed:
+		return 60
+	case models.ControlledTestResultStatusInconclusive:
+		return 50
+	case models.ControlledTestResultStatusBlocked:
+		return 45
+	default:
+		return 50
+	}
+}
+
+func httpEvidenceLearning(result models.ControlledTestResult) string {
+	status := strings.ToLower(strings.TrimSpace(result.Status))
+	switch status {
+	case models.ControlledTestResultStatusVulnerable:
+		return "Controlled runtime produced vulnerability-marked evidence. Promote only if evidence quality, scope, and impact are confirmed."
+	case models.ControlledTestResultStatusPassed:
+		return "Controlled runtime produced a positive baseline. This can support follow-up class-specific validation when endpoint behavior and parameters justify it."
+	case models.ControlledTestResultStatusBlocked:
+		return "Controlled runtime was blocked/challenged. Treat this as environmental or access-control evidence, not proof of a vulnerability."
+	case models.ControlledTestResultStatusInconclusive:
+		return "Controlled runtime evidence is inconclusive. Avoid claiming impact; choose better context, authenticated state, browser-aware validation, or alternate endpoints."
+	case models.ControlledTestResultStatusNeedsManualReview:
+		return "Controlled runtime needs manual review before escalation. Human/operator inspection should decide whether controlled validation is warranted."
+	case models.ControlledTestResultStatusFailed:
+		return "Controlled runtime failed. This is useful failure evidence and should prevent blind retesting without changing the method or context."
+	default:
+		return "Controlled runtime evidence should be used as context for the next authorized validation decision."
+	}
+}
+
+func httpEvidenceAnalysisMemoryContent(results []models.ControlledTestResult, statusCounts map[string]int) (string, string) {
+	lines := []string{
+		"Operator skill: http_evidence_analysis",
+		fmt.Sprintf("Controlled runtime results sampled: %d", len(results)),
+	}
+
+	if len(results) == 0 {
+		lines = append(lines,
+			"Learning: No controlled runtime evidence was available for this target at execution time.",
+			"Operator hint: run low-risk baseline probes or approved controlled validations before relying on HTTP evidence analysis.",
+		)
+		return strings.Join(lines, "\n"), "HTTP evidence analysis found no controlled runtime results for this target."
+	}
+
+	statusKeys := make([]string, 0, len(statusCounts))
+	for key := range statusCounts {
+		statusKeys = append(statusKeys, key)
+	}
+	sort.Strings(statusKeys)
+
+	lines = append(lines, "Status counts:")
+	countParts := make([]string, 0, len(statusKeys))
+	for _, key := range statusKeys {
+		lines = append(lines, fmt.Sprintf("- %s: %d", key, statusCounts[key]))
+		countParts = append(countParts, fmt.Sprintf("%s=%d", key, statusCounts[key]))
+	}
+
+	lines = append(lines, "Recent evidence highlights:")
+	limit := len(results)
+	if limit > 10 {
+		limit = 10
+	}
+	for i := 0; i < limit; i++ {
+		result := results[i]
+		lines = append(lines, fmt.Sprintf(
+			"- result_id=%d status=%s runtime=%s method=%s url=%s learning=%s",
+			result.ID,
+			result.Status,
+			result.RuntimeType,
+			result.Method,
+			result.URL,
+			httpEvidenceLearning(result),
+		))
+	}
+
+	lines = append(lines,
+		"Next operator hint: use controlled HTTP evidence to avoid overclaiming blocked/inconclusive responses and to choose the next authorized validation skill based on endpoint behavior.",
+	)
+
+	return strings.Join(lines, "\n"), "HTTP evidence analysis summarized controlled runtime status counts: " + strings.Join(countParts, ", ")
+}
+
+func persistHTTPEvidenceAnalysisSkillMemory(uid uint, ownerKey string, target *models.Target, run models.OperatorSkillRun, results []models.ControlledTestResult, statusCounts map[string]int, observationIDs []uint) (uint, bool, error) {
+	if target == nil {
+		return 0, false, nil
+	}
+
+	content, summary := httpEvidenceAnalysisMemoryContent(results, statusCounts)
+
+	importance := 50
+	confidence := 65
+	if len(results) > 0 {
+		importance = 70
+		confidence = 75
+	}
+	if statusCounts[models.ControlledTestResultStatusVulnerable] > 0 || statusCounts[models.ControlledTestResultStatusNeedsManualReview] > 0 {
+		importance = 85
+		confidence = 80
+	}
+
+	sourceID := run.ID
+	item := models.TargetMemoryItem{
+		UserID:     uid,
+		OwnerKey:   ownerKey,
+		TargetID:   target.ID,
+		SourceType: models.TargetMemorySourceEvidence,
+		SourceID:   &sourceID,
+		MemoryType: models.TargetMemoryTypeTestResult,
+		Title:      "Operator HTTP evidence analysis: " + target.RootDomain,
+		Content:    content,
+		Summary:    summary,
+		Tags: memoryJSON([]string{
+			"operator_skill",
+			"http_evidence_analysis",
+			"controlled_runtime",
+			"http_probe",
+			"evidence_analysis",
+			"authorized_validation",
+			"rag",
+			"operator",
+		}, "[]"),
+		Importance: importance,
+		Confidence: confidence,
+		SourceHash: memoryHash(
+			"operator_skill_http_evidence_analysis_latest",
+			fmt.Sprint(target.ID),
+			ownerKey,
+		),
+		Metadata: memoryJSON(map[string]interface{}{
+			"ingest_version":     "operator-skill-http-evidence-analysis-memory-v1",
+			"skill":              httpEvidenceAnalysisSkillSlug,
+			"skill_run_id":       run.ID,
+			"chat_session_id":    run.ChatSessionID,
+			"chat_message_id":    run.ChatMessageID,
+			"result_count":       len(results),
+			"status_counts":      statusCounts,
+			"observation_count":  len(observationIDs),
+			"observation_ids":    observationIDs,
+			"operator_ready":     true,
+			"next_operator_hint": "Use controlled runtime evidence memory to choose authorized validation paths and avoid overclaiming blocked/inconclusive evidence.",
+		}, "{}"),
+	}
+
+	row, wasCreated, err := upsertTargetMemoryItem(item)
+	if err != nil {
+		return 0, false, err
+	}
+
+	return row.ID, wasCreated, nil
+}
+
+func executeHTTPEvidenceAnalysisSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
+	if target == nil || len(selectedSkillRunIDs) == 0 {
+		return nil, nil
+	}
+
+	runs := make([]models.OperatorSkillRun, 0)
+	if err := db.
+		Where("id IN ? AND target_id = ? AND user_id = ? AND skill_slug = ?", selectedSkillRunIDs, target.ID, uid, httpEvidenceAnalysisSkillSlug).
+		Order("id ASC").
+		Find(&runs).Error; err != nil {
+		return nil, err
+	}
+
+	if len(runs) == 0 {
+		return nil, nil
+	}
+
+	results := make([]models.ControlledTestResult, 0)
+	if err := db.
+		Where("target_id = ? AND user_id = ?", target.ID, uid).
+		Order("created_at DESC, id DESC").
+		Limit(100).
+		Find(&results).Error; err != nil {
+		return nil, err
+	}
+
+	statusCounts := map[string]int{}
+	for _, result := range results {
+		status := strings.TrimSpace(result.Status)
+		if status == "" {
+			status = "unknown"
+		}
+		statusCounts[status]++
+	}
+
+	runSummaries := make([]map[string]interface{}, 0, len(runs))
+	now := time.Now().UTC()
+
+	for _, run := range runs {
+		startedAt := now
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":     models.OperatorSkillRunStatusRunning,
+				"started_at": &startedAt,
+				"updated_at": now,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		createdObservationIDs := make([]uint, 0)
+		limit := len(results)
+		if limit > 30 {
+			limit = 30
+		}
+
+		for i := 0; i < limit; i++ {
+			result := results[i]
+			severity := httpEvidenceObservationSeverity(result)
+			confidence := httpEvidenceObservationConfidence(result)
+			learning := httpEvidenceLearning(result)
+
+			titleURL := result.URL
+			if titleURL == "" {
+				titleURL = fmt.Sprintf("controlled-result-%d", result.ID)
+			}
+
+			observationType := models.OperatorSkillObservationTypeEvidence
+			if result.Status == models.ControlledTestResultStatusFailed || result.Status == models.ControlledTestResultStatusBlocked || result.Status == models.ControlledTestResultStatusInconclusive {
+				observationType = models.OperatorSkillObservationTypeLearning
+			}
+
+			observation := models.OperatorSkillObservation{
+				UserID:          uid,
+				OwnerKey:        ownerKey,
+				TargetID:        target.ID,
+				SkillRunID:      run.ID,
+				SkillSlug:       httpEvidenceAnalysisSkillSlug,
+				ObservationType: observationType,
+				Title:           fmt.Sprintf("HTTP evidence result: %s %s", strings.ToUpper(result.Status), titleURL),
+				Summary:         fmt.Sprintf("Controlled runtime result %d produced status=%s runtime=%s severity_hint=%s confidence=%s.", result.ID, result.Status, result.RuntimeType, result.SeverityHint, result.Confidence),
+				Content:         learning,
+				URL:             result.URL,
+				BugClass:        result.BugType,
+				Confidence:      confidence,
+				Severity:        severity,
+				Status:          result.Status,
+				EvidenceJSON: chatJSON(map[string]interface{}{
+					"controlled_result_id": result.ID,
+					"controlled_run_id":    result.RunID,
+					"agent_action_id":      result.AgentActionID,
+					"runtime_type":         result.RuntimeType,
+					"bug_type":             result.BugType,
+					"check_key":            result.CheckKey,
+					"url":                  result.URL,
+					"method":               result.Method,
+					"status":               result.Status,
+					"confidence":           result.Confidence,
+					"severity_hint":        result.SeverityHint,
+					"learning":             learning,
+					"request_json":         result.RequestJSON,
+					"response_json":        result.ResponseJSON,
+					"evidence_json":        result.EvidenceJSON,
+					"matcher_json":         result.MatcherJSON,
+				}),
+				Metadata: chatJSON(map[string]interface{}{
+					"created_by":          "http-evidence-analysis-skill-v1",
+					"operator_skill_run":  run.ID,
+					"target_id":           target.ID,
+					"observation_version": "http-evidence-analysis-observation-v1",
+				}),
+			}
+
+			if observation.BugClass == "" {
+				observation.BugClass = "http_evidence"
+			}
+
+			if err := db.Create(&observation).Error; err != nil {
+				return nil, err
+			}
+			createdObservationIDs = append(createdObservationIDs, observation.ID)
+		}
+
+		memoryItemID, memoryWasCreated, memoryErr := persistHTTPEvidenceAnalysisSkillMemory(uid, ownerKey, target, run, results, statusCounts, createdObservationIDs)
+
+		status := models.OperatorSkillRunStatusCompleted
+		resultSummary := fmt.Sprintf("HTTP evidence analysis completed: %d controlled runtime result(s) analyzed and %d observation(s) created.", len(results), len(createdObservationIDs))
+		nextStep := "Use HTTP evidence observations to choose the next authorized validation skill. Do not promote blocked or inconclusive evidence as vulnerability proof."
+
+		output := map[string]interface{}{
+			"status":             status,
+			"skill":              httpEvidenceAnalysisSkillSlug,
+			"result_count":       len(results),
+			"status_counts":      statusCounts,
+			"observation_count":  len(createdObservationIDs),
+			"observation_ids":    createdObservationIDs,
+			"runtime_version":    "http-evidence-analysis-skill-runtime-v1",
+			"memory_ingested":    memoryErr == nil && memoryItemID > 0,
+			"memory_item_id":     memoryItemID,
+			"memory_was_created": memoryWasCreated,
+			"next_recommended_skills": []string{
+				"xss_reflection",
+				"open_redirect",
+				"path_traversal_baseline",
+				"auth_context_needed",
+			},
+		}
+
+		if memoryErr != nil {
+			output["memory_ingest_error"] = memoryErr.Error()
+		}
+
+		completedAt := time.Now().UTC()
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":         status,
+				"output_json":    chatJSON(output),
+				"result_summary": resultSummary,
+				"next_step":      nextStep,
+				"completed_at":   &completedAt,
+				"updated_at":     completedAt,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		runSummaries = append(runSummaries, map[string]interface{}{
+			"skill_run_id":       run.ID,
+			"status":             status,
+			"result_count":       len(results),
+			"status_counts":      statusCounts,
+			"observation_count":  len(createdObservationIDs),
+			"observation_ids":    createdObservationIDs,
+			"memory_ingested":    memoryErr == nil && memoryItemID > 0,
+			"memory_item_id":     memoryItemID,
+			"memory_was_created": memoryWasCreated,
+			"memory_ingest_error": func() string {
+				if memoryErr != nil {
+					return memoryErr.Error()
+				}
+				return ""
+			}(),
+		})
+	}
+
+	return map[string]interface{}{
+		"status":        "completed",
+		"runs":          runSummaries,
+		"run_count":     len(runSummaries),
+		"result_count":  len(results),
+		"status_counts": statusCounts,
+	}, nil
+}
+
 func executeSelectedOperatorSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
 	output := map[string]interface{}{}
 
@@ -352,9 +730,20 @@ func executeSelectedOperatorSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey st
 		}
 	}
 
+	if runIDs := selectedBySlug[httpEvidenceAnalysisSkillSlug]; len(runIDs) > 0 {
+		httpEvidenceOutput, err := executeHTTPEvidenceAnalysisSkillRunsFromChat(db, uid, ownerKey, target, runIDs)
+		if err != nil {
+			output["http_evidence_analysis_error"] = err.Error()
+			blockedCount += len(runIDs)
+		} else if httpEvidenceOutput != nil {
+			output["http_evidence_analysis"] = httpEvidenceOutput
+			executedCount += len(runIDs)
+		}
+	}
+
 	notImplemented := make([]map[string]interface{}, 0)
 	for slug, runIDs := range selectedBySlug {
-		if slug == parameterInventorySkillSlug {
+		if slug == parameterInventorySkillSlug || slug == httpEvidenceAnalysisSkillSlug {
 			continue
 		}
 
