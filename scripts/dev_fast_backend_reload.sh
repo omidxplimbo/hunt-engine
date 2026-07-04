@@ -43,6 +43,24 @@ $COMPOSE logs --tail=80 backend | grep -Ei 'panic|fatal|undefined' && {
 } || true
 
 echo "[check] stage api"
-curl -k -i https://stage.mustache-security.ir/api/me | sed -n '1,35p'
+API_OK=0
+for attempt in 1 2 3 4 5; do
+  HTTP_CODE="$(curl -k -s -o /tmp/hunt_fast_backend_api_me.out -w "%{http_code}" https://stage.mustache-security.ir/api/me || true)"
+  cat /tmp/hunt_fast_backend_api_me.out || true
+  echo
+  echo "HTTP_CODE=$HTTP_CODE attempt=$attempt"
+
+  if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "200" ]; then
+    API_OK=1
+    break
+  fi
+
+  sleep 5
+done
+
+if [ "$API_OK" != "1" ]; then
+  echo "[fail] stage API did not become healthy after backend restart"
+  exit 1
+fi
 
 echo "[ok] fast backend reload complete"
