@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -478,6 +480,70 @@ func buildAgentChatMemoryContext(targetID uint, ownerKey string) map[string]inte
 	}
 }
 
+func chatWantsPentestHypothesisMode(text string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	if t == "" {
+		return false
+	}
+	keywords := []string{
+		"real bug", "real bugs", "critical bug", "critical bugs",
+		"high impact", "high-value", "high value", "reportable",
+		"pentest", "hunt everything", "all bug classes",
+		"sqli", "sql injection", "command injection", "rce", "ssrf",
+		"idor", "xss", "crlf", "cache poisoning", "cache deception",
+		"auth bypass", "path traversal", "file upload",
+		"باگ واقعی", "باگ های واقعی", "باگ‌های واقعی",
+		"کریتیکال", "حیاتی", "مهم", "همه کلاس", "همه باگ", "نفوذ",
+	}
+	for _, keyword := range keywords {
+		if strings.Contains(t, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func replaceLowValueActionsForHypothesisMode(content string, actions []plannedChatAction, plan *operator.Plan) []plannedChatAction {
+	if !chatWantsPentestHypothesisMode(content) && (plan == nil || len(plan.Hypotheses) == 0) {
+		return actions
+	}
+
+	filtered := make([]plannedChatAction, 0, len(actions))
+	for _, action := range actions {
+		if normalizeAgentActionType(action.Request.ActionType) == models.AgentActionTypeRunSafeBugTests {
+			continue
+		}
+		filtered = append(filtered, action)
+	}
+
+	strategy := plannedChatAction{
+		Request: proposeAgentActionRequest{
+			ActionType:  models.AgentActionTypeGeneratePayload,
+			Title:       "Build controlled validation strategy for high-impact hypotheses",
+			Description: "Prepare a policy-aware controlled validation strategy for high-impact bug hypotheses across injection, SSRF, access-control, cache, XSS/CRLF, and file/path classes. This is plan-only; payload execution remains disabled until explicit approval and controlled runtime support.",
+			RiskLevel:   models.AgentActionRiskMedium,
+			SafetyLevel: 2,
+			TestLevel:   2,
+			InputJSON: map[string]interface{}{
+				"source":                  "pentest_hypothesis_agent_v1",
+				"execution_enabled":       false,
+				"payload_execution":       false,
+				"requires_policy":         true,
+				"requires_approval":       true,
+				"hypothesis_driven":       true,
+				"objective":               "turn high-impact hypotheses into controlled validation plans",
+				"blocked_from_autopilot":  true,
+				"validation_only_by_plan": true,
+			},
+			RequestedByAgent: boolPtr(true),
+			RequiresApproval: boolPtr(true),
+		},
+		Reason: "Critical/high-impact hunting mode should produce controlled validation strategy, not another low-value safe bug test run.",
+	}
+
+	return append([]plannedChatAction{strategy}, filtered...)
+}
+
 func convertOperatorPlanActions(plan *operator.Plan) []plannedChatAction {
 	if plan == nil {
 		return nil
@@ -511,6 +577,24 @@ func convertOperatorPlanActions(plan *operator.Plan) []plannedChatAction {
 	return out
 }
 
+func firstNonEmptyStrings(items []string, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	out := make([]string, 0, limit)
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		out = append(out, item)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
 func buildOperatorAssistantText(plan *operator.Plan) string {
 	if plan == nil {
 		return ""
@@ -536,6 +620,41 @@ func buildOperatorAssistantText(plan *operator.Plan) string {
 			}
 		}
 	}
+	if len(plan.Hypotheses) > 0 {
+		parts = append(parts, "Pentest hypotheses:")
+		for _, h := range plan.Hypotheses {
+			title := strings.TrimSpace(h.Title)
+			if title == "" {
+				title = strings.TrimSpace(h.BugClass)
+			}
+			if title == "" {
+				title = "Untitled hypothesis"
+			}
+
+			line := "- " + title
+			if strings.TrimSpace(h.BugClass) != "" {
+				line += " [" + strings.TrimSpace(h.BugClass) + "]"
+			}
+			if strings.TrimSpace(h.ImpactPotential) != "" {
+				line += " impact=" + strings.TrimSpace(h.ImpactPotential)
+			}
+			if strings.TrimSpace(h.Confidence) != "" {
+				line += " confidence=" + strings.TrimSpace(h.Confidence)
+			}
+			parts = append(parts, line)
+
+			if strings.TrimSpace(h.WhyThisMightBeReal) != "" {
+				parts = append(parts, "  why: "+strings.TrimSpace(h.WhyThisMightBeReal))
+			}
+			if strings.TrimSpace(h.SafeNextTest) != "" {
+				parts = append(parts, "  next: "+strings.TrimSpace(h.SafeNextTest))
+			}
+			if len(h.MissingEvidence) > 0 {
+				parts = append(parts, "  missing: "+strings.Join(firstNonEmptyStrings(h.MissingEvidence, 4), ", "))
+			}
+		}
+	}
+
 	if len(plan.Actions) > 0 {
 		parts = append(parts, fmt.Sprintf("I proposed %d approval-gated operator action(s). Review and approve before dispatch.", len(plan.Actions)))
 	}
@@ -659,7 +778,8 @@ func actionReusedForCurrentChat(action models.AgentAction, sessionID uint, messa
 
 func shouldReuseChatActionByType(actionType string) bool {
 	switch normalizeAgentActionType(actionType) {
-	case models.AgentActionTypeReviewBugTestResults,
+	case models.AgentActionTypeRunCrawling,
+		models.AgentActionTypeReviewBugTestResults,
 		models.AgentActionTypeInspectBugPatterns,
 		models.AgentActionTypeInspectBugPayloads,
 		models.AgentActionTypePromoteBugTestResults,
@@ -752,9 +872,14 @@ func isChatAutopilotAllowedAction(action models.AgentAction, policy chatAutopilo
 		return false, "level 3 actions require explicit approval"
 	}
 
-	if normalizeAgentActionType(action.ActionType) != models.AgentActionTypeReviewEndpoint {
-		return false, "autopilot v1 only supports review_endpoint"
+	actionType := normalizeAgentActionType(action.ActionType)
+	switch actionType {
+	case models.AgentActionTypeRunCrawling, models.AgentActionTypeRunJSIntelligence, models.AgentActionTypeRunSafeBugTests, models.AgentActionTypeReviewEndpoint:
+		// supported below
+	default:
+		return false, "autopilot currently supports run_crawling, run_js_intelligence, run_safe_bug_tests, and review_endpoint"
 	}
+
 	if action.Status == models.AgentActionStatusBlockedByPolicy || action.PolicyStatus == models.AgentActionPolicyStatusBlocked {
 		return false, "action is blocked by policy"
 	}
@@ -762,12 +887,14 @@ func isChatAutopilotAllowedAction(action models.AgentAction, policy chatAutopilo
 		return false, "high/critical risk requires explicit approval"
 	}
 	if action.SafetyLevel > 1 || action.TestLevel > 1 || action.AutonomyLevel > 1 {
-		return false, "action level exceeds autopilot v1 limits"
+		return false, "action level exceeds autopilot limits"
 	}
 
-	input := chatActionInputMap(action.InputJSON)
-	if strings.TrimSpace(controlledCleanString(input["url"])) == "" {
-		return false, "review_endpoint action has no input_json.url"
+	if actionType == models.AgentActionTypeReviewEndpoint {
+		input := chatActionInputMap(action.InputJSON)
+		if strings.TrimSpace(controlledCleanString(input["url"])) == "" {
+			return false, "review_endpoint action has no input_json.url"
+		}
 	}
 
 	return true, ""
@@ -800,6 +927,295 @@ func updateChatActionOutput(action *models.AgentAction, output map[string]interf
 
 	_ = database.DB.Where("id = ? AND target_id = ? AND owner_key = ?", action.ID, action.TargetID, action.OwnerKey).First(action).Error
 	return nil
+}
+
+func uintFromInterface(value interface{}) uint {
+	switch v := value.(type) {
+	case uint:
+		return v
+	case int:
+		if v > 0 {
+			return uint(v)
+		}
+	case int64:
+		if v > 0 {
+			return uint(v)
+		}
+	case float64:
+		if v > 0 {
+			return uint(v)
+		}
+	case json.Number:
+		i, _ := v.Int64()
+		if i > 0 {
+			return uint(i)
+		}
+	case string:
+		n, err := strconv.ParseUint(strings.TrimSpace(v), 10, 64)
+		if err == nil && n > 0 {
+			return uint(n)
+		}
+	}
+	return 0
+}
+
+func stringSliceFromInterface(value interface{}) []string {
+	out := make([]string, 0)
+	switch v := value.(type) {
+	case []string:
+		out = append(out, v...)
+	case []interface{}:
+		for _, item := range v {
+			text := strings.TrimSpace(fmt.Sprint(item))
+			if text != "" {
+				out = append(out, text)
+			}
+		}
+	case string:
+		if strings.TrimSpace(v) != "" {
+			out = append(out, strings.TrimSpace(v))
+		}
+	}
+	return out
+}
+
+func headerValuesFromMap(headers map[string]interface{}, name string) []string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return nil
+	}
+	for key, value := range headers {
+		if strings.ToLower(strings.TrimSpace(key)) == name {
+			return stringSliceFromInterface(value)
+		}
+	}
+	return nil
+}
+
+func hasHeader(headers map[string]interface{}, name string) bool {
+	return len(headerValuesFromMap(headers, name)) > 0
+}
+
+func joinedHeader(headers map[string]interface{}, name string) string {
+	return strings.ToLower(strings.Join(headerValuesFromMap(headers, name), " "))
+}
+
+func analyzeSecurityHeadersFromRuntime(runtimeResult *models.ControlledTestResult) map[string]interface{} {
+	analysis := map[string]interface{}{
+		"analyzer":  "security-headers-analyzer-v1",
+		"available": false,
+	}
+
+	if runtimeResult == nil {
+		analysis["reason"] = "runtime result is missing"
+		return analysis
+	}
+
+	response := map[string]interface{}{}
+	if len(runtimeResult.ResponseJSON) > 0 {
+		_ = json.Unmarshal(runtimeResult.ResponseJSON, &response)
+	}
+
+	headers := map[string]interface{}{}
+	if raw, ok := response["headers"].(map[string]interface{}); ok {
+		headers = raw
+	}
+	if len(headers) == 0 {
+		analysis["reason"] = "runtime response headers are missing"
+		return analysis
+	}
+
+	missing := make([]string, 0)
+	weak := make([]string, 0)
+	present := make([]string, 0)
+
+	if hasHeader(headers, "strict-transport-security") {
+		present = append(present, "strict-transport-security")
+		hsts := joinedHeader(headers, "strict-transport-security")
+		if !strings.Contains(hsts, "max-age=") {
+			weak = append(weak, "strict-transport-security:missing_max_age")
+		}
+	} else if strings.HasPrefix(strings.ToLower(runtimeResult.URL), "https://") {
+		missing = append(missing, "strict-transport-security")
+	}
+
+	csp := joinedHeader(headers, "content-security-policy")
+	if csp != "" {
+		present = append(present, "content-security-policy")
+		if strings.Contains(csp, "unsafe-inline") {
+			weak = append(weak, "content-security-policy:unsafe-inline")
+		}
+		if strings.Contains(csp, "unsafe-eval") {
+			weak = append(weak, "content-security-policy:unsafe-eval")
+		}
+	} else {
+		missing = append(missing, "content-security-policy")
+	}
+
+	xfo := joinedHeader(headers, "x-frame-options")
+	hasFrameAncestors := strings.Contains(csp, "frame-ancestors")
+	if xfo != "" {
+		present = append(present, "x-frame-options")
+	}
+	if xfo == "" && !hasFrameAncestors {
+		missing = append(missing, "x-frame-options-or-csp-frame-ancestors")
+	}
+
+	xcto := joinedHeader(headers, "x-content-type-options")
+	if xcto != "" {
+		present = append(present, "x-content-type-options")
+		if !strings.Contains(xcto, "nosniff") {
+			weak = append(weak, "x-content-type-options:not_nosniff")
+		}
+	} else {
+		missing = append(missing, "x-content-type-options")
+	}
+
+	if hasHeader(headers, "referrer-policy") {
+		present = append(present, "referrer-policy")
+	} else {
+		missing = append(missing, "referrer-policy")
+	}
+
+	if hasHeader(headers, "permissions-policy") {
+		present = append(present, "permissions-policy")
+	} else {
+		missing = append(missing, "permissions-policy")
+	}
+
+	status := "passed"
+	severity := "info"
+	confidence := "medium"
+	if len(missing) > 0 || len(weak) > 0 {
+		status = "validated"
+		severity = "low"
+		confidence = "medium"
+	}
+
+	analysis["available"] = true
+	analysis["status"] = status
+	analysis["severity_hint"] = severity
+	analysis["confidence"] = confidence
+	analysis["present"] = present
+	analysis["missing"] = missing
+	analysis["weak"] = weak
+	analysis["status_code"] = response["status_code"]
+	analysis["final_url"] = response["final_url"]
+	analysis["headers_seen"] = len(headers)
+	analysis["operator_note"] = "security headers were analyzed from controlled runtime response headers"
+
+	return analysis
+}
+
+func linkBugTestResultToControlledRuntime(targetID uint, bugResultID uint, runID uint, controlledResultID uint, output map[string]interface{}, runtimeResult *models.ControlledTestResult) map[string]interface{} {
+	link := map[string]interface{}{
+		"attempted":                 true,
+		"bug_test_result_id":        bugResultID,
+		"controlled_test_run_id":    runID,
+		"controlled_test_result_id": controlledResultID,
+	}
+
+	var bugResult models.BugTestResult
+	if err := database.DB.Where("id = ? AND target_id = ?", bugResultID, targetID).First(&bugResult).Error; err != nil {
+		link["linked"] = false
+		link["error"] = err.Error()
+		return link
+	}
+
+	evidence := map[string]interface{}{}
+	if len(bugResult.EvidenceJSON) > 0 {
+		_ = json.Unmarshal(bugResult.EvidenceJSON, &evidence)
+	}
+
+	resultStatus := ""
+	resultConfidence := ""
+	resultSeverity := ""
+	if runtimeResult != nil {
+		resultStatus = runtimeResult.Status
+		resultConfidence = runtimeResult.Confidence
+		resultSeverity = runtimeResult.SeverityHint
+	}
+
+	controlledValidation := map[string]interface{}{
+		"attempted":                 true,
+		"linked":                    true,
+		"controlled_test_run_id":    runID,
+		"controlled_test_result_id": controlledResultID,
+		"runtime_result_status":     resultStatus,
+		"runtime_confidence":        resultConfidence,
+		"runtime_severity_hint":     resultSeverity,
+		"status_code":               output["status_code"],
+		"final_url":                 output["final_url"],
+		"classification":            output["classification"],
+		"duration_ms":               output["duration_ms"],
+		"memory_ingested":           output["memory_ingested"],
+		"operator_note":             "controlled runtime evidence collected; candidate still requires bug-specific validation before promotion",
+		"updated_at":                time.Now().UTC().Format(time.RFC3339),
+	}
+
+	evidence["controlled_validation"] = controlledValidation
+
+	if bugResult.BugType == models.BugTypeSecurityHeaders {
+		securityHeaderAnalysis := analyzeSecurityHeadersFromRuntime(runtimeResult)
+		evidence["security_header_analysis"] = securityHeaderAnalysis
+		if available, _ := securityHeaderAnalysis["available"].(bool); available {
+			link["security_header_analysis"] = securityHeaderAnalysis
+		}
+	}
+
+	newStatus := bugResult.Status
+	if runtimeResult != nil {
+		switch runtimeResult.Status {
+		case models.ControlledTestResultStatusBlocked:
+			newStatus = models.BugTestResultStatusBlocked
+		case models.ControlledTestResultStatusInconclusive, models.ControlledTestResultStatusNeedsManualReview, models.ControlledTestResultStatusFailed:
+			newStatus = models.BugTestResultStatusInconclusive
+		default:
+			if newStatus == models.BugTestResultStatusCandidate || newStatus == models.BugTestResultStatusNeedsManualValidation {
+				newStatus = models.BugTestResultStatusNeedsManualValidation
+			}
+		}
+	}
+
+	updates := map[string]interface{}{
+		"evidence_json": bugTestJSON(evidence),
+		"status":        newStatus,
+	}
+
+	if sha, ok := evidence["security_header_analysis"].(map[string]interface{}); ok {
+		if available, _ := sha["available"].(bool); available {
+			if shaStatus := strings.TrimSpace(controlledCleanString(sha["status"])); shaStatus == "validated" {
+				updates["status"] = models.BugTestResultStatusValidated
+			} else if shaStatus == "passed" {
+				updates["status"] = models.BugTestResultStatusPassed
+			}
+			if c := strings.TrimSpace(controlledCleanString(sha["confidence"])); c != "" {
+				updates["confidence"] = c
+			}
+			if sev := strings.TrimSpace(controlledCleanString(sha["severity_hint"])); sev != "" {
+				updates["severity_hint"] = sev
+			}
+		}
+	}
+
+	if resultConfidence != "" && strings.EqualFold(bugResult.Confidence, "low") {
+		if _, alreadySet := updates["confidence"]; !alreadySet {
+			updates["confidence"] = resultConfidence
+		}
+	}
+
+	if err := database.DB.Model(&models.BugTestResult{}).
+		Where("id = ? AND target_id = ?", bugResult.ID, targetID).
+		Updates(updates).Error; err != nil {
+		link["linked"] = false
+		link["error"] = err.Error()
+		return link
+	}
+
+	link["linked"] = true
+	link["bug_test_status"] = newStatus
+	link["runtime_result_status"] = resultStatus
+	return link
 }
 
 func runAgentChatAutopilotForActions(c *fiber.Ctx, target *models.Target, uid uint, ownerKey string, actions []models.AgentAction) chatAutopilotResult {
@@ -867,7 +1283,7 @@ func runAgentChatAutopilotForActions(c *fiber.Ctx, target *models.Target, uid ui
 					"source":      "agent_chat_autopilot",
 					"mode":        result.Mode,
 					"policy":      result.PolicySource,
-					"reason":      "low-risk controlled endpoint review auto-approved by target policy",
+					"reason":      "low-risk controlled action auto-approved by target policy",
 					"action_type": action.ActionType,
 				},
 			})
@@ -883,6 +1299,186 @@ func runAgentChatAutopilotForActions(c *fiber.Ctx, target *models.Target, uid ui
 		}
 
 		preview := buildDispatchPreview(*target, action, false, "agent chat autopilot dispatch")
+
+		if normalizeAgentActionType(action.ActionType) == models.AgentActionTypeRunSafeBugTests {
+			preview := buildDispatchPreview(*target, action, false, "agent chat autopilot safe bug testing dispatch")
+
+			run, resultCount, runErr := CreateBugTestRunFromAgentAction(target, &action, uid)
+			if runErr != nil {
+				preview["execution_enabled"] = false
+				preview["executed"] = false
+				preview["hard_blocked"] = false
+				preview["reason"] = "agent chat autopilot failed to execute safe bug testing workflow"
+				preview["safe_bug_testing"] = map[string]interface{}{
+					"attempted": true,
+					"error":     runErr.Error(),
+				}
+
+				completedAt := time.Now().UTC()
+				if err := updateChatActionOutput(&action, preview, runErr.Error(), "", nil, &completedAt); err != nil {
+					result.Errors = append(result.Errors, fmt.Sprintf("update action %d safe bug autopilot failure failed: %v", action.ID, err))
+				}
+				result.Errors = append(result.Errors, fmt.Sprintf("safe bug testing action %d failed: %v", action.ID, runErr))
+				continue
+			}
+
+			runOutput := map[string]interface{}{}
+			if len(run.OutputJSON) > 0 {
+				_ = json.Unmarshal(run.OutputJSON, &runOutput)
+			}
+			activeTesting, _ := runOutput["active_testing"].(bool)
+			safeActiveHeaders, _ := runOutput["safe_active_security_headers_v1"].(bool)
+
+			preview["execution_enabled"] = true
+			preview["executed"] = true
+			preview["hard_blocked"] = false
+			preview["reason"] = "agent chat autopilot executed safe bug testing workflow"
+			preview["safe_bug_testing"] = map[string]interface{}{
+				"attempted":                       true,
+				"bug_test_run_id":                 run.ID,
+				"bug_test_status":                 run.Status,
+				"results_created":                 resultCount,
+				"active_testing":                  activeTesting,
+				"safe_active_security_headers_v1": safeActiveHeaders,
+				"manual_validation":               true,
+				"autopilot":                       true,
+			}
+			preview["autopilot"] = map[string]interface{}{
+				"enabled": true,
+				"mode":    result.Mode,
+				"source":  "agent_chat",
+			}
+
+			executedAt := time.Now().UTC()
+			completedAt := time.Now().UTC()
+			if err := updateChatActionOutput(&action, preview, "", models.AgentActionStatusExecuted, &executedAt, &completedAt); err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("update action %d safe bug autopilot output failed: %v", action.ID, err))
+				continue
+			}
+
+			result.ExecutedActions = append(result.ExecutedActions, action.ID)
+			result.Summary = append(result.Summary, map[string]interface{}{
+				"action_id":       action.ID,
+				"action_type":     action.ActionType,
+				"bug_test_run_id": run.ID,
+				"results_created": resultCount,
+				"status":          run.Status,
+				"active_testing":  activeTesting,
+				"memory_ingest":   "bug_test_results_available",
+			})
+
+			entityID := action.ID
+			_ = auditlog.Record(auditlog.Entry{
+				ActorUserID: &uid,
+				Action:      "target.agent_action.autopilot_execute",
+				EntityType:  "agent_action",
+				EntityID:    &entityID,
+				TargetID:    &target.ID,
+				IPAddress:   auditlog.ClientIP(c),
+				UserAgent:   auditlog.UserAgent(c),
+				Metadata: map[string]interface{}{
+					"source":          "agent_chat_autopilot",
+					"mode":            result.Mode,
+					"action_type":     action.ActionType,
+					"bug_test_run_id": run.ID,
+					"results_created": resultCount,
+				},
+			})
+
+			continue
+		}
+
+		if normalizeAgentActionType(action.ActionType) == models.AgentActionTypeRunCrawling || normalizeAgentActionType(action.ActionType) == models.AgentActionTypeRunJSIntelligence {
+			var bridgeOutput map[string]interface{}
+			if normalizeAgentActionType(action.ActionType) == models.AgentActionTypeRunCrawling {
+				bridgeOutput = dispatchRunCrawling(*target, action, uid)
+			} else {
+				bridgeOutput = dispatchRunJSIntelligence(*target, action, uid)
+			}
+			queued, _ := bridgeOutput["queued"].(bool)
+			executed, _ := bridgeOutput["executed"].(bool)
+			workflowSucceeded := queued || executed
+			bridgeReason, _ := bridgeOutput["reason"].(string)
+
+			preview["execution_enabled"] = workflowSucceeded
+			preview["executed"] = workflowSucceeded
+			preview["hard_blocked"] = false
+			if normalizeAgentActionType(action.ActionType) == models.AgentActionTypeRunCrawling {
+				preview["reason"] = "agent chat autopilot queued controlled crawling workflow"
+			} else {
+				preview["reason"] = "agent chat autopilot executed controlled JS intelligence workflow"
+			}
+			preview["bridge_output"] = bridgeOutput
+			preview["autopilot"] = map[string]interface{}{
+				"enabled": true,
+				"mode":    result.Mode,
+				"source":  "agent_chat",
+			}
+
+			errorMessage := ""
+			status := ""
+			var executedAt *time.Time
+			if workflowSucceeded {
+				executedAtTime := time.Now().UTC()
+				executedAt = &executedAtTime
+				status = models.AgentActionStatusExecuted
+			} else {
+				errorMessage = bridgeReason
+				if strings.TrimSpace(errorMessage) == "" {
+					errorMessage = "autopilot crawling dispatch did not queue a job"
+				}
+			}
+
+			completedAt := time.Now().UTC()
+			if err := updateChatActionOutput(&action, preview, errorMessage, status, executedAt, &completedAt); err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("update action %d crawling autopilot output failed: %v", action.ID, err))
+				continue
+			}
+
+			if workflowSucceeded {
+				result.ExecutedActions = append(result.ExecutedActions, action.ID)
+				if mem, _ := bridgeOutput["memory_ingested"].(bool); mem {
+					result.MemoryIngested = true
+				}
+				result.Summary = append(result.Summary, map[string]interface{}{
+					"action_id":      action.ID,
+					"action_type":    action.ActionType,
+					"runtime_status": bridgeOutput["runtime_status"],
+					"job_payload":    bridgeOutput["job_payload"],
+					"queue_name":     bridgeOutput["queue_name"],
+					"memory_ingest":  bridgeOutput["memory_ingested"],
+				})
+			} else {
+				result.SkippedActions = append(result.SkippedActions, map[string]interface{}{
+					"action_id":   action.ID,
+					"action_type": action.ActionType,
+					"reason":      errorMessage,
+				})
+			}
+
+			entityID := action.ID
+			_ = auditlog.Record(auditlog.Entry{
+				ActorUserID: &uid,
+				Action:      "target.agent_action.autopilot_execute",
+				EntityType:  "agent_action",
+				EntityID:    &entityID,
+				TargetID:    &target.ID,
+				IPAddress:   auditlog.ClientIP(c),
+				UserAgent:   auditlog.UserAgent(c),
+				Metadata: map[string]interface{}{
+					"source":      "agent_chat_autopilot",
+					"mode":        result.Mode,
+					"action_type": action.ActionType,
+					"queued":      queued,
+					"executed":    executed,
+					"succeeded":   workflowSucceeded,
+					"job_payload": bridgeOutput["job_payload"],
+				},
+			})
+
+			continue
+		}
+
 		run, runErr := CreateControlledTestRunFromAgentAction(target, &action, uid)
 		if runErr != nil {
 			preview["controlled_runtime"] = map[string]interface{}{
@@ -933,6 +1529,13 @@ func runAgentChatAutopilotForActions(c *fiber.Ctx, target *models.Target, uid ui
 			controlledRuntime["confidence"] = runtimeResult.Confidence
 			controlledRuntime["severity_hint"] = runtimeResult.SeverityHint
 			result.ControlledResults = append(result.ControlledResults, runtimeResult.ID)
+
+			input := chatActionInputMap(action.InputJSON)
+			bugResultID := uintFromInterface(input["bug_test_result_id"])
+			if bugResultID > 0 {
+				linkOutput := linkBugTestResultToControlledRuntime(target.ID, bugResultID, run.ID, runtimeResult.ID, output, runtimeResult)
+				controlledRuntime["bug_test_result_link"] = linkOutput
+			}
 		}
 		if mem, _ := output["memory_ingested"].(bool); mem {
 			result.MemoryIngested = true
@@ -995,6 +1598,608 @@ func runAgentChatAutopilotForActions(c *fiber.Ctx, target *models.Target, uid ui
 	return result
 }
 
+func highValueSurfaceBugClasses(rawURL string) ([]string, []string) {
+	classes := make([]string, 0)
+	reasons := make([]string, 0)
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return classes, reasons
+	}
+
+	path := strings.ToLower(parsed.Path)
+	query := parsed.Query()
+
+	add := func(cls string, reason string) {
+		for _, existing := range classes {
+			if existing == cls {
+				return
+			}
+		}
+		classes = append(classes, cls)
+		reasons = append(reasons, reason)
+	}
+
+	if strings.Contains(path, "api") || strings.Contains(path, "graphql") {
+		add("api_authorization", "API-like endpoint path")
+	}
+	if strings.Contains(path, "admin") || strings.Contains(path, "dashboard") || strings.Contains(path, "account") || strings.Contains(path, "profile") {
+		add("idor", "account/admin/profile-like endpoint path")
+	}
+	if strings.Contains(path, "upload") || strings.Contains(path, "import") || strings.Contains(path, "attachment") {
+		add("file_upload_abuse", "upload/import/attachment-like endpoint path")
+	}
+	if strings.Contains(path, "download") || strings.Contains(path, "export") || strings.Contains(path, "file") || strings.Contains(path, "template") {
+		add("path_traversal", "download/export/file/template-like endpoint path")
+	}
+	if strings.Contains(path, "callback") || strings.Contains(path, "webhook") || strings.Contains(path, "fetch") || strings.Contains(path, "proxy") {
+		add("ssrf", "callback/webhook/fetch/proxy-like endpoint path")
+	}
+
+	for key := range query {
+		k := strings.ToLower(strings.TrimSpace(key))
+		switch k {
+		case "id", "user", "userid", "user_id", "account", "account_id", "org", "org_id", "team", "team_id", "role", "uid":
+			add("idor", "identifier-like query parameter: "+k)
+		case "url", "uri", "target", "dest", "destination", "callback", "webhook", "next", "return", "redirect", "redirect_uri", "image", "avatar", "proxy", "fetch":
+			add("ssrf", "URL/redirect/fetch-like query parameter: "+k)
+			add("open_redirect_chain", "redirect-like query parameter: "+k)
+		case "file", "path", "filename", "template", "download", "export", "doc", "document", "attachment":
+			add("path_traversal", "file/path-like query parameter: "+k)
+		case "q", "query", "search", "filter", "sort", "where", "select":
+			add("sqli", "query/filter/search-like query parameter: "+k)
+			add("xss", "reflectable search/query parameter: "+k)
+		case "cmd", "command", "exec", "ping", "host", "domain":
+			add("command_injection", "command/host-like query parameter: "+k)
+		case "html", "message", "msg", "comment", "name", "title", "text", "content":
+			add("xss", "HTML/text-like query parameter: "+k)
+		case "header", "returnurl", "return_url":
+			add("crlf", "header/return-like query parameter: "+k)
+		}
+	}
+
+	return classes, reasons
+}
+
+const highValueHuntingLoopMaxCandidates = 3
+
+type highValueSurfaceCandidate struct {
+	URL     string
+	Score   int
+	Classes []string
+	Reasons []string
+	Source  string
+}
+
+func appendUniqueHighValueString(items []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return items
+	}
+	for _, item := range items {
+		if item == value {
+			return items
+		}
+	}
+	return append(items, value)
+}
+
+func highValueCandidateKey(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ""
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return strings.TrimRight(strings.ToLower(rawURL), "/")
+	}
+
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = strings.ToLower(parsed.Host)
+	parsed.Fragment = ""
+
+	if parsed.Scheme == "https" && strings.HasSuffix(parsed.Host, ":443") {
+		parsed.Host = strings.TrimSuffix(parsed.Host, ":443")
+	}
+	if parsed.Scheme == "http" && strings.HasSuffix(parsed.Host, ":80") {
+		parsed.Host = strings.TrimSuffix(parsed.Host, ":80")
+	}
+
+	if parsed.Path != "/" {
+		parsed.Path = strings.TrimRight(parsed.Path, "/")
+	}
+
+	return strings.TrimRight(strings.ToLower(parsed.String()), "/")
+}
+
+func candidateLooksRecentlyBad(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return false
+	}
+
+	badSignals := []string{
+		"tls mismatch",
+		"certificate",
+		"connection error",
+		"timeout",
+		"deadline exceeded",
+		"no such host",
+		"429",
+		"rate limit",
+		"cloudflare",
+		"waf",
+		"blocked",
+		"inconclusive",
+		"forbidden",
+		" 403",
+		"status_code:403",
+		"status code 403",
+		" 5xx",
+		"status_code:5",
+		"status code 5",
+	}
+
+	for _, signal := range badSignals {
+		if strings.Contains(text, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+func highValueMemoryMetadata(item models.TargetMemoryItem) map[string]interface{} {
+	out := map[string]interface{}{}
+	if len(item.Metadata) > 0 {
+		_ = json.Unmarshal(item.Metadata, &out)
+	}
+	return out
+}
+
+func highValueMemoryString(m map[string]interface{}, key string) string {
+	if m == nil {
+		return ""
+	}
+	value, ok := m[key]
+	if !ok || value == nil {
+		return ""
+	}
+	text := strings.TrimSpace(fmt.Sprint(value))
+	if text == "<nil>" {
+		return ""
+	}
+	return text
+}
+
+func highValueMemoryBool(m map[string]interface{}, key string) bool {
+	if m == nil {
+		return false
+	}
+	switch v := m[key].(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "true")
+	default:
+		return false
+	}
+}
+
+func highValueMemoryIndicatesAvoidRetesting(item models.TargetMemoryItem) (bool, string, string) {
+	metadata := highValueMemoryMetadata(item)
+
+	candidateURL := highValueMemoryString(metadata, "candidate_url")
+	analysisStatus := strings.ToLower(highValueMemoryString(metadata, "analysis_status"))
+	classification := strings.ToLower(highValueMemoryString(metadata, "classification"))
+	httpStatus := strings.ToLower(highValueMemoryString(metadata, "http_status"))
+	avoidReason := highValueMemoryString(metadata, "avoid_reason")
+
+	if highValueMemoryBool(metadata, "avoid_retesting") {
+		return true, candidateURL, avoidReason
+	}
+
+	if analysisStatus == "blocked" || analysisStatus == "inconclusive" || analysisStatus == "failed" {
+		return true, candidateURL, analysisStatus
+	}
+
+	if strings.Contains(classification, "blocked") ||
+		strings.Contains(classification, "challenged") ||
+		strings.Contains(classification, "cloudflare") ||
+		strings.Contains(classification, "waf") {
+		return true, candidateURL, classification
+	}
+
+	switch httpStatus {
+	case "401", "403", "429":
+		return true, candidateURL, "http_" + httpStatus
+	}
+
+	text := strings.ToLower(strings.Join([]string{
+		item.Title,
+		item.Summary,
+		item.Content,
+		string(item.Tags),
+		string(item.Metadata),
+	}, " "))
+	if candidateLooksRecentlyBad(text) {
+		return true, candidateURL, "text_bad_signal"
+	}
+
+	return false, candidateURL, ""
+}
+
+func badHighValueCandidateURLsFromMemory(targetID uint, candidates []highValueSurfaceCandidate) map[string]bool {
+	bad := map[string]bool{}
+	if targetID == 0 || len(candidates) == 0 {
+		return bad
+	}
+
+	candidateKeys := map[string]bool{}
+	for _, candidate := range candidates {
+		key := highValueCandidateKey(candidate.URL)
+		if key != "" {
+			candidateKeys[key] = true
+		}
+	}
+
+	items := make([]models.TargetMemoryItem, 0)
+	_ = database.DB.
+		Where("target_id = ? AND source_type = ?", targetID, models.TargetMemorySourceControlledTestResult).
+		Order("updated_at desc, importance desc").
+		Limit(160).
+		Find(&items).Error
+
+	for _, item := range items {
+		shouldAvoid, memoryCandidateURL, _ := highValueMemoryIndicatesAvoidRetesting(item)
+		if !shouldAvoid {
+			continue
+		}
+
+		memoryCandidateKey := highValueCandidateKey(memoryCandidateURL)
+		if memoryCandidateKey != "" && candidateKeys[memoryCandidateKey] {
+			bad[memoryCandidateKey] = true
+			continue
+		}
+
+		text := strings.ToLower(strings.Join([]string{
+			item.Title,
+			item.Summary,
+			item.Content,
+			string(item.Metadata),
+			string(item.Tags),
+		}, " "))
+
+		for _, candidate := range candidates {
+			key := highValueCandidateKey(candidate.URL)
+			if key == "" {
+				continue
+			}
+			if strings.Contains(text, key) || strings.Contains(text, strings.ToLower(candidate.URL)) {
+				bad[key] = true
+			}
+		}
+	}
+
+	return bad
+}
+
+func dedupeAndRankHighValueCandidates(targetID uint, candidates []highValueSurfaceCandidate) []highValueSurfaceCandidate {
+	if len(candidates) == 0 {
+		return candidates
+	}
+
+	badURLs := badHighValueCandidateURLsFromMemory(targetID, candidates)
+	byURL := map[string]highValueSurfaceCandidate{}
+
+	for _, candidate := range candidates {
+		candidate.URL = strings.TrimSpace(candidate.URL)
+		if candidate.URL == "" {
+			continue
+		}
+
+		key := highValueCandidateKey(candidate.URL)
+		if key == "" || badURLs[key] {
+			continue
+		}
+
+		existing, exists := byURL[key]
+		if !exists {
+			classes := []string{}
+			for _, cls := range candidate.Classes {
+				classes = appendUniqueHighValueString(classes, cls)
+			}
+
+			reasons := []string{}
+			for _, reason := range candidate.Reasons {
+				reasons = appendUniqueHighValueString(reasons, reason)
+			}
+
+			candidate.Classes = classes
+			candidate.Reasons = reasons
+			byURL[key] = candidate
+			continue
+		}
+
+		if candidate.Score > existing.Score {
+			existing.Score = candidate.Score
+			existing.Source = candidate.Source
+		}
+
+		for _, cls := range candidate.Classes {
+			existing.Classes = appendUniqueHighValueString(existing.Classes, cls)
+		}
+		for _, reason := range candidate.Reasons {
+			existing.Reasons = appendUniqueHighValueString(existing.Reasons, reason)
+		}
+
+		byURL[key] = existing
+	}
+
+	out := make([]highValueSurfaceCandidate, 0, len(byURL))
+	for _, candidate := range byURL {
+		out = append(out, candidate)
+	}
+
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Score == out[j].Score {
+			return out[i].URL < out[j].URL
+		}
+		return out[i].Score > out[j].Score
+	})
+
+	if len(out) > highValueHuntingLoopMaxCandidates {
+		out = out[:highValueHuntingLoopMaxCandidates]
+	}
+
+	return out
+}
+
+func buildHighValueSurfaceProbeAction(candidate highValueSurfaceCandidate, stepNumber int, totalSteps int) proposeAgentActionRequest {
+	return proposeAgentActionRequest{
+		ActionType:       models.AgentActionTypeReviewEndpoint,
+		Title:            fmt.Sprintf("Hunting step %d/%d: controlled baseline probe", stepNumber, totalSteps),
+		Description:      "Run a controlled baseline HTTP probe against a high-value surface candidate selected from crawled URLs/live assets. This collects real runtime evidence before bug-class-specific validation.",
+		RiskLevel:        models.AgentActionRiskLow,
+		SafetyLevel:      1,
+		TestLevel:        1,
+		AutonomyLevel:    1,
+		RequestedByAgent: boolPtr(true),
+		RequiresApproval: boolPtr(true),
+		InputJSON: map[string]interface{}{
+			"url":                   candidate.URL,
+			"method":                "GET",
+			"source":                "high_value_hunting_loop_v1",
+			"previous_source":       "high_value_surface_miner_v1",
+			"hypothesis_driven":     true,
+			"hunting_loop":          true,
+			"hunting_loop_version":  "small_controlled_baseline_hunting_loop_v1",
+			"hunting_step":          stepNumber,
+			"hunting_total_steps":   totalSteps,
+			"hunting_candidate_url": candidate.URL,
+			"hunting_action_key":    fmt.Sprintf("high_value_hunting_loop_v1:%d:%s", stepNumber, highValueCandidateKey(candidate.URL)),
+			"surface_score":         candidate.Score,
+			"candidate_bug_classes": candidate.Classes,
+			"candidate_reasons":     candidate.Reasons,
+			"candidate_source":      candidate.Source,
+			"validation_goal":       "collect controlled baseline HTTP evidence for high-value bug hunting",
+			"payload_execution":     false,
+			"exploit_validation":    false,
+			"operator_visible_step": fmt.Sprintf("Hunting step %d/%d: selected high-value candidate and ran controlled baseline probe", stepNumber, totalSteps),
+		},
+	}
+}
+
+func maybeBuildHighValueSurfaceProbeActions(target *models.Target, text string) []proposeAgentActionRequest {
+	if target == nil || !chatWantsPentestHypothesisMode(text) {
+		return nil
+	}
+
+	candidates := make([]highValueSurfaceCandidate, 0)
+
+	rows := make([]models.FoundURL, 0)
+	_ = database.DB.
+		Where("target_id = ?", target.ID).
+		Order("occurrence_count desc, id desc").
+		Limit(300).
+		Find(&rows).Error
+
+	for _, row := range rows {
+		raw := strings.TrimSpace(row.Value)
+		if raw == "" {
+			continue
+		}
+
+		lowerRaw := strings.ToLower(raw)
+		if !strings.HasPrefix(lowerRaw, "http://") && !strings.HasPrefix(lowerRaw, "https://") {
+			continue
+		}
+
+		classes, reasons := highValueSurfaceBugClasses(raw)
+		if len(classes) == 0 {
+			continue
+		}
+
+		score := len(classes)*10 + len(reasons)*3
+		if strings.Contains(raw, "?") {
+			score += 15
+		}
+
+		candidates = append(candidates, highValueSurfaceCandidate{
+			URL:     raw,
+			Score:   score,
+			Classes: classes,
+			Reasons: reasons,
+			Source:  "found_urls",
+		})
+	}
+
+	assets := make([]models.Asset, 0)
+	_ = database.DB.
+		Where("target_id = ? AND is_live = ?", target.ID, true).
+		Order("status_code asc, id desc").
+		Limit(200).
+		Find(&assets).Error
+
+	for _, asset := range assets {
+		raw := strings.TrimSpace(asset.FinalURL)
+		if raw == "" {
+			value := strings.TrimSpace(asset.Value)
+			if value == "" {
+				continue
+			}
+			raw = "https://" + value
+		}
+
+		classes, reasons := highValueSurfaceBugClasses(raw)
+		host := strings.ToLower(strings.TrimSpace(asset.Value))
+
+		if strings.Contains(host, "api") {
+			classes = appendUniqueHighValueString(classes, "api_authorization")
+			reasons = appendUniqueHighValueString(reasons, "api-like live asset hostname")
+		}
+		if strings.Contains(host, "admin") || strings.Contains(host, "dashboard") || strings.Contains(host, "sso") || strings.Contains(host, "auth") {
+			classes = appendUniqueHighValueString(classes, "auth_bypass")
+			reasons = appendUniqueHighValueString(reasons, "admin/auth/dashboard-like live asset hostname")
+		}
+		if strings.Contains(host, "dev") || strings.Contains(host, "stage") || strings.Contains(host, "staging") || strings.Contains(host, "test") {
+			classes = appendUniqueHighValueString(classes, "sensitive_data_exposure")
+			reasons = appendUniqueHighValueString(reasons, "dev/staging/test-like live asset hostname")
+		}
+		if len(classes) == 0 {
+			continue
+		}
+
+		score := len(classes)*10 + len(reasons)*3
+		if asset.StatusCode >= 200 && asset.StatusCode < 400 {
+			score += 5
+		}
+
+		candidates = append(candidates, highValueSurfaceCandidate{
+			URL:     raw,
+			Score:   score,
+			Classes: classes,
+			Reasons: reasons,
+			Source:  "live_assets",
+		})
+	}
+
+	candidates = dedupeAndRankHighValueCandidates(target.ID, candidates)
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	actions := make([]proposeAgentActionRequest, 0, len(candidates))
+	totalSteps := len(candidates)
+
+	for i, candidate := range candidates {
+		actions = append(actions, buildHighValueSurfaceProbeAction(candidate, i+1, totalSteps))
+	}
+
+	return actions
+}
+
+func maybeBuildBugTestValidationAction(target *models.Target, text string) *proposeAgentActionRequest {
+	if target == nil {
+		return nil
+	}
+
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return nil
+	}
+
+	wantsValidation := strings.Contains(lower, "validate") ||
+		strings.Contains(lower, "validation") ||
+		strings.Contains(lower, "verify") ||
+		strings.Contains(lower, "check candidate") ||
+		strings.Contains(lower, "test candidate") ||
+		strings.Contains(lower, "تایید") ||
+		strings.Contains(lower, "اعتبارسنج") ||
+		strings.Contains(lower, "ولید")
+
+	wantsBugCandidate := strings.Contains(lower, "bug") ||
+		strings.Contains(lower, "candidate") ||
+		strings.Contains(lower, "result") ||
+		strings.Contains(lower, "security header") ||
+		strings.Contains(lower, "header")
+
+	if !wantsValidation || !wantsBugCandidate {
+		return nil
+	}
+
+	var result models.BugTestResult
+	if err := database.DB.
+		Where("target_id = ? AND status = ? AND bug_type = ?", target.ID, models.BugTestResultStatusNeedsManualValidation, models.BugTypeSecurityHeaders).
+		Order("id DESC").
+		First(&result).Error; err != nil {
+		return nil
+	}
+
+	evidence := map[string]interface{}{}
+	if len(result.EvidenceJSON) > 0 {
+		_ = json.Unmarshal(result.EvidenceJSON, &evidence)
+	}
+
+	rawURL := strings.TrimSpace(controlledCleanString(evidence["final_url"]))
+	if rawURL == "" {
+		asset := strings.TrimSpace(controlledCleanString(evidence["asset"]))
+		if asset != "" {
+			rawURL = asset
+		}
+	}
+	if rawURL == "" {
+		return nil
+	}
+
+	if !strings.HasPrefix(strings.ToLower(rawURL), "http://") && !strings.HasPrefix(strings.ToLower(rawURL), "https://") {
+		rawURL = "https://" + rawURL
+	}
+
+	req := proposeAgentActionRequest{
+		ActionType:       models.AgentActionTypeReviewEndpoint,
+		Title:            fmt.Sprintf("Validate bug test candidate #%d", result.ID),
+		Description:      fmt.Sprintf("Run a controlled HTTP endpoint review for Safe Bug Testing candidate #%d (%s) to collect runtime evidence before validation or promotion.", result.ID, result.BugType),
+		RiskLevel:        models.AgentActionRiskLow,
+		SafetyLevel:      1,
+		TestLevel:        1,
+		AutonomyLevel:    1,
+		RequestedByAgent: boolPtr(true),
+		RequiresApproval: boolPtr(true),
+		InputJSON: map[string]interface{}{
+			"url":                rawURL,
+			"method":             "GET",
+			"source":             "bug_test_candidate_validation",
+			"bug_test_result_id": result.ID,
+			"bug_test_run_id":    result.RunID,
+			"bug_type":           result.BugType,
+			"candidate_status":   result.Status,
+			"validation_goal":    "collect controlled HTTP response/header evidence for candidate triage",
+		},
+	}
+
+	return &req
+}
+
+func chatActionRequestSource(req proposeAgentActionRequest) string {
+	if req.InputJSON == nil {
+		return ""
+	}
+	value, ok := req.InputJSON["source"]
+	if !ok || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func shouldBypassChatActionDuplicateReuse(req proposeAgentActionRequest) bool {
+	switch chatActionRequestSource(req) {
+	case "high_value_hunting_loop_v1":
+		return true
+	default:
+		return false
+	}
+}
+
 func createActionFromChat(c *fiber.Ctx, target *models.Target, uid uint, ownerKey string, req proposeAgentActionRequest) (*models.AgentAction, error) {
 	actionType := normalizeAgentActionType(req.ActionType)
 	if actionType == "" {
@@ -1006,14 +2211,18 @@ func createActionFromChat(c *fiber.Ctx, target *models.Target, uid uint, ownerKe
 		title = actionType
 	}
 
-	duplicate, duplicateErr := findDuplicateAgentAction(target.ID, actionType, title)
-	if duplicateErr != nil {
-		return nil, duplicateErr
-	}
-	if duplicate == nil && shouldReuseChatActionByType(actionType) {
-		duplicate, duplicateErr = findDuplicateAgentAction(target.ID, actionType, "")
+	var duplicate *models.AgentAction
+	var duplicateErr error
+	if !shouldBypassChatActionDuplicateReuse(req) {
+		duplicate, duplicateErr = findDuplicateAgentAction(target.ID, actionType, title)
 		if duplicateErr != nil {
 			return nil, duplicateErr
+		}
+		if duplicate == nil && shouldReuseChatActionByType(actionType) {
+			duplicate, duplicateErr = findDuplicateAgentAction(target.ID, actionType, "")
+			if duplicateErr != nil {
+				return nil, duplicateErr
+			}
 		}
 	}
 	if duplicate != nil {
@@ -1124,6 +2333,714 @@ func createActionFromChat(c *fiber.Ctx, target *models.Target, uid uint, ownerKe
 	})
 
 	return &row, nil
+}
+
+func huntingLoopActions(actions []models.AgentAction) []models.AgentAction {
+	out := make([]models.AgentAction, 0)
+	for _, action := range actions {
+		input := chatActionInputMap(action.InputJSON)
+		source := strings.TrimSpace(fmt.Sprint(input["source"]))
+		if source == "high_value_hunting_loop_v1" {
+			out = append(out, action)
+		}
+	}
+	return out
+}
+
+func huntingLoopInputString(input map[string]interface{}, key string) string {
+	if input == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(input[key]))
+}
+
+func huntingLoopInputBool(input map[string]interface{}, key string) bool {
+	if input == nil {
+		return false
+	}
+	switch v := input[key].(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "true")
+	default:
+		return false
+	}
+}
+
+func huntingLoopInputStringSlice(input map[string]interface{}, key string) []string {
+	if input == nil {
+		return nil
+	}
+	raw, ok := input[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	out := make([]string, 0)
+	switch values := raw.(type) {
+	case []string:
+		for _, value := range values {
+			value = strings.TrimSpace(value)
+			if value != "" {
+				out = append(out, value)
+			}
+		}
+	case []interface{}:
+		for _, value := range values {
+			text := strings.TrimSpace(fmt.Sprint(value))
+			if text != "" && text != "<nil>" {
+				out = append(out, text)
+			}
+		}
+	default:
+		text := strings.TrimSpace(fmt.Sprint(values))
+		if text != "" && text != "<nil>" {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+func buildHuntingLoopAssistantText(actions []models.AgentAction) string {
+	loopActions := huntingLoopActions(actions)
+	if len(loopActions) == 0 {
+		return ""
+	}
+
+	lines := []string{
+		"Controlled baseline hunting loop:",
+		"",
+	}
+
+	for _, action := range loopActions {
+		input := chatActionInputMap(action.InputJSON)
+		step := huntingLoopInputString(input, "hunting_step")
+		total := huntingLoopInputString(input, "hunting_total_steps")
+		if step == "" || step == "<nil>" {
+			step = "?"
+		}
+		if total == "" || total == "<nil>" {
+			total = fmt.Sprint(len(loopActions))
+		}
+
+		urlValue := huntingLoopInputString(input, "hunting_candidate_url")
+		if urlValue == "" || urlValue == "<nil>" {
+			urlValue = huntingLoopInputString(input, "url")
+		}
+
+		reasons := huntingLoopInputStringSlice(input, "candidate_reasons")
+		reason := "selected as a high-value surface candidate from target evidence"
+		if len(reasons) > 0 {
+			reason = reasons[0]
+		}
+
+		classes := huntingLoopInputStringSlice(input, "candidate_bug_classes")
+		next := "analyze controlled runtime evidence and only then propose class-specific validation."
+		if len(classes) > 0 {
+			next = "baseline evidence will guide next validation path for: " + strings.Join(classes, ", ")
+		}
+
+		lines = append(lines,
+			fmt.Sprintf("- Hunting step %s/%s", step, total),
+			fmt.Sprintf("  Candidate: %s", urlValue),
+			fmt.Sprintf("  Why selected: %s", reason),
+			"  Action: controlled baseline HTTP probe",
+			fmt.Sprintf("  Action ID: #%d status=%s", action.ID, action.Status),
+			"  Payload/exploit execution: disabled",
+			"  Next: "+next,
+			"",
+		)
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func buildHuntingSessionOutput(actions []models.AgentAction) map[string]interface{} {
+	loopActions := huntingLoopActions(actions)
+	steps := make([]map[string]interface{}, 0, len(loopActions))
+	actionIDs := make([]uint, 0, len(loopActions))
+
+	for _, action := range loopActions {
+		input := chatActionInputMap(action.InputJSON)
+		actionIDs = append(actionIDs, action.ID)
+
+		steps = append(steps, map[string]interface{}{
+			"step":                  huntingLoopInputString(input, "hunting_step"),
+			"total_steps":           huntingLoopInputString(input, "hunting_total_steps"),
+			"action_id":             action.ID,
+			"action_type":           action.ActionType,
+			"action_status":         action.Status,
+			"risk_level":            action.RiskLevel,
+			"safety_level":          action.SafetyLevel,
+			"test_level":            action.TestLevel,
+			"autonomy_level":        action.AutonomyLevel,
+			"candidate_url":         huntingLoopInputString(input, "hunting_candidate_url"),
+			"url":                   huntingLoopInputString(input, "url"),
+			"candidate_source":      huntingLoopInputString(input, "candidate_source"),
+			"candidate_bug_classes": huntingLoopInputStringSlice(input, "candidate_bug_classes"),
+			"candidate_reasons":     huntingLoopInputStringSlice(input, "candidate_reasons"),
+			"surface_score":         huntingLoopInputString(input, "surface_score"),
+			"hunting_action_key":    huntingLoopInputString(input, "hunting_action_key"),
+			"validation_goal":       huntingLoopInputString(input, "validation_goal"),
+			"payload_execution":     huntingLoopInputBool(input, "payload_execution"),
+			"exploit_validation":    huntingLoopInputBool(input, "exploit_validation"),
+			"result":                "pending_runtime_evidence",
+			"learned":               "waiting for controlled runtime result analysis",
+		})
+	}
+
+	return map[string]interface{}{
+		"version":            "small_controlled_baseline_hunting_loop_v1",
+		"active":             len(loopActions) > 0,
+		"objective":          "collect controlled baseline HTTP evidence across multiple high-value candidates",
+		"created_action_ids": actionIDs,
+		"candidate_count":    len(loopActions),
+		"max_candidates":     highValueHuntingLoopMaxCandidates,
+		"steps":              steps,
+		"payload_execution":  false,
+		"exploit_validation": false,
+		"next":               "analyze runtime results, learn from passed/failed/inconclusive probes, and propose class-specific validation paths when evidence supports them",
+	}
+}
+
+func formatAssistantTextForChatReadability(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return text
+	}
+
+	sectionPrefixes := []string{
+		"Clarifying questions:",
+		"Recommended next steps:",
+		"Pentest hypotheses:",
+		"Controlled baseline hunting loop:",
+		"Operator Autopilot:",
+		"Guardrails:",
+	}
+
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines)*2)
+
+	appendBlankIfNeeded := func() {
+		if len(out) == 0 {
+			return
+		}
+		if strings.TrimSpace(out[len(out)-1]) != "" {
+			out = append(out, "")
+		}
+	}
+
+	for _, rawLine := range lines {
+		line := strings.TrimRight(rawLine, " \t")
+		trimmed := strings.TrimSpace(line)
+
+		if trimmed == "" {
+			if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
+				out = append(out, "")
+			}
+			continue
+		}
+
+		for _, prefix := range sectionPrefixes {
+			if strings.HasPrefix(trimmed, prefix) {
+				appendBlankIfNeeded()
+				break
+			}
+		}
+
+		if strings.HasPrefix(trimmed, "I proposed ") ||
+			strings.HasPrefix(trimmed, "I reused ") ||
+			strings.HasPrefix(trimmed, "Autopilot executed ") ||
+			strings.HasPrefix(trimmed, "Autopilot did not execute ") {
+			appendBlankIfNeeded()
+		}
+
+		if strings.HasPrefix(trimmed, "- Potential ") && len(out) > 0 {
+			appendBlankIfNeeded()
+		}
+
+		out = append(out, line)
+	}
+
+	// Collapse excessive blank lines to at most one blank line.
+	collapsed := make([]string, 0, len(out))
+	previousBlank := false
+	for _, line := range out {
+		blank := strings.TrimSpace(line) == ""
+		if blank && previousBlank {
+			continue
+		}
+		collapsed = append(collapsed, line)
+		previousBlank = blank
+	}
+
+	return strings.TrimSpace(strings.Join(collapsed, "\n"))
+}
+
+func controlledEvidenceMap(result models.ControlledTestResult) map[string]interface{} {
+	out := map[string]interface{}{}
+	if len(result.EvidenceJSON) == 0 {
+		return out
+	}
+	_ = json.Unmarshal(result.EvidenceJSON, &out)
+	return out
+}
+
+func controlledEvidenceString(evidence map[string]interface{}, key string) string {
+	if evidence == nil {
+		return ""
+	}
+	value, ok := evidence[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func controlledEvidenceBool(evidence map[string]interface{}, key string) bool {
+	if evidence == nil {
+		return false
+	}
+	switch v := evidence[key].(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "true")
+	default:
+		return false
+	}
+}
+
+func controlledEvidenceInt(evidence map[string]interface{}, key string) int {
+	if evidence == nil {
+		return 0
+	}
+	switch v := evidence[key].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case json.Number:
+		n, _ := v.Int64()
+		return int(n)
+	case string:
+		var n int
+		_, _ = fmt.Sscanf(strings.TrimSpace(v), "%d", &n)
+		return n
+	default:
+		return 0
+	}
+}
+
+func analyzeControlledProbeResult(result models.ControlledTestResult) map[string]interface{} {
+	evidence := controlledEvidenceMap(result)
+
+	httpStatus := controlledEvidenceInt(evidence, "status_code")
+	classification := controlledEvidenceString(evidence, "classification")
+	errorText := controlledEvidenceString(evidence, "error")
+	finalURL := controlledEvidenceString(evidence, "final_url")
+	durationMS := controlledEvidenceInt(evidence, "duration_ms")
+
+	cloudflareChallenge := controlledEvidenceBool(evidence, "cloudflare_challenge") ||
+		strings.EqualFold(controlledEvidenceString(evidence, "cf_mitigated"), "challenge") ||
+		strings.Contains(strings.ToLower(classification), "challenged")
+
+	status := strings.TrimSpace(result.Status)
+	if status == "" {
+		status = "inconclusive"
+	}
+
+	analysisStatus := status
+	why := "Controlled baseline probe completed and produced runtime evidence."
+	learned := "The candidate has baseline runtime evidence available for follow-up reasoning."
+	next := "Use this baseline result to decide whether class-specific validation is justified."
+	usefulForNextValidation := false
+	avoidRetesting := false
+	avoidReason := ""
+
+	switch {
+	case errorText != "":
+		analysisStatus = "inconclusive"
+		why = "The controlled HTTP request failed before a useful baseline response was collected."
+		learned = "This candidate is currently unreliable for unauthenticated baseline validation."
+		next = "Avoid repeating the same probe immediately unless DNS/TLS/connectivity context changes."
+		avoidRetesting = true
+		avoidReason = errorText
+
+	case cloudflareChallenge:
+		analysisStatus = "blocked"
+		why = "The endpoint returned a Cloudflare/WAF challenge instead of normal application content."
+		learned = "The response is blocked/challenged evidence, not proof of a vulnerability."
+		next = "Do not promote this as a finding. Skip unauthenticated retest or ask for approved context if this surface is important."
+		avoidRetesting = true
+		avoidReason = "cloudflare_or_waf_challenge"
+
+	case httpStatus == 401 || httpStatus == 403:
+		analysisStatus = "inconclusive"
+		why = fmt.Sprintf("The endpoint returned HTTP %d, so baseline access is blocked or requires authorization.", httpStatus)
+		learned = "This candidate likely needs auth/session context before meaningful validation."
+		next = "Ask for authenticated context or move to another candidate for unauthenticated low-risk hunting."
+		avoidRetesting = true
+		avoidReason = fmt.Sprintf("http_%d_requires_context", httpStatus)
+
+	case httpStatus == 429:
+		analysisStatus = "blocked"
+		why = "The endpoint returned HTTP 429 rate limiting."
+		learned = "Further probing may create noisy or rate-limited behavior."
+		next = "Stop retesting this candidate until the rate-limit window and policy budget are clear."
+		avoidRetesting = true
+		avoidReason = "rate_limited"
+
+	case httpStatus >= 500:
+		analysisStatus = "inconclusive"
+		why = fmt.Sprintf("The endpoint returned HTTP %d server-side error during baseline probing.", httpStatus)
+		learned = "The candidate may be unstable or backend-protected; this is not enough to claim a vulnerability."
+		next = "Avoid immediate repetition. Revisit only if there is a strong hypothesis and a strict request budget."
+		avoidRetesting = true
+		avoidReason = fmt.Sprintf("http_%d_server_error", httpStatus)
+
+	case httpStatus >= 200 && httpStatus < 400:
+		analysisStatus = "passed"
+		why = fmt.Sprintf("The endpoint returned HTTP %d and is reachable with a normal baseline response.", httpStatus)
+		learned = "This candidate is suitable for later class-specific controlled validation if its parameters, headers, or behavior support a hypothesis."
+		next = "Prioritize parameter inventory, reflection/context checks, cache/header review, or open-redirect/path baseline depending on URL shape and evidence."
+		usefulForNextValidation = true
+
+	default:
+		analysisStatus = "inconclusive"
+		if httpStatus > 0 {
+			why = fmt.Sprintf("The endpoint returned HTTP %d, which does not provide enough confidence for validation.", httpStatus)
+		}
+		learned = "The probe did not establish a useful positive baseline."
+		next = "Move to a better candidate unless new target-specific evidence appears."
+		avoidRetesting = true
+		avoidReason = "weak_or_unknown_baseline"
+	}
+
+	return map[string]interface{}{
+		"status":                     analysisStatus,
+		"why":                        why,
+		"learned":                    learned,
+		"next":                       next,
+		"useful_for_next_validation": usefulForNextValidation,
+		"avoid_retesting":            avoidRetesting,
+		"avoid_reason":               avoidReason,
+		"http_status":                httpStatus,
+		"classification":             classification,
+		"final_url":                  finalURL,
+		"duration_ms":                durationMS,
+		"runtime_result_status":      result.Status,
+	}
+}
+
+func enrichHuntingSessionWithRuntimeResults(session map[string]interface{}, autopilot chatAutopilotResult) map[string]interface{} {
+	if session == nil {
+		return session
+	}
+
+	rawSteps, ok := session["steps"].([]map[string]interface{})
+	if !ok || len(rawSteps) == 0 || len(autopilot.ControlledResults) == 0 {
+		return session
+	}
+
+	results := make([]models.ControlledTestResult, 0)
+	if err := database.DB.
+		Where("id IN ?", autopilot.ControlledResults).
+		Order("id asc").
+		Find(&results).Error; err != nil {
+		return session
+	}
+
+	byActionID := map[uint]models.ControlledTestResult{}
+	for _, result := range results {
+		if result.AgentActionID != nil {
+			byActionID[*result.AgentActionID] = result
+		}
+	}
+
+	analyzedCount := 0
+	for _, step := range rawSteps {
+		actionID := uintFromAny(step["action_id"])
+		if actionID == 0 {
+			continue
+		}
+
+		result, exists := byActionID[actionID]
+		if !exists {
+			continue
+		}
+
+		analysis := analyzeControlledProbeResult(result)
+		step["controlled_result_id"] = result.ID
+		step["controlled_run_id"] = result.RunID
+		step["runtime_status"] = result.Status
+		step["http_status"] = analysis["http_status"]
+		step["classification"] = analysis["classification"]
+		step["final_url"] = analysis["final_url"]
+		step["duration_ms"] = analysis["duration_ms"]
+		step["result"] = analysis["status"]
+		step["learned"] = analysis["learned"]
+		step["analysis"] = analysis
+		analyzedCount++
+	}
+
+	session["steps"] = rawSteps
+	session["analyzed_result_count"] = analyzedCount
+	session["controlled_results"] = autopilot.ControlledResults
+	session["controlled_runs"] = autopilot.ControlledRuns
+	session["memory_ingested"] = autopilot.MemoryIngested
+	return session
+}
+
+func buildHuntingRuntimeAnalysisText(session map[string]interface{}) string {
+	if session == nil {
+		return ""
+	}
+	rawSteps, ok := session["steps"].([]map[string]interface{})
+	if !ok || len(rawSteps) == 0 {
+		return ""
+	}
+
+	lines := []string{"Runtime analysis:", ""}
+	hasAnalysis := false
+
+	for _, step := range rawSteps {
+		analysis, _ := step["analysis"].(map[string]interface{})
+		if len(analysis) == 0 {
+			continue
+		}
+		hasAnalysis = true
+
+		stepNo := strings.TrimSpace(fmt.Sprint(step["step"]))
+		total := strings.TrimSpace(fmt.Sprint(step["total_steps"]))
+		candidate := strings.TrimSpace(fmt.Sprint(step["candidate_url"]))
+		if candidate == "" || candidate == "<nil>" {
+			candidate = strings.TrimSpace(fmt.Sprint(step["url"]))
+		}
+
+		status := strings.TrimSpace(fmt.Sprint(analysis["status"]))
+		httpStatus := strings.TrimSpace(fmt.Sprint(analysis["http_status"]))
+		learned := strings.TrimSpace(fmt.Sprint(analysis["learned"]))
+		next := strings.TrimSpace(fmt.Sprint(analysis["next"]))
+
+		lines = append(lines,
+			fmt.Sprintf("- Hunting step %s/%s", stepNo, total),
+			fmt.Sprintf("  Candidate: %s", candidate),
+			fmt.Sprintf("  Result: %s, HTTP %s", status, httpStatus),
+			fmt.Sprintf("  Learned: %s", learned),
+			fmt.Sprintf("  Next: %s", next),
+			"",
+		)
+	}
+
+	if !hasAnalysis {
+		return ""
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func huntingAnalysisMemoryType(status string, usefulForNext bool) string {
+	status = strings.ToLower(strings.TrimSpace(status))
+	switch {
+	case status == "passed" || usefulForNext:
+		return models.TargetMemoryTypeSuccessfulTest
+	case status == "blocked" || status == "inconclusive" || status == "failed":
+		return models.TargetMemoryTypeFailedTest
+	default:
+		return models.TargetMemoryTypeTestResult
+	}
+}
+
+func huntingAnalysisMemoryImportance(status string, usefulForNext bool, avoidRetesting bool) int {
+	status = strings.ToLower(strings.TrimSpace(status))
+	switch {
+	case status == "passed" || usefulForNext:
+		return 84
+	case status == "blocked" && avoidRetesting:
+		return 88
+	case status == "inconclusive" && avoidRetesting:
+		return 84
+	case avoidRetesting:
+		return 80
+	default:
+		return 72
+	}
+}
+
+func huntingAnalysisMemoryConfidence(status string) int {
+	status = strings.ToLower(strings.TrimSpace(status))
+	switch status {
+	case "passed":
+		return 78
+	case "blocked":
+		return 82
+	case "inconclusive":
+		return 70
+	default:
+		return 65
+	}
+}
+
+func createHuntingAnalysisMemoryItems(userID uint, ownerKey string, target *models.Target, sessionID uint, messageID uint, huntingSession map[string]interface{}) error {
+	if target == nil || strings.TrimSpace(ownerKey) == "" || huntingSession == nil {
+		return nil
+	}
+
+	rawSteps, ok := huntingSession["steps"].([]map[string]interface{})
+	if !ok || len(rawSteps) == 0 {
+		return nil
+	}
+
+	for _, step := range rawSteps {
+		analysis, _ := step["analysis"].(map[string]interface{})
+		if len(analysis) == 0 {
+			continue
+		}
+
+		resultID := uintFromAny(step["controlled_result_id"])
+		runID := uintFromAny(step["controlled_run_id"])
+		actionID := uintFromAny(step["action_id"])
+
+		candidateURL := strings.TrimSpace(fmt.Sprint(step["candidate_url"]))
+		if candidateURL == "" || candidateURL == "<nil>" {
+			candidateURL = strings.TrimSpace(fmt.Sprint(step["url"]))
+		}
+		if candidateURL == "" || candidateURL == "<nil>" {
+			candidateURL = "unknown-candidate"
+		}
+
+		status := strings.TrimSpace(fmt.Sprint(analysis["status"]))
+		if status == "" || status == "<nil>" {
+			status = "inconclusive"
+		}
+
+		httpStatus := strings.TrimSpace(fmt.Sprint(analysis["http_status"]))
+		classification := strings.TrimSpace(fmt.Sprint(analysis["classification"]))
+		learned := strings.TrimSpace(fmt.Sprint(analysis["learned"]))
+		next := strings.TrimSpace(fmt.Sprint(analysis["next"]))
+		why := strings.TrimSpace(fmt.Sprint(analysis["why"]))
+		avoidReason := strings.TrimSpace(fmt.Sprint(analysis["avoid_reason"]))
+
+		usefulForNext := false
+		if v, ok := analysis["useful_for_next_validation"].(bool); ok {
+			usefulForNext = v
+		}
+
+		avoidRetesting := false
+		if v, ok := analysis["avoid_retesting"].(bool); ok {
+			avoidRetesting = v
+		}
+
+		stepNo := strings.TrimSpace(fmt.Sprint(step["step"]))
+		totalSteps := strings.TrimSpace(fmt.Sprint(step["total_steps"]))
+
+		lines := []string{
+			"Hunting loop analyzer learning:",
+			"Candidate URL: " + candidateURL,
+			"Hunting step: " + stepNo + "/" + totalSteps,
+			"Action ID: " + fmt.Sprint(actionID),
+			"Controlled run ID: " + fmt.Sprint(runID),
+			"Controlled result ID: " + fmt.Sprint(resultID),
+			"Analyzer status: " + status,
+			"HTTP status: " + httpStatus,
+			"Classification: " + classification,
+			"Useful for next validation: " + fmt.Sprint(usefulForNext),
+			"Avoid retesting: " + fmt.Sprint(avoidRetesting),
+			"Avoid reason: " + avoidReason,
+			"Why: " + why,
+			"Learned: " + learned,
+			"Next: " + next,
+		}
+
+		memoryType := huntingAnalysisMemoryType(status, usefulForNext)
+		title := "Hunting analyzer learning: " + candidateURL
+		summary := fmt.Sprintf(
+			"Hunting step %s/%s for %s analyzed as %s with http_status=%s classification=%s avoid_retesting=%v.",
+			stepNo,
+			totalSteps,
+			candidateURL,
+			status,
+			httpStatus,
+			classification,
+			avoidRetesting,
+		)
+
+		sourceID := resultID
+		if sourceID == 0 {
+			sourceID = actionID
+		}
+
+		item := models.TargetMemoryItem{
+			UserID:     userID,
+			OwnerKey:   ownerKey,
+			TargetID:   target.ID,
+			SourceType: models.TargetMemorySourceControlledTestResult,
+			MemoryType: memoryType,
+			Title:      title,
+			Content:    strings.Join(lines, "\n"),
+			Summary:    summary,
+			Tags: memoryJSON([]string{
+				"controlled_runtime",
+				"hunting_loop",
+				"probe_result_analyzer",
+				"operator_learning",
+				status,
+				classification,
+			}, "[]"),
+			Importance: huntingAnalysisMemoryImportance(status, usefulForNext, avoidRetesting),
+			Confidence: huntingAnalysisMemoryConfidence(status),
+			SourceHash: memoryHash(
+				"hunting_probe_analysis_v1",
+				fmt.Sprint(target.ID),
+				fmt.Sprint(sessionID),
+				fmt.Sprint(messageID),
+				fmt.Sprint(actionID),
+				fmt.Sprint(runID),
+				fmt.Sprint(resultID),
+				candidateURL,
+				status,
+				httpStatus,
+				classification,
+			),
+			Metadata: memoryJSON(map[string]interface{}{
+				"ingest_version":                "hunting-probe-analysis-memory-v1",
+				"source":                        "agent_chat_probe_result_analyzer",
+				"chat_session_id":               sessionID,
+				"chat_message_id":               messageID,
+				"agent_action_id":               actionID,
+				"controlled_run_id":             runID,
+				"controlled_result_id":          resultID,
+				"candidate_url":                 candidateURL,
+				"hunting_step":                  stepNo,
+				"hunting_total_steps":           totalSteps,
+				"analysis_status":               status,
+				"http_status":                   httpStatus,
+				"classification":                classification,
+				"useful_for_next_validation":    usefulForNext,
+				"avoid_retesting":               avoidRetesting,
+				"avoid_reason":                  avoidReason,
+				"next_operator_hint":            next,
+				"operator_ready":                true,
+				"execution_evidence":            true,
+				"should_not_promote_as_finding": status == "blocked" || status == "inconclusive",
+				"analysis":                      analysis,
+			}, "{}"),
+		}
+
+		if sourceID > 0 {
+			item.SourceID = &sourceID
+		}
+
+		if _, _, err := upsertTargetMemoryItem(item); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // GetTargetAgentChatSessions lists chat sessions for a target.
@@ -1338,6 +3255,7 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 		MemoryContext: memoryContext,
 	}); err == nil && plan != nil {
 		llmActions := convertOperatorPlanActions(plan)
+		llmActions = replaceLowValueActionsForHypothesisMode(content, llmActions, plan)
 		if len(llmActions) > 0 {
 			plannedActions = llmActions
 			assistantText = buildOperatorAssistantText(plan)
@@ -1386,6 +3304,33 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 			createdActions = append(createdActions, *action)
 		}
 
+		if validationReq := maybeBuildBugTestValidationAction(target, req.Content); validationReq != nil {
+			action, err := createActionFromChat(c, target, uid, ownerKey, *validationReq)
+			if err == nil && action != nil {
+				createdActions = append(createdActions, *action)
+			}
+		}
+
+		seenHighValueActionIDs := map[uint]bool{}
+		for _, highValueReq := range maybeBuildHighValueSurfaceProbeActions(target, req.Content) {
+			highValueReq.InputJSON = mergeChatActionInput(highValueReq.InputJSON, map[string]interface{}{
+				"chat_session_id": session.ID,
+				"user_message_id": userMessage.ID,
+				"chat_reason":     "High-impact hunting mode selected this endpoint as part of the controlled baseline hunting loop.",
+				"owner_key":       ownerKey,
+			})
+			action, err := createActionFromChat(c, target, uid, ownerKey, highValueReq)
+			if err == nil && action != nil {
+				if action.ID > 0 && seenHighValueActionIDs[action.ID] {
+					continue
+				}
+				if action.ID > 0 {
+					seenHighValueActionIDs[action.ID] = true
+				}
+				createdActions = append(createdActions, *action)
+			}
+		}
+
 		actionIDs := make([]uint, 0, len(createdActions))
 		for _, action := range createdActions {
 			actionIDs = append(actionIDs, action.ID)
@@ -1398,6 +3343,8 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 		if reusedActionCount > 0 {
 			assistantText = strings.TrimSpace(assistantText + "\n" + fmt.Sprintf("I reused %d existing similar approval-gated operator action(s) and linked them to this chat session instead of creating duplicates.", reusedActionCount))
 		}
+
+		assistantText = formatAssistantTextForChatReadability(assistantText)
 
 		assistantMessage = models.AgentChatMessage{
 			SessionID:       session.ID,
@@ -1422,6 +3369,7 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 				"actions_created":   len(actionIDs) - reusedActionCount,
 				"actions_reused":    reusedActionCount,
 				"reused_action_ids": reusedActionIDs,
+				"hunting_session":   buildHuntingSessionOutput(createdActions),
 				"execution_enabled": false,
 				"guardrails": []string{
 					"low-risk controlled actions may be auto-executed by Operator Autopilot when target policy permits",
@@ -1461,11 +3409,29 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 		assistantMessage.Content = strings.ReplaceAll(
 			assistantMessage.Content,
 			"I proposed 1 approval-gated operator action(s). Review and approve before dispatch.",
-			"I routed the low-risk endpoint review through Operator Autopilot instead of requiring manual approval.",
+			"I routed the low-risk controlled action through Operator Autopilot instead of requiring manual approval.",
 		)
-		assistantMessage.Content = strings.TrimSpace(assistantMessage.Content + "\n" + fmt.Sprintf("Autopilot executed %d low-risk controlled action(s), captured evidence, and updated target memory where applicable. Higher-risk actions still require explicit approval.", len(autopilot.ExecutedActions)))
+		assistantMessage.Content = strings.TrimSpace(assistantMessage.Content + "\n" + fmt.Sprintf("Autopilot executed %d low-risk controlled action(s). Queued workflows will update target memory when their worker phase completes; higher-risk actions still require explicit approval.", len(autopilot.ExecutedActions)))
 	}
 
+	if operatorPlan != nil && len(operatorPlan.Hypotheses) > 0 {
+		assistantOutput["hypotheses"] = operatorPlan.Hypotheses
+		assistantOutput["hypothesis_count"] = len(operatorPlan.Hypotheses)
+	}
+	huntingSession := buildHuntingSessionOutput(createdActions)
+	huntingSession = enrichHuntingSessionWithRuntimeResults(huntingSession, autopilot)
+	if err := createHuntingAnalysisMemoryItems(uid, ownerKey, target, session.ID, assistantMessage.ID, huntingSession); err != nil {
+		autopilot.Errors = append(autopilot.Errors, fmt.Sprintf("hunting analysis memory ingestion failed: %v", err))
+	} else if active, _ := huntingSession["active"].(bool); active {
+		autopilot.MemoryIngested = true
+		huntingSession["analysis_memory_ingested"] = true
+	}
+	if runtimeAnalysisText := buildHuntingRuntimeAnalysisText(huntingSession); runtimeAnalysisText != "" {
+		assistantMessage.Content = strings.TrimSpace(assistantMessage.Content + "\n\n" + runtimeAnalysisText)
+		assistantMessage.Content = formatAssistantTextForChatReadability(assistantMessage.Content)
+	}
+
+	assistantOutput["hunting_session"] = huntingSession
 	assistantOutput["autopilot"] = autopilot
 	assistantOutput["execution_enabled"] = len(autopilot.ExecutedActions) > 0
 

@@ -1,4 +1,17 @@
 <!-- HUNT_V3_12_0_START -->
+
+## v3.13.0 — Controlled Runtime Expansion + AI Pentest Reasoning Foundation
+
+v3.13.0 adds the first evidence-driven AI Pentest Operator hunting foundation. The Operator can now select multiple high-value candidates, run controlled low-risk baseline probes through policy-aware Autopilot, analyze runtime evidence, persist analyzer learning into target memory, and avoid retesting blocked or low-value candidates.
+
+This release is intentionally not full exploitation and not yet bug-class-specific validation. High-risk validation remains approval-gated, and blocked/challenged/inconclusive evidence is not treated as vulnerability proof.
+
+See `docs/release-notes/v3.13.0.md` for details. The official smoke test for this milestone is:
+
+```bash
+TARGET_ID=5 ./scripts/smoke_operator_hunting_loop_v313.sh
+```
+
 ## v3.12.0 - Controlled Runtime & Operator Autopilot Policy Controls
 
 Hunt Engine v3.12.0 advances the RAG-backed LLM Pentest Operator from an advisory planner into a controlled, policy-gated execution workflow for supported low-risk actions.

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -9,6 +10,8 @@ import (
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/auditlog"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
+	jsintelphase "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/security/jsintel"
 )
 
 type dispatchAgentActionRequest struct {
@@ -149,11 +152,11 @@ func buildDispatchPreview(target models.Target, action models.AgentAction, dryRu
 			"can_run_exploit_validation": false,
 		},
 		"guardrails": []string{
-			"dispatcher preview does not execute commands, payloads, scans, report submission, or severity changes without controlled runtime approval",
-			"unsupported action classes are converted into dispatcher previews; supported controlled-runtime actions may execute after policy and approval checks",
+			"dispatcher only executes supported controlled workflows after policy and approval checks; unsupported classes remain preview-only",
+			"supported action classes may queue or execute controlled authorized runtime workflows; unsupported classes remain preview-only",
 			"future real execution must be feature-flagged, policy-checked, approval-gated, rate-limited, and audited",
 			"hard-blocked action classes require explicit future controls before any execution path can be enabled",
-			"dispatcher preview is not proof of vulnerability validation or execution",
+			"dispatcher output must be interpreted with runtime evidence; queued workflows are not proof of vulnerability validation",
 		},
 	}
 }
@@ -275,6 +278,8 @@ func DispatchTargetAgentAction(c *fiber.Ctx) error {
 		var bridgeOutput map[string]interface{}
 
 		switch row.ActionType {
+		case models.AgentActionTypeRunCrawling:
+			bridgeOutput = dispatchRunCrawling(target, row, uid)
 		case models.AgentActionTypeReviewBugTestResults:
 			bridgeOutput = dispatchReviewBugTestResults(target, row)
 		case models.AgentActionTypeInspectBugPatterns:
@@ -289,7 +294,7 @@ func DispatchTargetAgentAction(c *fiber.Ctx) error {
 			preview["execution_enabled"] = true
 			preview["executed"] = true
 			preview["hard_blocked"] = false
-			preview["reason"] = "agent bug testing bridge executed a safe metadata/control workflow"
+			preview["reason"] = "agent action bridge executed a controlled authorized workflow"
 			preview["bridge_output"] = bridgeOutput
 			updateFields["output_json"] = agentActionJSON(preview)
 			updateFields["error_message"] = ""
@@ -335,6 +340,261 @@ func DispatchTargetAgentAction(c *fiber.Ctx) error {
 			"dispatch": preview,
 		},
 	})
+}
+
+func dispatchRunJSIntelligence(target models.Target, action models.AgentAction, uid uint) map[string]interface{} {
+	output := map[string]interface{}{
+		"bridge":           "controlled-js-intelligence-dispatch-v1",
+		"attempted":        true,
+		"controlled":       true,
+		"authorized":       true,
+		"module":           "JS_INTELLIGENCE",
+		"target_id":        target.ID,
+		"root_domain":      target.RootDomain,
+		"runtime_status":   "running",
+		"operator_purpose": "real authorized client-side intelligence before validation/exploitation",
+		"controls": []string{
+			"target-scoped execution",
+			"approved agent action",
+			"audited dispatcher",
+			"existing JS intelligence limits respected",
+			"worker kill-switch aware phase checks",
+		},
+	}
+
+	var urlCount int64
+	_ = database.DB.Model(&models.FoundURL{}).Where("target_id = ?", target.ID).Count(&urlCount).Error
+	output["url_count"] = urlCount
+
+	if strings.EqualFold(target.Status, "SCANNING") || strings.EqualFold(target.Status, "QUEUED") {
+		output["runtime_status"] = "not_executed"
+		output["executed"] = false
+		output["reason"] = "target is already queued or scanning"
+		return output
+	}
+
+	if err := database.DB.Exec(`
+		INSERT INTO target_scan_states (target_id, status, current_module, current_step, completed_steps, created_at, updated_at)
+		VALUES (?, 'RUNNING', 'CRAWLING', 'JS_INTELLIGENCE', '[]'::jsonb, NOW(), NOW())
+		ON CONFLICT (target_id) DO UPDATE SET
+			completed_steps = COALESCE((
+				SELECT jsonb_agg(step)
+				FROM jsonb_array_elements_text(COALESCE(target_scan_states.completed_steps, '[]'::jsonb)) AS step
+				WHERE step <> 'CRAWLING:JS_INTELLIGENCE'
+			), '[]'::jsonb),
+			status = 'RUNNING',
+			current_module = 'CRAWLING',
+			current_step = 'JS_INTELLIGENCE',
+			updated_at = NOW()
+	`, target.ID).Error; err != nil {
+		output["runtime_status"] = "failed"
+		output["executed"] = false
+		output["reason"] = "failed to reset JS intelligence scan state: " + err.Error()
+		return output
+	}
+
+	_ = database.DB.Model(&models.Target{}).
+		Where("id = ?", target.ID).
+		Updates(map[string]interface{}{
+			"status":         "SCANNING",
+			"current_phase":  "PHASE 3: JS INTELLIGENCE BY OPERATOR",
+			"stop_requested": false,
+		}).Error
+
+	start := time.Now().UTC()
+	err := jsintelphase.Run(jsintelphase.Context{
+		TargetID:   target.ID,
+		RootDomain: target.RootDomain,
+		CheckStop:  func(targetID uint) bool { return false },
+		UpdateTargetPhase: func(targetID uint, phase string) {
+			_ = database.DB.Model(&models.Target{}).
+				Where("id = ?", targetID).
+				Updates(map[string]interface{}{"current_phase": phase}).Error
+		},
+		ScanIsStepDone: func(targetID uint, module, step string) bool {
+			return false
+		},
+		ScanMarkRunning: func(targetID uint, module, step string) {
+			_ = database.DB.Exec(`
+				INSERT INTO target_scan_states (target_id, status, current_module, current_step, completed_steps, created_at, updated_at)
+				VALUES (?, 'RUNNING', ?, ?, '[]'::jsonb, NOW(), NOW())
+				ON CONFLICT (target_id) DO UPDATE SET
+					status = 'RUNNING',
+					current_module = EXCLUDED.current_module,
+					current_step = EXCLUDED.current_step,
+					updated_at = NOW()
+			`, targetID, module, step).Error
+		},
+		ScanMarkStepDone: func(targetID uint, module, step string) {
+			done := module + ":" + step
+			_ = database.DB.Exec(`
+				INSERT INTO target_scan_states (target_id, status, current_module, current_step, completed_steps, created_at, updated_at)
+				VALUES (?, 'RUNNING', '', '', jsonb_build_array(?), NOW(), NOW())
+				ON CONFLICT (target_id) DO UPDATE SET
+					completed_steps = CASE
+						WHEN COALESCE(target_scan_states.completed_steps, '[]'::jsonb) ? ?
+						THEN target_scan_states.completed_steps
+						ELSE COALESCE(target_scan_states.completed_steps, '[]'::jsonb) || to_jsonb(?::text)
+					END,
+					updated_at = NOW()
+			`, targetID, done, done, done).Error
+		},
+	})
+
+	durationMs := time.Since(start).Milliseconds()
+
+	var activeJSFindings int64
+	_ = database.DB.Model(&models.Finding{}).
+		Where("target_id = ? AND source_tool = ? AND status <> ?", target.ID, jsintelphase.SourceToolJSIntel, models.FindingStatusFixed).
+		Count(&activeJSFindings).Error
+
+	_ = database.DB.Model(&models.Target{}).
+		Where("id = ?", target.ID).
+		Updates(map[string]interface{}{
+			"status":        "READY",
+			"current_phase": "IDLE",
+		}).Error
+
+	if err != nil {
+		output["runtime_status"] = "failed"
+		output["executed"] = false
+		output["reason"] = err.Error()
+		output["duration_ms"] = durationMs
+		output["active_js_findings"] = activeJSFindings
+		return output
+	}
+
+	output["runtime_status"] = "completed"
+	output["executed"] = true
+	output["duration_ms"] = durationMs
+	output["active_js_findings"] = activeJSFindings
+	output["memory_ingested"] = false
+	output["reason"] = "JS intelligence completed through controlled authorized operator workflow"
+	return output
+}
+
+func dispatchRunCrawling(target models.Target, action models.AgentAction, uid uint) map[string]interface{} {
+	var liveAssetCount int64
+	_ = database.DB.Model(&models.Asset{}).
+		Where("target_id = ? AND is_live = ?", target.ID, true).
+		Count(&liveAssetCount).Error
+
+	if liveAssetCount == 0 {
+		return map[string]interface{}{
+			"bridge":           "controlled-crawling-dispatch-v1",
+			"attempted":        true,
+			"controlled":       true,
+			"authorized":       true,
+			"queued":           false,
+			"module":           "CRAWLING",
+			"target_id":        target.ID,
+			"root_domain":      target.RootDomain,
+			"live_asset_count": liveAssetCount,
+			"runtime_status":   "not_queued",
+			"reason":           "no live DNS/web assets are available for crawling; run discovery/probing first",
+			"operator_purpose": "real authorized attack-surface expansion before validation/exploitation",
+			"next_recommended": "run_discovery_or_probing",
+		}
+	}
+
+	if strings.EqualFold(target.Status, "SCANNING") || strings.EqualFold(target.Status, "QUEUED") {
+		return map[string]interface{}{
+			"bridge":           "controlled-crawling-dispatch-v1",
+			"attempted":        true,
+			"controlled":       true,
+			"authorized":       true,
+			"queued":           false,
+			"module":           "CRAWLING",
+			"target_id":        target.ID,
+			"root_domain":      target.RootDomain,
+			"live_asset_count": liveAssetCount,
+			"runtime_status":   "not_queued",
+			"reason":           "target is already queued or scanning",
+			"target_status":    target.Status,
+		}
+	}
+
+	now := time.Now().UTC()
+
+	// Reset only CRAWLING checkpoints so the approved operator action can re-run
+	// crawling without wiping discovery/probing history.
+	_ = database.DB.Exec(`
+		INSERT INTO target_scan_states
+			(target_id, run_id, status, current_module, current_step, completed_steps, meta, heartbeat_at, last_error, created_at, updated_at)
+		VALUES
+			(?, '', 'PAUSED', 'CRAWLING', 'QUEUED', '[]'::jsonb, '{}'::jsonb, NULL, '', ?, ?)
+		ON CONFLICT (target_id) DO UPDATE SET
+			status = 'PAUSED',
+			current_module = 'CRAWLING',
+			current_step = 'QUEUED',
+			completed_steps = COALESCE((
+				SELECT jsonb_agg(step)
+				FROM jsonb_array_elements_text(COALESCE(target_scan_states.completed_steps, '[]'::jsonb)) AS step
+				WHERE step NOT LIKE 'CRAWLING:%'
+			), '[]'::jsonb),
+			meta = COALESCE(target_scan_states.meta, '{}'::jsonb),
+			last_error = '',
+			updated_at = EXCLUDED.updated_at
+	`, target.ID, now, now).Error
+
+	payload := fmt.Sprintf("CRAWLING:%d:%s", target.ID, target.RootDomain)
+	queueName := redisq.QueueNameForUser(target.CreatedByUserID)
+	if queueName == "" {
+		queueName = redisq.QueueNameForUser(uid)
+	}
+
+	if err := redisq.Client.RPush(redisq.Ctx, queueName, payload).Err(); err != nil {
+		return map[string]interface{}{
+			"bridge":         "controlled-crawling-dispatch-v1",
+			"attempted":      true,
+			"controlled":     true,
+			"authorized":     true,
+			"queued":         false,
+			"module":         "CRAWLING",
+			"target_id":      target.ID,
+			"root_domain":    target.RootDomain,
+			"runtime_status": "enqueue_failed",
+			"queue_name":     queueName,
+			"job_payload":    payload,
+			"error":          err.Error(),
+		}
+	}
+
+	_ = database.DB.Model(&models.Target{}).
+		Where("id = ?", target.ID).
+		Updates(map[string]interface{}{
+			"status":         "QUEUED",
+			"current_phase":  "QUEUED: CRAWLING BY OPERATOR",
+			"stop_requested": false,
+		}).Error
+
+	return map[string]interface{}{
+		"bridge":           "controlled-crawling-dispatch-v1",
+		"attempted":        true,
+		"controlled":       true,
+		"authorized":       true,
+		"queued":           true,
+		"module":           "CRAWLING",
+		"target_id":        target.ID,
+		"root_domain":      target.RootDomain,
+		"live_asset_count": liveAssetCount,
+		"runtime_status":   "queued",
+		"queue_name":       queueName,
+		"job_payload":      payload,
+		"operator_purpose": "real authorized attack-surface expansion before validation/exploitation",
+		"state_reset": map[string]interface{}{
+			"module":                        "CRAWLING",
+			"preserved_modules":             []string{"DISCOVERY", "PROBING"},
+			"removed_completed_step_prefix": "CRAWLING:",
+		},
+		"controls": []string{
+			"target-scoped execution",
+			"approved agent action",
+			"audited dispatcher",
+			"worker kill-switch aware commands",
+			"existing tool configuration respected",
+		},
+	}
 }
 
 func dispatchReviewBugTestResults(target models.Target, action models.AgentAction) map[string]interface{} {
