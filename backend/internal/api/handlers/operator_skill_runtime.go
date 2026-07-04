@@ -310,6 +310,74 @@ func persistParameterInventorySkillMemory(uid uint, ownerKey string, target *mod
 	return row.ID, wasCreated, nil
 }
 
+func executeSelectedOperatorSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
+	output := map[string]interface{}{}
+
+	if target == nil || len(selectedSkillRunIDs) == 0 {
+		output["status"] = "no_selected_skill_runs"
+		output["executed_count"] = 0
+		output["dispatcher_version"] = "operator-skill-runtime-dispatcher-v1"
+		return output, nil
+	}
+
+	runs := make([]models.OperatorSkillRun, 0)
+	if err := db.
+		Where("id IN ? AND target_id = ? AND user_id = ?", selectedSkillRunIDs, target.ID, uid).
+		Order("id ASC").
+		Find(&runs).Error; err != nil {
+		return output, err
+	}
+
+	selectedBySlug := map[string][]uint{}
+	for _, run := range runs {
+		slug := strings.ToLower(strings.TrimSpace(run.SkillSlug))
+		if slug == "" {
+			continue
+		}
+		selectedBySlug[slug] = append(selectedBySlug[slug], run.ID)
+	}
+
+	executedCount := 0
+	plannedCount := 0
+	blockedCount := 0
+
+	if runIDs := selectedBySlug[parameterInventorySkillSlug]; len(runIDs) > 0 {
+		parameterOutput, err := executeParameterInventorySkillRunsFromChat(db, uid, ownerKey, target, runIDs)
+		if err != nil {
+			output["parameter_inventory_error"] = err.Error()
+			blockedCount += len(runIDs)
+		} else if parameterOutput != nil {
+			output["parameter_inventory"] = parameterOutput
+			executedCount += len(runIDs)
+		}
+	}
+
+	notImplemented := make([]map[string]interface{}, 0)
+	for slug, runIDs := range selectedBySlug {
+		if slug == parameterInventorySkillSlug {
+			continue
+		}
+
+		plannedCount += len(runIDs)
+		notImplemented = append(notImplemented, map[string]interface{}{
+			"skill_slug": slug,
+			"run_ids":    runIDs,
+			"status":     "planned",
+			"reason":     "Skill runtime is registered but not implemented in dispatcher v1.",
+		})
+	}
+
+	output["status"] = "completed"
+	output["dispatcher_version"] = "operator-skill-runtime-dispatcher-v1"
+	output["selected_run_count"] = len(runs)
+	output["executed_count"] = executedCount
+	output["planned_count"] = plannedCount
+	output["blocked_count"] = blockedCount
+	output["not_implemented"] = notImplemented
+
+	return output, nil
+}
+
 func executeParameterInventorySkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
 	if target == nil || len(selectedSkillRunIDs) == 0 {
 		return nil, nil

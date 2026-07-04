@@ -3764,10 +3764,10 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 	}
 
 	skillExecution := map[string]interface{}{}
-	if parameterInventoryOutput, err := executeParameterInventorySkillRunsFromChat(database.DB, uid, ownerKey, target, selectedSkillRunIDs); err != nil {
-		skillExecution["parameter_inventory_error"] = err.Error()
-	} else if parameterInventoryOutput != nil {
-		skillExecution["parameter_inventory"] = parameterInventoryOutput
+	if dispatcherOutput, err := executeSelectedOperatorSkillRunsFromChat(database.DB, uid, ownerKey, target, selectedSkillRunIDs); err != nil {
+		skillExecution["dispatcher_error"] = err.Error()
+	} else if dispatcherOutput != nil {
+		skillExecution = dispatcherOutput
 	}
 
 	autopilot := runAgentChatAutopilotForActions(c, target, uid, ownerKey, createdActions)
