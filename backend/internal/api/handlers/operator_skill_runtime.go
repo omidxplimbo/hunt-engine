@@ -164,6 +164,133 @@ func buildParameterInventoryCandidates(foundURLs []models.FoundURL) []parameterI
 	return out
 }
 
+func parameterInventoryMemoryContent(foundURLCount int, candidates []parameterInventoryCandidate) (string, string) {
+	lines := []string{
+		"Operator skill: parameter_inventory",
+		fmt.Sprintf("Sampled found_urls: %d", foundURLCount),
+		fmt.Sprintf("Parameter candidates: %d", len(candidates)),
+	}
+
+	if len(candidates) == 0 {
+		lines = append(lines,
+			"Learning: No parameterized URLs were available in the sampled found_urls inventory for this target at execution time.",
+			"Operator hint: prioritize crawling, URL discovery, JS/API route mining, and authenticated browsing before class-specific parameter validation.",
+		)
+
+		return strings.Join(lines, "\n"), "Parameter inventory found no query parameters in the sampled URL inventory."
+	}
+
+	lines = append(lines,
+		"Learning: Parameterized URLs exist and should guide authorized class-specific validation.",
+		"Top parameter candidates:",
+	)
+
+	limit := len(candidates)
+	if limit > 10 {
+		limit = 10
+	}
+
+	summaryParts := make([]string, 0, limit)
+	for i := 0; i < limit; i++ {
+		candidate := candidates[i]
+		bugClasses := strings.Join(candidate.BugClasses, ", ")
+		if bugClasses == "" {
+			bugClasses = "parameterized_endpoint"
+		}
+
+		exampleURL := ""
+		if len(candidate.URLs) > 0 {
+			exampleURL = candidate.URLs[0]
+		}
+
+		lines = append(lines, fmt.Sprintf(
+			"- %s: score=%d candidate_bug_classes=%s examples=%d first_url=%s",
+			candidate.Name,
+			candidate.Score,
+			bugClasses,
+			len(candidate.URLs),
+			exampleURL,
+		))
+		summaryParts = append(summaryParts, fmt.Sprintf("%s[%s]", candidate.Name, bugClasses))
+	}
+
+	lines = append(lines,
+		"Next operator hint: use these parameter candidates to select controlled validation skills such as xss_reflection, open_redirect, path_traversal_baseline, auth_context_needed, IDOR/BOLA workflows, or SQLi/NoSQLi strategy when authorization and context allow.",
+	)
+
+	return strings.Join(lines, "\n"), "Parameter inventory found candidates: " + strings.Join(summaryParts, "; ")
+}
+
+func persistParameterInventorySkillMemory(uid uint, ownerKey string, target *models.Target, run models.OperatorSkillRun, foundURLCount int, candidates []parameterInventoryCandidate, observationIDs []uint) (uint, bool, error) {
+	if target == nil {
+		return 0, false, nil
+	}
+
+	content, summary := parameterInventoryMemoryContent(foundURLCount, candidates)
+
+	sourceType := models.TargetMemorySourceEvidence
+	sourceID := &run.ID
+	if run.ChatMessageID != nil && *run.ChatMessageID > 0 {
+		sourceType = models.TargetMemorySourceChatMessage
+		sourceID = run.ChatMessageID
+	}
+
+	importance := 45
+	confidence := 65
+	if len(candidates) > 0 {
+		importance = 75
+		confidence = 80
+	}
+
+	item := models.TargetMemoryItem{
+		UserID:     uid,
+		OwnerKey:   ownerKey,
+		TargetID:   target.ID,
+		SourceType: sourceType,
+		SourceID:   sourceID,
+		MemoryType: models.TargetMemoryTypeParameterNote,
+		Title:      "Operator parameter inventory: " + target.RootDomain,
+		Content:    content,
+		Summary:    summary,
+		Tags: memoryJSON([]string{
+			"operator_skill",
+			"parameter_inventory",
+			"parameters",
+			"attack_surface",
+			"authorized_validation",
+			"rag",
+			"operator",
+		}, "[]"),
+		Importance: importance,
+		Confidence: confidence,
+		SourceHash: memoryHash(
+			"operator_skill_parameter_inventory_latest",
+			fmt.Sprint(target.ID),
+			ownerKey,
+		),
+		Metadata: memoryJSON(map[string]interface{}{
+			"ingest_version":         "operator-skill-parameter-inventory-memory-v1",
+			"skill":                  parameterInventorySkillSlug,
+			"skill_run_id":           run.ID,
+			"chat_session_id":        run.ChatSessionID,
+			"chat_message_id":        run.ChatMessageID,
+			"found_url_sample_count": foundURLCount,
+			"parameter_count":        len(candidates),
+			"observation_count":      len(observationIDs),
+			"observation_ids":        observationIDs,
+			"operator_ready":         true,
+			"next_operator_hint":     "Use parameter inventory memory to prioritize authorized class-specific validation and avoid blind/redundant testing.",
+		}, "{}"),
+	}
+
+	row, wasCreated, err := upsertTargetMemoryItem(item)
+	if err != nil {
+		return 0, false, err
+	}
+
+	return row.ID, wasCreated, nil
+}
+
 func executeParameterInventorySkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
 	if target == nil || len(selectedSkillRunIDs) == 0 {
 		return nil, nil
@@ -261,6 +388,8 @@ func executeParameterInventorySkillRunsFromChat(db *gorm.DB, uid uint, ownerKey 
 		resultSummary := fmt.Sprintf("Parameter inventory completed: %d parameter candidate(s) extracted from %d sampled URL(s).", len(candidates), len(foundURLs))
 		nextStep := "Use parameter observations to select class-specific validation skills such as xss_reflection, open_redirect, idor_bola, sqli/nosqli strategy, or path_traversal_baseline."
 
+		memoryItemID, memoryWasCreated, memoryErr := persistParameterInventorySkillMemory(uid, ownerKey, target, run, len(foundURLs), candidates, createdObservationIDs)
+
 		output := map[string]interface{}{
 			"status":                  status,
 			"skill":                   parameterInventorySkillSlug,
@@ -271,6 +400,13 @@ func executeParameterInventorySkillRunsFromChat(db *gorm.DB, uid uint, ownerKey 
 			"top_parameters":          candidates,
 			"runtime_version":         "parameter-inventory-skill-runtime-v1",
 			"next_recommended_skills": []string{"xss_reflection", "open_redirect", "path_traversal_baseline", "auth_context_needed"},
+			"memory_ingested":         memoryErr == nil && memoryItemID > 0,
+			"memory_item_id":          memoryItemID,
+			"memory_was_created":      memoryWasCreated,
+		}
+
+		if memoryErr != nil {
+			output["memory_ingest_error"] = memoryErr.Error()
 		}
 
 		completedAt := time.Now().UTC()
@@ -288,12 +424,21 @@ func executeParameterInventorySkillRunsFromChat(db *gorm.DB, uid uint, ownerKey 
 		}
 
 		runSummaries = append(runSummaries, map[string]interface{}{
-			"skill_run_id":      run.ID,
-			"status":            status,
-			"parameter_count":   len(candidates),
-			"observation_count": len(createdObservationIDs),
-			"observation_ids":   createdObservationIDs,
-			"top_parameters":    candidates,
+			"skill_run_id":       run.ID,
+			"status":             status,
+			"parameter_count":    len(candidates),
+			"observation_count":  len(createdObservationIDs),
+			"observation_ids":    createdObservationIDs,
+			"top_parameters":     candidates,
+			"memory_ingested":    memoryErr == nil && memoryItemID > 0,
+			"memory_item_id":     memoryItemID,
+			"memory_was_created": memoryWasCreated,
+			"memory_ingest_error": func() string {
+				if memoryErr != nil {
+					return memoryErr.Error()
+				}
+				return ""
+			}(),
 		})
 	}
 
