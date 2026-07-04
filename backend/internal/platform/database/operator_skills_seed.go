@@ -343,7 +343,7 @@ func seedBuiltInOperatorSkills(db *gorm.DB) error {
 			IsEnabled:            true,
 		}
 
-		if err := db.Clauses(clause.OnConflict{
+		if err := db.Select("*").Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "slug"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"name",
@@ -368,6 +368,18 @@ func seedBuiltInOperatorSkills(db *gorm.DB) error {
 				"updated_at",
 			}),
 		}).Create(&row).Error; err != nil {
+			return err
+		}
+
+		// GORM default tags can cause zero-values to be omitted during create/upsert.
+		// Force these numeric autonomy/risk fields so built-in level-0 skills remain level 0.
+		if err := db.Model(&models.OperatorSkill{}).
+			Where("slug = ?", seed.Slug).
+			Updates(map[string]interface{}{
+				"default_safety_level":   seed.DefaultSafetyLevel,
+				"default_test_level":     seed.DefaultTestLevel,
+				"default_autonomy_level": seed.DefaultAutonomyLevel,
+			}).Error; err != nil {
 			return err
 		}
 	}

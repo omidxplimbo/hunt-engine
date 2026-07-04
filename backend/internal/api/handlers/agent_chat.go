@@ -3329,6 +3329,157 @@ func buildSelectedOperatorSkillsText(selectedSkills []map[string]interface{}) st
 	return strings.Join(lines, "\n")
 }
 
+func uintFromSelectedSkill(value interface{}) uint {
+	switch v := value.(type) {
+	case uint:
+		return v
+	case int:
+		if v > 0 {
+			return uint(v)
+		}
+	case int64:
+		if v > 0 {
+			return uint(v)
+		}
+	case float64:
+		if v > 0 {
+			return uint(v)
+		}
+	}
+
+	return 0
+}
+
+func stringFromSelectedSkill(skill map[string]interface{}, key string) string {
+	if value, ok := skill[key].(string); ok {
+		return strings.TrimSpace(value)
+	}
+	return ""
+}
+
+func intFromSelectedSkill(skill map[string]interface{}, key string, fallback int) int {
+	switch value := skill[key].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	}
+
+	return fallback
+}
+
+func createPlannedOperatorSkillRunsFromChat(tx *gorm.DB, uid uint, ownerKey string, target *models.Target, sessionID uint, userMessageID uint, selectedSkills []map[string]interface{}, objective string) ([]uint, error) {
+	if len(selectedSkills) == 0 || target == nil {
+		return nil, nil
+	}
+
+	runIDs := make([]uint, 0, len(selectedSkills))
+	now := time.Now().UTC()
+
+	for _, skill := range selectedSkills {
+		slug := stringFromSelectedSkill(skill, "slug")
+		if slug == "" {
+			continue
+		}
+
+		name := stringFromSelectedSkill(skill, "name")
+		reason := stringFromSelectedSkill(skill, "reason")
+		riskLevel := stringFromSelectedSkill(skill, "default_risk_level")
+		if riskLevel == "" {
+			riskLevel = models.AgentActionRiskLow
+		}
+
+		skillID := uintFromSelectedSkill(skill["id"])
+		var skillIDPtr *uint
+		if skillID > 0 {
+			skillIDPtr = &skillID
+		}
+
+		safetyLevel := intFromSelectedSkill(skill, "default_safety_level", 1)
+		testLevel := intFromSelectedSkill(skill, "default_test_level", 1)
+		autonomyLevel := intFromSelectedSkill(skill, "default_autonomy_level", 1)
+
+		var registrySkill models.OperatorSkill
+		if err := tx.Where("slug = ? AND is_enabled = true", slug).First(&registrySkill).Error; err == nil {
+			if registrySkill.ID > 0 {
+				if skillIDPtr == nil {
+					skillID := registrySkill.ID
+					skillIDPtr = &skillID
+				}
+				if name == "" {
+					name = registrySkill.Name
+				}
+				if riskLevel == "" {
+					riskLevel = registrySkill.DefaultRiskLevel
+				}
+				safetyLevel = registrySkill.DefaultSafetyLevel
+				testLevel = registrySkill.DefaultTestLevel
+				autonomyLevel = registrySkill.DefaultAutonomyLevel
+			}
+		}
+
+		row := models.OperatorSkillRun{
+			UserID:        uid,
+			OwnerKey:      ownerKey,
+			TargetID:      target.ID,
+			SkillID:       skillIDPtr,
+			SkillSlug:     slug,
+			SkillName:     name,
+			ChatSessionID: &sessionID,
+			ChatMessageID: &userMessageID,
+			Status:        models.OperatorSkillRunStatusPlanned,
+			RiskLevel:     riskLevel,
+			SafetyLevel:   safetyLevel,
+			TestLevel:     testLevel,
+			AutonomyLevel: autonomyLevel,
+
+			Objective:       objective,
+			SelectedBecause: reason,
+			InputJSON: chatJSON(map[string]interface{}{
+				"source":          "agent_chat_skill_selector_v1",
+				"user_message_id": userMessageID,
+				"selected_skill":  skill,
+			}),
+			OutputJSON: chatJSON(map[string]interface{}{
+				"status": "planned",
+				"next":   "Skill execution is not implemented in this patch; this run records operator routing intent.",
+			}),
+			ResultSummary: "Skill selected and queued as a planned operator skill run.",
+			NextStep:      "Execute the skill through the v3.14 operator skill runtime in a later patch.",
+			Metadata: chatJSON(map[string]interface{}{
+				"created_by":    "agent_chat_skill_selector_v1",
+				"selected_at":   now.Format(time.RFC3339),
+				"skill_version": "v1",
+			}),
+		}
+
+		// Use Select("*") so level-0 skill runs are persisted instead of being
+		// replaced by DB/GORM default tags.
+		if err := tx.Select("*").Create(&row).Error; err != nil {
+			return runIDs, err
+		}
+
+		// PostgreSQL column defaults and GORM default tags can still result in
+		// level-0 values being stored as 1 on create. Force-update numeric levels
+		// with a map so zero-values are preserved.
+		if err := tx.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", row.ID).
+			Updates(map[string]interface{}{
+				"safety_level":   safetyLevel,
+				"test_level":     testLevel,
+				"autonomy_level": autonomyLevel,
+			}).Error; err != nil {
+			return runIDs, err
+		}
+
+		runIDs = append(runIDs, row.ID)
+	}
+
+	return runIDs, nil
+}
+
 // CreateTargetAgentChatMessage creates a user message, assistant plan message, and proposed actions.
 func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 	if err := ensureAgentChatEnabled(c); err != nil {
@@ -3400,6 +3551,7 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 	reusedActionIDs := make([]uint, 0)
 	reusedActionCount := 0
 	selectedSkills := selectedOperatorSkillsForChat(content)
+	selectedSkillRunIDs := make([]uint, 0, len(selectedSkills))
 	if selectedSkillsText := buildSelectedOperatorSkillsText(selectedSkills); selectedSkillsText != "" {
 		assistantText = strings.TrimSpace(assistantText + "\n\n" + selectedSkillsText)
 	}
@@ -3417,6 +3569,12 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 		}
 		if err := tx.Create(&userMessage).Error; err != nil {
 			return err
+		}
+
+		var skillRunErr error
+		selectedSkillRunIDs, skillRunErr = createPlannedOperatorSkillRunsFromChat(tx, uid, ownerKey, target, session.ID, userMessage.ID, selectedSkills, content)
+		if skillRunErr != nil {
+			return skillRunErr
 		}
 
 		for _, planned := range plannedActions {
@@ -3491,17 +3649,18 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 				"operator_error":  operatorError,
 			}),
 			OutputJSON: chatJSON(map[string]interface{}{
-				"action_ids":        actionIDs,
-				"operator_mode":     operatorMode,
-				"operator_plan":     operatorPlan,
-				"operator_error":    operatorError,
-				"llm_assisted":      operatorMode == "llm_operator_plan",
-				"actions_created":   len(actionIDs) - reusedActionCount,
-				"actions_reused":    reusedActionCount,
-				"reused_action_ids": reusedActionIDs,
-				"selected_skills":   selectedSkills,
-				"hunting_session":   buildHuntingSessionOutput(createdActions),
-				"execution_enabled": false,
+				"action_ids":             actionIDs,
+				"operator_mode":          operatorMode,
+				"operator_plan":          operatorPlan,
+				"operator_error":         operatorError,
+				"llm_assisted":           operatorMode == "llm_operator_plan",
+				"actions_created":        len(actionIDs) - reusedActionCount,
+				"actions_reused":         reusedActionCount,
+				"reused_action_ids":      reusedActionIDs,
+				"selected_skills":        selectedSkills,
+				"selected_skill_run_ids": selectedSkillRunIDs,
+				"hunting_session":        buildHuntingSessionOutput(createdActions),
+				"execution_enabled":      false,
 				"guardrails": []string{
 					"low-risk controlled actions may be auto-executed by Operator Autopilot when target policy permits",
 					"higher-risk, active, exploit, payload, auth, rate-limit, or brute-force actions require explicit approval",
@@ -3562,6 +3721,7 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 		assistantMessage.Content = formatAssistantTextForChatReadability(assistantMessage.Content)
 	}
 	assistantOutput["selected_skills"] = selectedSkills
+	assistantOutput["selected_skill_run_ids"] = selectedSkillRunIDs
 
 	assistantOutput["hunting_session"] = huntingSession
 	assistantOutput["autopilot"] = autopilot
