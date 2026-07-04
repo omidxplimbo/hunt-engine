@@ -1691,10 +1691,25 @@ func highValueCandidateKey(rawURL string) string {
 	}
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
-		return strings.ToLower(rawURL)
+		return strings.TrimRight(strings.ToLower(rawURL), "/")
 	}
+
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = strings.ToLower(parsed.Host)
 	parsed.Fragment = ""
-	return strings.ToLower(parsed.String())
+
+	if parsed.Scheme == "https" && strings.HasSuffix(parsed.Host, ":443") {
+		parsed.Host = strings.TrimSuffix(parsed.Host, ":443")
+	}
+	if parsed.Scheme == "http" && strings.HasSuffix(parsed.Host, ":80") {
+		parsed.Host = strings.TrimSuffix(parsed.Host, ":80")
+	}
+
+	if parsed.Path != "/" {
+		parsed.Path = strings.TrimRight(parsed.Path, "/")
+	}
+
+	return strings.TrimRight(strings.ToLower(parsed.String()), "/")
 }
 
 func candidateLooksRecentlyBad(text string) bool {
@@ -1733,29 +1748,126 @@ func candidateLooksRecentlyBad(text string) bool {
 	return false
 }
 
+func highValueMemoryMetadata(item models.TargetMemoryItem) map[string]interface{} {
+	out := map[string]interface{}{}
+	if len(item.Metadata) > 0 {
+		_ = json.Unmarshal(item.Metadata, &out)
+	}
+	return out
+}
+
+func highValueMemoryString(m map[string]interface{}, key string) string {
+	if m == nil {
+		return ""
+	}
+	value, ok := m[key]
+	if !ok || value == nil {
+		return ""
+	}
+	text := strings.TrimSpace(fmt.Sprint(value))
+	if text == "<nil>" {
+		return ""
+	}
+	return text
+}
+
+func highValueMemoryBool(m map[string]interface{}, key string) bool {
+	if m == nil {
+		return false
+	}
+	switch v := m[key].(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "true")
+	default:
+		return false
+	}
+}
+
+func highValueMemoryIndicatesAvoidRetesting(item models.TargetMemoryItem) (bool, string, string) {
+	metadata := highValueMemoryMetadata(item)
+
+	candidateURL := highValueMemoryString(metadata, "candidate_url")
+	analysisStatus := strings.ToLower(highValueMemoryString(metadata, "analysis_status"))
+	classification := strings.ToLower(highValueMemoryString(metadata, "classification"))
+	httpStatus := strings.ToLower(highValueMemoryString(metadata, "http_status"))
+	avoidReason := highValueMemoryString(metadata, "avoid_reason")
+
+	if highValueMemoryBool(metadata, "avoid_retesting") {
+		return true, candidateURL, avoidReason
+	}
+
+	if analysisStatus == "blocked" || analysisStatus == "inconclusive" || analysisStatus == "failed" {
+		return true, candidateURL, analysisStatus
+	}
+
+	if strings.Contains(classification, "blocked") ||
+		strings.Contains(classification, "challenged") ||
+		strings.Contains(classification, "cloudflare") ||
+		strings.Contains(classification, "waf") {
+		return true, candidateURL, classification
+	}
+
+	switch httpStatus {
+	case "401", "403", "429":
+		return true, candidateURL, "http_" + httpStatus
+	}
+
+	text := strings.ToLower(strings.Join([]string{
+		item.Title,
+		item.Summary,
+		item.Content,
+		string(item.Tags),
+		string(item.Metadata),
+	}, " "))
+	if candidateLooksRecentlyBad(text) {
+		return true, candidateURL, "text_bad_signal"
+	}
+
+	return false, candidateURL, ""
+}
+
 func badHighValueCandidateURLsFromMemory(targetID uint, candidates []highValueSurfaceCandidate) map[string]bool {
 	bad := map[string]bool{}
 	if targetID == 0 || len(candidates) == 0 {
 		return bad
 	}
 
+	candidateKeys := map[string]bool{}
+	for _, candidate := range candidates {
+		key := highValueCandidateKey(candidate.URL)
+		if key != "" {
+			candidateKeys[key] = true
+		}
+	}
+
 	items := make([]models.TargetMemoryItem, 0)
 	_ = database.DB.
 		Where("target_id = ? AND source_type = ?", targetID, models.TargetMemorySourceControlledTestResult).
 		Order("updated_at desc, importance desc").
-		Limit(80).
+		Limit(160).
 		Find(&items).Error
 
 	for _, item := range items {
+		shouldAvoid, memoryCandidateURL, _ := highValueMemoryIndicatesAvoidRetesting(item)
+		if !shouldAvoid {
+			continue
+		}
+
+		memoryCandidateKey := highValueCandidateKey(memoryCandidateURL)
+		if memoryCandidateKey != "" && candidateKeys[memoryCandidateKey] {
+			bad[memoryCandidateKey] = true
+			continue
+		}
+
 		text := strings.ToLower(strings.Join([]string{
 			item.Title,
 			item.Summary,
 			item.Content,
+			string(item.Metadata),
+			string(item.Tags),
 		}, " "))
-
-		if !candidateLooksRecentlyBad(text) {
-			continue
-		}
 
 		for _, candidate := range candidates {
 			key := highValueCandidateKey(candidate.URL)
