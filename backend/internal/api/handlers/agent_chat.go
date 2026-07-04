@@ -3302,6 +3302,81 @@ func selectedOperatorSkillsForChat(text string) []map[string]interface{} {
 	return out
 }
 
+func buildSkillExecutionText(skillExecution map[string]interface{}) string {
+	if len(skillExecution) == 0 {
+		return ""
+	}
+
+	parameterRaw, ok := skillExecution["parameter_inventory"]
+	if !ok || parameterRaw == nil {
+		return ""
+	}
+
+	parameterOutput, ok := parameterRaw.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+
+	lines := []string{"Operator skill execution:"}
+
+	status := strings.TrimSpace(fmt.Sprint(parameterOutput["status"]))
+	runCount := strings.TrimSpace(fmt.Sprint(parameterOutput["run_count"]))
+	parameterCount := strings.TrimSpace(fmt.Sprint(parameterOutput["parameter_count"]))
+	foundURLSample := strings.TrimSpace(fmt.Sprint(parameterOutput["found_url_sample"]))
+
+	if status == "" {
+		status = "completed"
+	}
+	if runCount == "" || runCount == "<nil>" {
+		runCount = "0"
+	}
+	if parameterCount == "" || parameterCount == "<nil>" {
+		parameterCount = "0"
+	}
+	if foundURLSample == "" || foundURLSample == "<nil>" {
+		foundURLSample = "0"
+	}
+
+	lines = append(lines, fmt.Sprintf("- Parameter Inventory: status=%s, runs=%s, sampled_urls=%s, parameters=%s", status, runCount, foundURLSample, parameterCount))
+
+	if runsRaw, ok := parameterOutput["runs"].([]map[string]interface{}); ok && len(runsRaw) > 0 {
+		run := runsRaw[0]
+		observationCount := strings.TrimSpace(fmt.Sprint(run["observation_count"]))
+		memoryItemID := strings.TrimSpace(fmt.Sprint(run["memory_item_id"]))
+		memoryIngested := strings.TrimSpace(fmt.Sprint(run["memory_ingested"]))
+
+		if observationCount == "" || observationCount == "<nil>" {
+			observationCount = "0"
+		}
+
+		lines = append(lines, fmt.Sprintf("  Observations: %s", observationCount))
+		if memoryItemID != "" && memoryItemID != "<nil>" && memoryItemID != "0" {
+			lines = append(lines, fmt.Sprintf("  Memory: ingested=%s memory_item_id=%s", memoryIngested, memoryItemID))
+		}
+
+		if topRaw, ok := run["top_parameters"].([]parameterInventoryCandidate); ok && len(topRaw) > 0 {
+			limit := len(topRaw)
+			if limit > 5 {
+				limit = 5
+			}
+			lines = append(lines, "  Top parameter candidates:")
+			for i := 0; i < limit; i++ {
+				candidate := topRaw[i]
+				lines = append(lines, fmt.Sprintf("  - %s: score=%d classes=%s", candidate.Name, candidate.Score, strings.Join(candidate.BugClasses, ", ")))
+			}
+		}
+	}
+
+	if parameterCount == "0" {
+		lines = append(lines, "  Learned: no parameterized URLs were available in the sampled URL inventory for this target at execution time.")
+		lines = append(lines, "  Next: improve URL discovery/crawling/JS/API mining before class-specific parameter validation.")
+	} else {
+		lines = append(lines, "  Next: use observations to choose class-specific controlled validation skills for authorized exploitation workflows.")
+	}
+
+	return strings.Join(lines, "\n")
+}
+
 func buildSelectedOperatorSkillsText(selectedSkills []map[string]interface{}) string {
 	if len(selectedSkills) == 0 {
 		return ""
@@ -3730,6 +3805,11 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 	assistantOutput["selected_skills"] = selectedSkills
 	assistantOutput["selected_skill_run_ids"] = selectedSkillRunIDs
 	assistantOutput["skill_execution"] = skillExecution
+
+	if skillExecutionText := buildSkillExecutionText(skillExecution); skillExecutionText != "" {
+		assistantMessage.Content = strings.TrimSpace(assistantMessage.Content + "\n\n" + skillExecutionText)
+		assistantMessage.Content = formatAssistantTextForChatReadability(assistantMessage.Content)
+	}
 
 	assistantOutput["hunting_session"] = huntingSession
 	assistantOutput["autopilot"] = autopilot
