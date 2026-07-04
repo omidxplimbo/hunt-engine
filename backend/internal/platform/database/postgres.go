@@ -120,6 +120,10 @@ func Connect() {
 		log.Fatal("❌ Tenant-scoped index migration failed! \n", err)
 	}
 
+	if err := seedBuiltInOperatorSkills(DB); err != nil {
+		log.Fatal("❌ Built-in operator skill seed failed! \n", err)
+	}
+
 	// v3.4.0 structured finding evidence foundation.
 	// AutoMigrate adds the model field for new databases; these idempotent statements
 	// harden upgrades from older releases and preserve legacy text evidence.
