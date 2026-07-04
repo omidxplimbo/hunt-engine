@@ -117,6 +117,25 @@ func addParameterInventoryCandidate(candidates map[string]*parameterInventoryCan
 	}
 }
 
+func primaryParameterBugClass(classes []string) string {
+	for _, class := range classes {
+		c := strings.TrimSpace(class)
+		if c == "" || c == "parameterized_endpoint" || c == "injection_candidate" {
+			continue
+		}
+		return c
+	}
+
+	for _, class := range classes {
+		c := strings.TrimSpace(class)
+		if c != "" {
+			return c
+		}
+	}
+
+	return "parameterized_endpoint"
+}
+
 func buildParameterInventoryCandidates(foundURLs []models.FoundURL) []parameterInventoryCandidate {
 	candidates := map[string]*parameterInventoryCandidate{}
 
@@ -335,10 +354,7 @@ func executeParameterInventorySkillRunsFromChat(db *gorm.DB, uid uint, ownerKey 
 
 		createdObservationIDs := make([]uint, 0, len(candidates))
 		for _, candidate := range candidates {
-			primaryBugClass := "parameterized_endpoint"
-			if len(candidate.BugClasses) > 0 {
-				primaryBugClass = candidate.BugClasses[0]
-			}
+			primaryBugClass := primaryParameterBugClass(candidate.BugClasses)
 
 			exampleURL := ""
 			if len(candidate.URLs) > 0 {

@@ -183,3 +183,100 @@ func GetTargetOperatorSkillRuns(c *fiber.Ctx) error {
 		"skill_runs": rows,
 	})
 }
+
+func parseOperatorSkillRunID(c *fiber.Ctx) (uint, error) {
+	raw := strings.TrimSpace(c.Params("run_id"))
+	if raw == "" {
+		return 0, fiber.NewError(fiber.StatusBadRequest, "skill run id is required")
+	}
+
+	id, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || id == 0 {
+		return 0, fiber.NewError(fiber.StatusBadRequest, "invalid skill run id")
+	}
+
+	return uint(id), nil
+}
+
+// GetTargetOperatorSkillRunObservations lists observations created by a specific operator skill run.
+func GetTargetOperatorSkillRunObservations(c *fiber.Ctx) error {
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+
+	targetID, err := parseOperatorSkillTargetID(c)
+	if err != nil {
+		return err
+	}
+
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	runID, err := parseOperatorSkillRunID(c)
+	if err != nil {
+		return err
+	}
+
+	var run models.OperatorSkillRun
+	if err := database.DB.
+		Where("id = ? AND target_id = ? AND user_id = ?", runID, target.ID, uid).
+		First(&run).Error; err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "operator skill run not found")
+	}
+
+	observationType := strings.ToLower(strings.TrimSpace(c.Query("observation_type")))
+	bugClass := strings.ToLower(strings.TrimSpace(c.Query("bug_class")))
+
+	limit := c.QueryInt("limit", 50)
+	if limit < 1 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	offset := c.QueryInt("offset", 0)
+	if offset < 0 {
+		offset = 0
+	}
+
+	q := database.DB.Model(&models.OperatorSkillObservation{}).
+		Where("target_id = ? AND user_id = ? AND skill_run_id = ?", target.ID, uid, run.ID)
+
+	if observationType != "" {
+		q = q.Where("observation_type = ?", observationType)
+	}
+	if bugClass != "" {
+		q = q.Where("bug_class = ?", bugClass)
+	}
+
+	var count int64
+	if err := q.Count(&count).Error; err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to count operator skill observations")
+	}
+
+	rows := make([]models.OperatorSkillObservation, 0)
+	if err := q.Order("confidence DESC, created_at DESC, id DESC").Limit(limit).Offset(offset).Find(&rows).Error; err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to list operator skill observations")
+	}
+
+	return c.JSON(fiber.Map{
+		"status": "success",
+		"count":  count,
+		"limit":  limit,
+		"offset": offset,
+		"target": fiber.Map{
+			"id":          target.ID,
+			"root_domain": target.RootDomain,
+		},
+		"skill_run": fiber.Map{
+			"id":         run.ID,
+			"skill_slug": run.SkillSlug,
+			"status":     run.Status,
+		},
+		"observations": rows,
+	})
+}

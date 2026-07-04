@@ -219,6 +219,7 @@ func main() {
 	api.Post("/targets/:id/controlled-tests/runs/:run_id/execute", handlers.ExecuteTargetControlledTestRun)
 	api.Get("/targets/:id/controlled-tests/results", handlers.GetTargetControlledTestResults)
 	api.Get("/targets/:id/operator-skill-runs", handlers.GetTargetOperatorSkillRuns)
+	api.Get("/targets/:id/operator-skill-runs/:run_id/observations", handlers.GetTargetOperatorSkillRunObservations)
 
 	api.Get("/targets/:id/bug-tests/runs", handlers.GetTargetBugTestRuns)
 	api.Post("/targets/:id/bug-tests/runs", handlers.CreateTargetBugTestRun)
