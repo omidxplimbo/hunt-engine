@@ -2731,6 +2731,206 @@ func buildHuntingRuntimeAnalysisText(session map[string]interface{}) string {
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
+func huntingAnalysisMemoryType(status string, usefulForNext bool) string {
+	status = strings.ToLower(strings.TrimSpace(status))
+	switch {
+	case status == "passed" || usefulForNext:
+		return models.TargetMemoryTypeSuccessfulTest
+	case status == "blocked" || status == "inconclusive" || status == "failed":
+		return models.TargetMemoryTypeFailedTest
+	default:
+		return models.TargetMemoryTypeTestResult
+	}
+}
+
+func huntingAnalysisMemoryImportance(status string, usefulForNext bool, avoidRetesting bool) int {
+	status = strings.ToLower(strings.TrimSpace(status))
+	switch {
+	case status == "passed" || usefulForNext:
+		return 84
+	case status == "blocked" && avoidRetesting:
+		return 88
+	case status == "inconclusive" && avoidRetesting:
+		return 84
+	case avoidRetesting:
+		return 80
+	default:
+		return 72
+	}
+}
+
+func huntingAnalysisMemoryConfidence(status string) int {
+	status = strings.ToLower(strings.TrimSpace(status))
+	switch status {
+	case "passed":
+		return 78
+	case "blocked":
+		return 82
+	case "inconclusive":
+		return 70
+	default:
+		return 65
+	}
+}
+
+func createHuntingAnalysisMemoryItems(userID uint, ownerKey string, target *models.Target, sessionID uint, messageID uint, huntingSession map[string]interface{}) error {
+	if target == nil || strings.TrimSpace(ownerKey) == "" || huntingSession == nil {
+		return nil
+	}
+
+	rawSteps, ok := huntingSession["steps"].([]map[string]interface{})
+	if !ok || len(rawSteps) == 0 {
+		return nil
+	}
+
+	for _, step := range rawSteps {
+		analysis, _ := step["analysis"].(map[string]interface{})
+		if len(analysis) == 0 {
+			continue
+		}
+
+		resultID := uintFromAny(step["controlled_result_id"])
+		runID := uintFromAny(step["controlled_run_id"])
+		actionID := uintFromAny(step["action_id"])
+
+		candidateURL := strings.TrimSpace(fmt.Sprint(step["candidate_url"]))
+		if candidateURL == "" || candidateURL == "<nil>" {
+			candidateURL = strings.TrimSpace(fmt.Sprint(step["url"]))
+		}
+		if candidateURL == "" || candidateURL == "<nil>" {
+			candidateURL = "unknown-candidate"
+		}
+
+		status := strings.TrimSpace(fmt.Sprint(analysis["status"]))
+		if status == "" || status == "<nil>" {
+			status = "inconclusive"
+		}
+
+		httpStatus := strings.TrimSpace(fmt.Sprint(analysis["http_status"]))
+		classification := strings.TrimSpace(fmt.Sprint(analysis["classification"]))
+		learned := strings.TrimSpace(fmt.Sprint(analysis["learned"]))
+		next := strings.TrimSpace(fmt.Sprint(analysis["next"]))
+		why := strings.TrimSpace(fmt.Sprint(analysis["why"]))
+		avoidReason := strings.TrimSpace(fmt.Sprint(analysis["avoid_reason"]))
+
+		usefulForNext := false
+		if v, ok := analysis["useful_for_next_validation"].(bool); ok {
+			usefulForNext = v
+		}
+
+		avoidRetesting := false
+		if v, ok := analysis["avoid_retesting"].(bool); ok {
+			avoidRetesting = v
+		}
+
+		stepNo := strings.TrimSpace(fmt.Sprint(step["step"]))
+		totalSteps := strings.TrimSpace(fmt.Sprint(step["total_steps"]))
+
+		lines := []string{
+			"Hunting loop analyzer learning:",
+			"Candidate URL: " + candidateURL,
+			"Hunting step: " + stepNo + "/" + totalSteps,
+			"Action ID: " + fmt.Sprint(actionID),
+			"Controlled run ID: " + fmt.Sprint(runID),
+			"Controlled result ID: " + fmt.Sprint(resultID),
+			"Analyzer status: " + status,
+			"HTTP status: " + httpStatus,
+			"Classification: " + classification,
+			"Useful for next validation: " + fmt.Sprint(usefulForNext),
+			"Avoid retesting: " + fmt.Sprint(avoidRetesting),
+			"Avoid reason: " + avoidReason,
+			"Why: " + why,
+			"Learned: " + learned,
+			"Next: " + next,
+		}
+
+		memoryType := huntingAnalysisMemoryType(status, usefulForNext)
+		title := "Hunting analyzer learning: " + candidateURL
+		summary := fmt.Sprintf(
+			"Hunting step %s/%s for %s analyzed as %s with http_status=%s classification=%s avoid_retesting=%v.",
+			stepNo,
+			totalSteps,
+			candidateURL,
+			status,
+			httpStatus,
+			classification,
+			avoidRetesting,
+		)
+
+		sourceID := resultID
+		if sourceID == 0 {
+			sourceID = actionID
+		}
+
+		item := models.TargetMemoryItem{
+			UserID:     userID,
+			OwnerKey:   ownerKey,
+			TargetID:   target.ID,
+			SourceType: models.TargetMemorySourceControlledTestResult,
+			MemoryType: memoryType,
+			Title:      title,
+			Content:    strings.Join(lines, "\n"),
+			Summary:    summary,
+			Tags: memoryJSON([]string{
+				"controlled_runtime",
+				"hunting_loop",
+				"probe_result_analyzer",
+				"operator_learning",
+				status,
+				classification,
+			}, "[]"),
+			Importance: huntingAnalysisMemoryImportance(status, usefulForNext, avoidRetesting),
+			Confidence: huntingAnalysisMemoryConfidence(status),
+			SourceHash: memoryHash(
+				"hunting_probe_analysis_v1",
+				fmt.Sprint(target.ID),
+				fmt.Sprint(sessionID),
+				fmt.Sprint(messageID),
+				fmt.Sprint(actionID),
+				fmt.Sprint(runID),
+				fmt.Sprint(resultID),
+				candidateURL,
+				status,
+				httpStatus,
+				classification,
+			),
+			Metadata: memoryJSON(map[string]interface{}{
+				"ingest_version":                "hunting-probe-analysis-memory-v1",
+				"source":                        "agent_chat_probe_result_analyzer",
+				"chat_session_id":               sessionID,
+				"chat_message_id":               messageID,
+				"agent_action_id":               actionID,
+				"controlled_run_id":             runID,
+				"controlled_result_id":          resultID,
+				"candidate_url":                 candidateURL,
+				"hunting_step":                  stepNo,
+				"hunting_total_steps":           totalSteps,
+				"analysis_status":               status,
+				"http_status":                   httpStatus,
+				"classification":                classification,
+				"useful_for_next_validation":    usefulForNext,
+				"avoid_retesting":               avoidRetesting,
+				"avoid_reason":                  avoidReason,
+				"next_operator_hint":            next,
+				"operator_ready":                true,
+				"execution_evidence":            true,
+				"should_not_promote_as_finding": status == "blocked" || status == "inconclusive",
+				"analysis":                      analysis,
+			}, "{}"),
+		}
+
+		if sourceID > 0 {
+			item.SourceID = &sourceID
+		}
+
+		if _, _, err := upsertTargetMemoryItem(item); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // GetTargetAgentChatSessions lists chat sessions for a target.
 func GetTargetAgentChatSessions(c *fiber.Ctx) error {
 	if err := ensureAgentChatEnabled(c); err != nil {
@@ -3108,6 +3308,12 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 	}
 	huntingSession := buildHuntingSessionOutput(createdActions)
 	huntingSession = enrichHuntingSessionWithRuntimeResults(huntingSession, autopilot)
+	if err := createHuntingAnalysisMemoryItems(uid, ownerKey, target, session.ID, assistantMessage.ID, huntingSession); err != nil {
+		autopilot.Errors = append(autopilot.Errors, fmt.Sprintf("hunting analysis memory ingestion failed: %v", err))
+	} else if active, _ := huntingSession["active"].(bool); active {
+		autopilot.MemoryIngested = true
+		huntingSession["analysis_memory_ingested"] = true
+	}
 	if runtimeAnalysisText := buildHuntingRuntimeAnalysisText(huntingSession); runtimeAnalysisText != "" {
 		assistantMessage.Content = strings.TrimSpace(assistantMessage.Content + "\n\n" + runtimeAnalysisText)
 		assistantMessage.Content = formatAssistantTextForChatReadability(assistantMessage.Content)
