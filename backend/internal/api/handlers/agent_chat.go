@@ -3688,6 +3688,13 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": txErr.Error()})
 	}
 
+	skillExecution := map[string]interface{}{}
+	if parameterInventoryOutput, err := executeParameterInventorySkillRunsFromChat(database.DB, uid, ownerKey, target, selectedSkillRunIDs); err != nil {
+		skillExecution["parameter_inventory_error"] = err.Error()
+	} else if parameterInventoryOutput != nil {
+		skillExecution["parameter_inventory"] = parameterInventoryOutput
+	}
+
 	autopilot := runAgentChatAutopilotForActions(c, target, uid, ownerKey, createdActions)
 
 	assistantOutput := map[string]interface{}{}
@@ -3722,6 +3729,7 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 	}
 	assistantOutput["selected_skills"] = selectedSkills
 	assistantOutput["selected_skill_run_ids"] = selectedSkillRunIDs
+	assistantOutput["skill_execution"] = skillExecution
 
 	assistantOutput["hunting_session"] = huntingSession
 	assistantOutput["autopilot"] = autopilot
