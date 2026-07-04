@@ -3203,6 +3203,132 @@ func GetTargetAgentChatMessages(c *fiber.Ctx) error {
 	})
 }
 
+func chatSkillSelectionIntent(text string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	if t == "" {
+		return false
+	}
+
+	needles := []string{
+		"real bug",
+		"real bugs",
+		"critical",
+		"high impact",
+		"high-impact",
+		"find bugs",
+		"hunt bugs",
+		"bug bounty",
+		"pentest",
+		"exploit",
+		"exploitation",
+		"vulnerability",
+		"vulnerabilities",
+		"authorized",
+		"بگرد",
+		"باگ",
+		"باگ واقعی",
+		"کریتیکال",
+		"حفره",
+		"آسیب پذیری",
+		"اکسپلویت",
+		"نفوذ",
+	}
+
+	for _, needle := range needles {
+		if strings.Contains(t, needle) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func selectedOperatorSkillsForChat(text string) []map[string]interface{} {
+	if !chatSkillSelectionIntent(text) {
+		return nil
+	}
+
+	type selectedSkillSeed struct {
+		Slug   string
+		Reason string
+	}
+
+	seeds := []selectedSkillSeed{
+		{
+			Slug:   "parameter_inventory",
+			Reason: "High-impact authorized hunting needs a parameter and surface inventory before class-specific validation.",
+		},
+		{
+			Slug:   "http_evidence_analysis",
+			Reason: "Controlled runtime evidence must be classified before choosing authorized exploit validation skills.",
+		},
+	}
+
+	slugs := make([]string, 0, len(seeds))
+	reasons := map[string]string{}
+	for _, seed := range seeds {
+		slugs = append(slugs, seed.Slug)
+		reasons[seed.Slug] = seed.Reason
+	}
+
+	rows := make([]models.OperatorSkill, 0)
+	if err := database.DB.
+		Where("slug IN ? AND is_enabled = true", slugs).
+		Order("CASE slug WHEN 'parameter_inventory' THEN 1 WHEN 'http_evidence_analysis' THEN 2 ELSE 99 END").
+		Find(&rows).Error; err != nil {
+		return nil
+	}
+
+	out := make([]map[string]interface{}, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, map[string]interface{}{
+			"id":                     row.ID,
+			"slug":                   row.Slug,
+			"name":                   row.Name,
+			"category":               row.Category,
+			"bug_class":              row.BugClass,
+			"default_risk_level":     row.DefaultRiskLevel,
+			"default_safety_level":   row.DefaultSafetyLevel,
+			"default_test_level":     row.DefaultTestLevel,
+			"default_autonomy_level": row.DefaultAutonomyLevel,
+			"permission_mode":        row.PermissionMode,
+			"is_builtin":             row.IsBuiltIn,
+			"is_enabled":             row.IsEnabled,
+			"reason":                 reasons[row.Slug],
+			"status":                 "selected",
+		})
+	}
+
+	return out
+}
+
+func buildSelectedOperatorSkillsText(selectedSkills []map[string]interface{}) string {
+	if len(selectedSkills) == 0 {
+		return ""
+	}
+
+	lines := []string{
+		"Operator skills selected:",
+	}
+
+	for _, skill := range selectedSkills {
+		slug, _ := skill["slug"].(string)
+		name, _ := skill["name"].(string)
+		reason, _ := skill["reason"].(string)
+
+		if name == "" {
+			name = slug
+		}
+		if reason == "" {
+			reason = "Selected for this authorized pentest objective."
+		}
+
+		lines = append(lines, fmt.Sprintf("- %s (%s): %s", name, slug, reason))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
 // CreateTargetAgentChatMessage creates a user message, assistant plan message, and proposed actions.
 func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 	if err := ensureAgentChatEnabled(c); err != nil {
@@ -3273,6 +3399,10 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 	createdActions := make([]models.AgentAction, 0)
 	reusedActionIDs := make([]uint, 0)
 	reusedActionCount := 0
+	selectedSkills := selectedOperatorSkillsForChat(content)
+	if selectedSkillsText := buildSelectedOperatorSkillsText(selectedSkills); selectedSkillsText != "" {
+		assistantText = strings.TrimSpace(assistantText + "\n\n" + selectedSkillsText)
+	}
 
 	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
 		userMessage = models.AgentChatMessage{
@@ -3369,6 +3499,7 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 				"actions_created":   len(actionIDs) - reusedActionCount,
 				"actions_reused":    reusedActionCount,
 				"reused_action_ids": reusedActionIDs,
+				"selected_skills":   selectedSkills,
 				"hunting_session":   buildHuntingSessionOutput(createdActions),
 				"execution_enabled": false,
 				"guardrails": []string{
@@ -3430,6 +3561,7 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 		assistantMessage.Content = strings.TrimSpace(assistantMessage.Content + "\n\n" + runtimeAnalysisText)
 		assistantMessage.Content = formatAssistantTextForChatReadability(assistantMessage.Content)
 	}
+	assistantOutput["selected_skills"] = selectedSkills
 
 	assistantOutput["hunting_session"] = huntingSession
 	assistantOutput["autopilot"] = autopilot
