@@ -16,6 +16,7 @@ const (
 	httpEvidenceAnalysisSkillSlug = "http_evidence_analysis"
 	authContextNeededSkillSlug    = "auth_context_needed"
 	jsAuditSkillSlug              = "js_audit"
+	xssReflectionSkillSlug        = "xss_reflection"
 )
 
 type parameterInventoryCandidate struct {
@@ -978,6 +979,444 @@ func persistJSAuditSkillMemory(uid uint, ownerKey string, target *models.Target,
 	return row.ID, wasCreated, nil
 }
 
+type xssReflectionCandidate struct {
+	ParamName  string
+	URL        string
+	Source     string
+	Reason     string
+	Confidence int
+}
+
+func isXSSRelevantParam(name string) bool {
+	p := strings.ToLower(strings.TrimSpace(name))
+	if p == "" {
+		return false
+	}
+
+	return p == "q" ||
+		p == "s" ||
+		p == "search" ||
+		p == "query" ||
+		p == "keyword" ||
+		p == "term" ||
+		p == "text" ||
+		p == "message" ||
+		p == "comment" ||
+		p == "title" ||
+		p == "name" ||
+		p == "return" ||
+		p == "next" ||
+		p == "url" ||
+		p == "callback" ||
+		strings.Contains(p, "search") ||
+		strings.Contains(p, "query") ||
+		strings.Contains(p, "keyword") ||
+		strings.Contains(p, "redirect") ||
+		strings.Contains(p, "callback")
+}
+
+func buildXSSReflectionCandidates(foundURLs []models.FoundURL, parameterObservations []models.OperatorSkillObservation) []xssReflectionCandidate {
+	seen := map[string]bool{}
+	out := make([]xssReflectionCandidate, 0)
+
+	add := func(candidate xssReflectionCandidate) {
+		candidate.ParamName = strings.TrimSpace(candidate.ParamName)
+		candidate.URL = strings.TrimSpace(candidate.URL)
+		if candidate.ParamName == "" && candidate.URL == "" {
+			return
+		}
+		key := strings.ToLower(candidate.ParamName) + "\x00" + candidate.URL
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		if candidate.Confidence <= 0 {
+			candidate.Confidence = 60
+		}
+		out = append(out, candidate)
+	}
+
+	for _, observation := range parameterObservations {
+		if !strings.EqualFold(observation.BugClass, "xss") && !isXSSRelevantParam(observation.ParamName) {
+			continue
+		}
+
+		reason := observation.Summary
+		if strings.TrimSpace(reason) == "" {
+			reason = "Parameter inventory observation indicates a reflection-relevant parameter candidate."
+		}
+
+		add(xssReflectionCandidate{
+			ParamName:  observation.ParamName,
+			URL:        observation.URL,
+			Source:     "parameter_inventory_observation",
+			Reason:     reason,
+			Confidence: observation.Confidence,
+		})
+	}
+
+	for _, foundURL := range foundURLs {
+		value := strings.TrimSpace(foundURL.Value)
+		if value == "" || !strings.Contains(value, "?") {
+			continue
+		}
+
+		parsed, err := url.Parse(value)
+		if err != nil {
+			continue
+		}
+
+		for paramName := range parsed.Query() {
+			if !isXSSRelevantParam(paramName) {
+				continue
+			}
+
+			add(xssReflectionCandidate{
+				ParamName:  paramName,
+				URL:        value,
+				Source:     "found_url_query_parameter",
+				Reason:     "URL inventory contains an XSS/reflection-relevant query parameter. Runtime v1 only records a candidate and does not execute payloads.",
+				Confidence: 65,
+			})
+		}
+
+		if len(out) >= 50 {
+			break
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Confidence == out[j].Confidence {
+			if out[i].ParamName == out[j].ParamName {
+				return out[i].URL < out[j].URL
+			}
+			return out[i].ParamName < out[j].ParamName
+		}
+		return out[i].Confidence > out[j].Confidence
+	})
+
+	if len(out) > 50 {
+		out = out[:50]
+	}
+
+	return out
+}
+
+func xssReflectionMemoryContent(target *models.Target, candidates []xssReflectionCandidate, sampledURLCount int) (string, string) {
+	root := "target"
+	if target != nil && strings.TrimSpace(target.RootDomain) != "" {
+		root = target.RootDomain
+	}
+
+	if len(candidates) == 0 {
+		content := strings.Join([]string{
+			"Operator skill: xss_reflection",
+			"Target: " + root,
+			fmt.Sprintf("Sampled URL inventory: %d", sampledURLCount),
+			"",
+			"No XSS/reflection parameter candidates were found from current parameter inventory or found URLs.",
+			"Learning: the operator needs richer crawling, parameter inventory, JS/API route mining, or prior reflection evidence before controlled XSS validation can be meaningful.",
+			"Execution note: runtime v1 does not execute payloads.",
+		}, "\n")
+		return content, "XSS reflection planning found no candidate parameters from current inventory."
+	}
+
+	lines := []string{
+		"Operator skill: xss_reflection",
+		"Target: " + root,
+		fmt.Sprintf("Candidate count: %d", len(candidates)),
+		"",
+		"Top reflection candidates:",
+	}
+
+	for idx, candidate := range candidates {
+		if idx >= 15 {
+			break
+		}
+		lines = append(lines, fmt.Sprintf("- param=%s url=%s", candidate.ParamName, candidate.URL))
+		lines = append(lines, "  "+candidate.Reason)
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, "Execution note: runtime v1 records XSS reflection candidates only. Actual reflection probing and payload validation must be handled by controlled runtime with policy/scope/rate-limit controls.")
+
+	return strings.Join(lines, "\n"), fmt.Sprintf("XSS reflection planning found %d candidate parameter(s) for controlled validation planning.", len(candidates))
+}
+
+func persistXSSReflectionSkillMemory(uid uint, ownerKey string, target *models.Target, run models.OperatorSkillRun, candidates []xssReflectionCandidate, observationIDs []uint, sampledURLCount int) (uint, bool, error) {
+	if target == nil {
+		return 0, false, nil
+	}
+
+	content, summary := xssReflectionMemoryContent(target, candidates, sampledURLCount)
+	sourceID := run.ID
+
+	item := models.TargetMemoryItem{
+		UserID:     uid,
+		OwnerKey:   ownerKey,
+		TargetID:   target.ID,
+		SourceType: models.TargetMemorySourceAgentAction,
+		SourceID:   &sourceID,
+		MemoryType: models.TargetMemoryTypeVulnerabilityHypothesis,
+		Title:      "Operator XSS reflection plan: " + target.RootDomain,
+		Content:    content,
+		Summary:    summary,
+		Tags: memoryJSON([]string{
+			"operator_skill",
+			"xss_reflection",
+			"xss",
+			"reflection",
+			"parameter_inventory",
+			"vulnerability_hypothesis",
+			"authorized_validation",
+			"rag",
+			"operator",
+		}, "[]"),
+		Importance: 65,
+		Confidence: 70,
+		SourceHash: memoryHash(
+			"operator_skill_xss_reflection_latest",
+			fmt.Sprint(target.ID),
+			ownerKey,
+		),
+		Metadata: memoryJSON(map[string]interface{}{
+			"ingest_version":     "operator-skill-xss-reflection-memory-v1",
+			"skill":              xssReflectionSkillSlug,
+			"skill_run_id":       run.ID,
+			"chat_session_id":    run.ChatSessionID,
+			"chat_message_id":    run.ChatMessageID,
+			"sampled_url_count":  sampledURLCount,
+			"candidate_count":    len(candidates),
+			"observation_count":  len(observationIDs),
+			"observation_ids":    observationIDs,
+			"runtime_scope":      "planning_only_no_payload_execution",
+			"next_operator_hint": "Use controlled runtime for reflection/context probing only when scope and policy allow.",
+		}, "{}"),
+	}
+
+	if len(candidates) == 0 {
+		item.Importance = 50
+		item.Confidence = 60
+	}
+
+	row, wasCreated, err := upsertTargetMemoryItem(item)
+	if err != nil {
+		return 0, false, err
+	}
+
+	return row.ID, wasCreated, nil
+}
+
+func executeXSSReflectionSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
+	if target == nil || len(selectedSkillRunIDs) == 0 {
+		return nil, nil
+	}
+
+	runs := make([]models.OperatorSkillRun, 0)
+	if err := db.
+		Where("id IN ? AND target_id = ? AND user_id = ? AND owner_key = ? AND skill_slug = ?", selectedSkillRunIDs, target.ID, uid, ownerKey, xssReflectionSkillSlug).
+		Order("id ASC").
+		Find(&runs).Error; err != nil {
+		return nil, err
+	}
+
+	if len(runs) == 0 {
+		return nil, nil
+	}
+
+	foundURLs := make([]models.FoundURL, 0)
+	if err := db.
+		Where("target_id = ?", target.ID).
+		Order("last_seen DESC NULLS LAST, id DESC").
+		Limit(1000).
+		Find(&foundURLs).Error; err != nil {
+		return nil, err
+	}
+
+	parameterObservations := make([]models.OperatorSkillObservation, 0)
+	_ = db.
+		Where("target_id = ? AND user_id = ? AND owner_key = ? AND skill_slug = ? AND observation_type = ?",
+			target.ID,
+			uid,
+			ownerKey,
+			parameterInventorySkillSlug,
+			models.OperatorSkillObservationTypeCandidate,
+		).
+		Order("created_at DESC, id DESC").
+		Limit(200).
+		Find(&parameterObservations).Error
+
+	candidates := buildXSSReflectionCandidates(foundURLs, parameterObservations)
+	now := time.Now().UTC()
+	runSummaries := make([]map[string]interface{}, 0, len(runs))
+
+	for _, run := range runs {
+		startedAt := now
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":     models.OperatorSkillRunStatusRunning,
+				"started_at": &startedAt,
+				"updated_at": now,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		createdObservationIDs := make([]uint, 0, len(candidates))
+
+		if len(candidates) == 0 {
+			observation := models.OperatorSkillObservation{
+				UserID:          uid,
+				OwnerKey:        ownerKey,
+				TargetID:        target.ID,
+				SkillRunID:      run.ID,
+				SkillSlug:       xssReflectionSkillSlug,
+				ObservationType: models.OperatorSkillObservationTypeLearning,
+				Title:           "XSS reflection planning needs parameter candidates",
+				Summary:         "No XSS/reflection parameter candidates were found from current inventory.",
+				Content:         "Learning: improve crawling, parameter inventory, JS/API route mining, or reflection evidence before controlled XSS validation. Runtime v1 does not execute payloads.",
+				BugClass:        "xss",
+				Confidence:      60,
+				Severity:        models.FindingSeverityInfo,
+				Status:          models.OperatorSkillRunStatusCompleted,
+				EvidenceJSON: chatJSON(map[string]interface{}{
+					"sampled_url_count":           len(foundURLs),
+					"parameter_observation_count": len(parameterObservations),
+					"candidate_count":             0,
+					"skill":                       xssReflectionSkillSlug,
+					"runtime_scope":               "planning_only_no_payload_execution",
+				}),
+				Metadata: chatJSON(map[string]interface{}{
+					"created_by":          "xss-reflection-skill-v1",
+					"operator_skill_run":  run.ID,
+					"target_id":           target.ID,
+					"observation_version": "xss-reflection-learning-v1",
+				}),
+			}
+
+			if err := db.Create(&observation).Error; err != nil {
+				return nil, err
+			}
+			createdObservationIDs = append(createdObservationIDs, observation.ID)
+		} else {
+			for _, candidate := range candidates {
+				observation := models.OperatorSkillObservation{
+					UserID:          uid,
+					OwnerKey:        ownerKey,
+					TargetID:        target.ID,
+					SkillRunID:      run.ID,
+					SkillSlug:       xssReflectionSkillSlug,
+					ObservationType: models.OperatorSkillObservationTypeCandidate,
+					Title:           fmt.Sprintf("XSS reflection candidate: %s", candidate.ParamName),
+					Summary:         fmt.Sprintf("Parameter %q is a candidate for controlled reflection/context validation.", candidate.ParamName),
+					Content:         candidate.Reason + "\nRuntime v1 does not execute payloads.",
+					URL:             candidate.URL,
+					ParamName:       candidate.ParamName,
+					BugClass:        "xss",
+					Confidence:      candidate.Confidence,
+					Severity:        models.FindingSeverityInfo,
+					Status:          "candidate",
+					EvidenceJSON: chatJSON(map[string]interface{}{
+						"parameter":     candidate.ParamName,
+						"url":           candidate.URL,
+						"source":        candidate.Source,
+						"reason":        candidate.Reason,
+						"confidence":    candidate.Confidence,
+						"skill":         xssReflectionSkillSlug,
+						"runtime_scope": "planning_only_no_payload_execution",
+					}),
+					Metadata: chatJSON(map[string]interface{}{
+						"created_by":          "xss-reflection-skill-v1",
+						"operator_skill_run":  run.ID,
+						"target_id":           target.ID,
+						"observation_version": "xss-reflection-candidate-v1",
+					}),
+				}
+
+				if err := db.Create(&observation).Error; err != nil {
+					return nil, err
+				}
+				createdObservationIDs = append(createdObservationIDs, observation.ID)
+			}
+		}
+
+		memoryItemID, memoryWasCreated, memoryErr := persistXSSReflectionSkillMemory(uid, ownerKey, target, run, candidates, createdObservationIDs, len(foundURLs))
+
+		status := models.OperatorSkillRunStatusCompleted
+		resultSummary := fmt.Sprintf("XSS reflection planning reviewed %d URL(s), %d parameter observation(s), and found %d candidate(s).", len(foundURLs), len(parameterObservations), len(candidates))
+		nextStep := "Use controlled runtime for reflection/context probing only when scope and policy allow."
+		if len(candidates) == 0 {
+			nextStep = "Improve URL discovery, parameter inventory, JS/API route mining, or reflection evidence before controlled XSS validation."
+		}
+
+		output := map[string]interface{}{
+			"status":                      status,
+			"skill":                       xssReflectionSkillSlug,
+			"runtime_version":             "xss-reflection-skill-runtime-v1",
+			"sampled_url_count":           len(foundURLs),
+			"parameter_observation_count": len(parameterObservations),
+			"candidate_count":             len(candidates),
+			"observation_count":           len(createdObservationIDs),
+			"observation_ids":             createdObservationIDs,
+			"memory_ingested":             memoryErr == nil && memoryItemID > 0,
+			"memory_item_id":              memoryItemID,
+			"memory_was_created":          memoryWasCreated,
+			"runtime_scope":               "planning_only_no_payload_execution",
+			"next_recommended_skills": []string{
+				"xss_reflection_probe",
+				"dom_xss_audit",
+				"http_evidence_analysis",
+			},
+		}
+
+		if memoryErr != nil {
+			output["memory_ingest_error"] = memoryErr.Error()
+		}
+
+		completedAt := time.Now().UTC()
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":         status,
+				"output_json":    chatJSON(output),
+				"result_summary": resultSummary,
+				"next_step":      nextStep,
+				"completed_at":   &completedAt,
+				"updated_at":     completedAt,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		runSummaries = append(runSummaries, map[string]interface{}{
+			"skill_run_id":                run.ID,
+			"status":                      status,
+			"sampled_url_count":           len(foundURLs),
+			"parameter_observation_count": len(parameterObservations),
+			"candidate_count":             len(candidates),
+			"observation_count":           len(createdObservationIDs),
+			"observation_ids":             createdObservationIDs,
+			"memory_ingested":             memoryErr == nil && memoryItemID > 0,
+			"memory_item_id":              memoryItemID,
+			"memory_was_created":          memoryWasCreated,
+			"runtime_scope":               "planning_only_no_payload_execution",
+			"memory_ingest_error": func() string {
+				if memoryErr != nil {
+					return memoryErr.Error()
+				}
+				return ""
+			}(),
+		})
+	}
+
+	return map[string]interface{}{
+		"status":          models.OperatorSkillRunStatusCompleted,
+		"runs":            runSummaries,
+		"run_count":       len(runSummaries),
+		"candidate_count": len(candidates),
+		"runtime_scope":   "planning_only_no_payload_execution",
+	}, nil
+}
+
 func executeJSAuditSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
 	if target == nil || len(selectedSkillRunIDs) == 0 {
 		return nil, nil
@@ -1415,9 +1854,20 @@ func executeSelectedOperatorSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey st
 		}
 	}
 
+	if runIDs := selectedBySlug[xssReflectionSkillSlug]; len(runIDs) > 0 {
+		xssOutput, err := executeXSSReflectionSkillRunsFromChat(db, uid, ownerKey, target, runIDs)
+		if err != nil {
+			output["xss_reflection_error"] = err.Error()
+			blockedCount += len(runIDs)
+		} else if xssOutput != nil {
+			output["xss_reflection"] = xssOutput
+			executedCount += len(runIDs)
+		}
+	}
+
 	notImplemented := make([]map[string]interface{}, 0)
 	for slug, runIDs := range selectedBySlug {
-		if slug == parameterInventorySkillSlug || slug == httpEvidenceAnalysisSkillSlug || slug == authContextNeededSkillSlug || slug == jsAuditSkillSlug {
+		if slug == parameterInventorySkillSlug || slug == httpEvidenceAnalysisSkillSlug || slug == authContextNeededSkillSlug || slug == jsAuditSkillSlug || slug == xssReflectionSkillSlug {
 			continue
 		}
 

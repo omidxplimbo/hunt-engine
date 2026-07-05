@@ -3693,6 +3693,27 @@ func buildSkillExecutionText(skillExecution map[string]interface{}) string {
 		}
 	}
 
+	if xssRaw, ok := skillExecution["xss_reflection"]; ok && xssRaw != nil {
+		if xssOutput, ok := xssRaw.(map[string]interface{}); ok {
+			status := strings.TrimSpace(fmt.Sprint(xssOutput["status"]))
+			runCount := strings.TrimSpace(fmt.Sprint(xssOutput["run_count"]))
+			candidateCount := strings.TrimSpace(fmt.Sprint(xssOutput["candidate_count"]))
+			if status == "" || status == "<nil>" {
+				status = "completed"
+			}
+			if runCount == "" || runCount == "<nil>" {
+				runCount = "0"
+			}
+			if candidateCount == "" || candidateCount == "<nil>" {
+				candidateCount = "0"
+			}
+
+			lines = append(lines, fmt.Sprintf("- XSS Reflection Planning: status=%s, runs=%s, candidates=%s", status, runCount, candidateCount))
+			lines = append(lines, "  Scope: planning only; no payload execution was performed.")
+			lines = append(lines, "  Next: use controlled runtime for reflection/context probing only when scope and policy allow.")
+		}
+	}
+
 	return strings.Join(lines, "\n")
 }
 
