@@ -3588,6 +3588,23 @@ func buildSkillExecutionText(skillExecution map[string]interface{}) string {
 		}
 	}
 
+	if authRaw, ok := skillExecution["auth_context_needed"]; ok && authRaw != nil {
+		if authOutput, ok := authRaw.(map[string]interface{}); ok {
+			status := strings.TrimSpace(fmt.Sprint(authOutput["status"]))
+			runCount := strings.TrimSpace(fmt.Sprint(authOutput["run_count"]))
+			if status == "" || status == "<nil>" {
+				status = "needs_context"
+			}
+			if runCount == "" || runCount == "<nil>" {
+				runCount = "0"
+			}
+
+			lines = append(lines, fmt.Sprintf("- Auth Context Needed: status=%s, runs=%s", status, runCount))
+			lines = append(lines, "  Needed: authenticated session/test credentials, preferably two accounts, role/tenant boundaries, explicit authorization, and stop conditions.")
+			lines = append(lines, "  Next: ask the user for auth context before real IDOR/API authorization/business-logic validation.")
+		}
+	}
+
 	return strings.Join(lines, "\n")
 }
 

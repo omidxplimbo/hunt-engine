@@ -14,6 +14,7 @@ import (
 const (
 	parameterInventorySkillSlug   = "parameter_inventory"
 	httpEvidenceAnalysisSkillSlug = "http_evidence_analysis"
+	authContextNeededSkillSlug    = "auth_context_needed"
 )
 
 type parameterInventoryCandidate struct {
@@ -688,6 +689,236 @@ func executeHTTPEvidenceAnalysisSkillRunsFromChat(db *gorm.DB, uid uint, ownerKe
 	}, nil
 }
 
+func authContextNeededContent(target *models.Target) (string, string) {
+	root := "target"
+	if target != nil && strings.TrimSpace(target.RootDomain) != "" {
+		root = target.RootDomain
+	}
+
+	lines := []string{
+		"Operator skill: auth_context_needed",
+		"Purpose: collect the minimum authorized context required for real access-control, IDOR/BOLA/BFLA, API authorization, session/JWT/OAuth, and business-logic validation.",
+		"Target: " + root,
+		"",
+		"Required context before meaningful validation:",
+		"- In-scope authenticated test account credentials or session cookies/tokens.",
+		"- Preferably two accounts with different ownership boundaries for IDOR/BOLA comparison.",
+		"- Role/tenant/org context if the application has multiple roles, organizations, teams, or subscriptions.",
+		"- Explicit authorization for account-to-account authorization checks and any state-changing workflows.",
+		"- Known sensitive object identifiers, API endpoints, account/profile/order/resource URLs, or workflows to prioritize.",
+		"- Stop conditions and rate limits for controlled validation.",
+		"",
+		"Operator hint: do not claim IDOR/API authorization impact without comparing authorized and unauthorized behavior under approved authenticated context.",
+	}
+
+	summary := "Authenticated context and preferably a second test account are needed before real IDOR/API authorization/business-logic validation."
+	return strings.Join(lines, "\n"), summary
+}
+
+func persistAuthContextNeededSkillMemory(uid uint, ownerKey string, target *models.Target, run models.OperatorSkillRun, observationIDs []uint) (uint, bool, error) {
+	if target == nil {
+		return 0, false, nil
+	}
+
+	content, summary := authContextNeededContent(target)
+	sourceID := run.ID
+
+	item := models.TargetMemoryItem{
+		UserID:     uid,
+		OwnerKey:   ownerKey,
+		TargetID:   target.ID,
+		SourceType: models.TargetMemorySourceAgentAction,
+		SourceID:   &sourceID,
+		MemoryType: models.TargetMemoryTypePolicyConstraint,
+		Title:      "Operator auth context needed: " + target.RootDomain,
+		Content:    content,
+		Summary:    summary,
+		Tags: memoryJSON([]string{
+			"operator_skill",
+			"auth_context_needed",
+			"access_control",
+			"idor",
+			"api_authorization",
+			"authenticated_testing",
+			"authorized_validation",
+			"rag",
+			"operator",
+		}, "[]"),
+		Importance: 85,
+		Confidence: 85,
+		SourceHash: memoryHash(
+			"operator_skill_auth_context_needed_latest",
+			fmt.Sprint(target.ID),
+			ownerKey,
+		),
+		Metadata: memoryJSON(map[string]interface{}{
+			"ingest_version":     "operator-skill-auth-context-needed-memory-v1",
+			"skill":              authContextNeededSkillSlug,
+			"skill_run_id":       run.ID,
+			"chat_session_id":    run.ChatSessionID,
+			"chat_message_id":    run.ChatMessageID,
+			"observation_count":  len(observationIDs),
+			"observation_ids":    observationIDs,
+			"operator_ready":     true,
+			"needs_user_input":   true,
+			"next_operator_hint": "Ask the user for authenticated context, second test account, authorization boundaries, and stop conditions before access-control validation.",
+		}, "{}"),
+	}
+
+	row, wasCreated, err := upsertTargetMemoryItem(item)
+	if err != nil {
+		return 0, false, err
+	}
+
+	return row.ID, wasCreated, nil
+}
+
+func executeAuthContextNeededSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
+	if target == nil || len(selectedSkillRunIDs) == 0 {
+		return nil, nil
+	}
+
+	runs := make([]models.OperatorSkillRun, 0)
+	if err := db.
+		Where("id IN ? AND target_id = ? AND user_id = ? AND owner_key = ? AND skill_slug = ?", selectedSkillRunIDs, target.ID, uid, ownerKey, authContextNeededSkillSlug).
+		Order("id ASC").
+		Find(&runs).Error; err != nil {
+		return nil, err
+	}
+
+	if len(runs) == 0 {
+		return nil, nil
+	}
+
+	runSummaries := make([]map[string]interface{}, 0, len(runs))
+	now := time.Now().UTC()
+
+	for _, run := range runs {
+		startedAt := now
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":     models.OperatorSkillRunStatusRunning,
+				"started_at": &startedAt,
+				"updated_at": now,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		content, summary := authContextNeededContent(target)
+		observation := models.OperatorSkillObservation{
+			UserID:          uid,
+			OwnerKey:        ownerKey,
+			TargetID:        target.ID,
+			SkillRunID:      run.ID,
+			SkillSlug:       authContextNeededSkillSlug,
+			ObservationType: models.OperatorSkillObservationTypeNextStep,
+			Title:           "Authenticated context required for access-control validation",
+			Summary:         summary,
+			Content:         content,
+			BugClass:        "access_control",
+			Confidence:      90,
+			Severity:        models.FindingSeverityInfo,
+			Status:          models.OperatorSkillRunStatusNeedsContext,
+			EvidenceJSON: chatJSON(map[string]interface{}{
+				"required_context": []string{
+					"authenticated session or test credentials",
+					"second test account where possible",
+					"role/tenant/org boundaries",
+					"authorization for account-to-account checks",
+					"target workflows and sensitive object identifiers",
+					"rate limits and stop conditions",
+				},
+				"skill": authContextNeededSkillSlug,
+			}),
+			Metadata: chatJSON(map[string]interface{}{
+				"created_by":          "auth-context-needed-skill-v1",
+				"operator_skill_run":  run.ID,
+				"target_id":           target.ID,
+				"observation_version": "auth-context-needed-observation-v1",
+			}),
+		}
+
+		if err := db.Create(&observation).Error; err != nil {
+			return nil, err
+		}
+
+		observationIDs := []uint{observation.ID}
+		memoryItemID, memoryWasCreated, memoryErr := persistAuthContextNeededSkillMemory(uid, ownerKey, target, run, observationIDs)
+
+		status := models.OperatorSkillRunStatusNeedsContext
+		resultSummary := "Auth context is required before real access-control, IDOR/BOLA, API authorization, session, or business-logic validation."
+		nextStep := "Ask the user for an authenticated session or test credentials, preferably two accounts with different ownership boundaries, plus explicit authorization and stop conditions."
+
+		output := map[string]interface{}{
+			"status":            status,
+			"skill":             authContextNeededSkillSlug,
+			"observation_count": 1,
+			"observation_ids":   observationIDs,
+			"runtime_version":   "auth-context-needed-skill-runtime-v1",
+			"needs_context":     true,
+			"required_context": []string{
+				"authenticated session or test credentials",
+				"second test account where possible",
+				"role/tenant/org boundaries",
+				"authorization for account-to-account checks",
+				"target workflows and sensitive object identifiers",
+				"rate limits and stop conditions",
+			},
+			"memory_ingested":    memoryErr == nil && memoryItemID > 0,
+			"memory_item_id":     memoryItemID,
+			"memory_was_created": memoryWasCreated,
+			"next_recommended_skills": []string{
+				"idor_authz_probe",
+				"api_authorization",
+				"auth_session_analysis",
+			},
+		}
+
+		if memoryErr != nil {
+			output["memory_ingest_error"] = memoryErr.Error()
+		}
+
+		completedAt := time.Now().UTC()
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":         status,
+				"output_json":    chatJSON(output),
+				"result_summary": resultSummary,
+				"next_step":      nextStep,
+				"completed_at":   &completedAt,
+				"updated_at":     completedAt,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		runSummaries = append(runSummaries, map[string]interface{}{
+			"skill_run_id":       run.ID,
+			"status":             status,
+			"needs_context":      true,
+			"observation_count":  1,
+			"observation_ids":    observationIDs,
+			"memory_ingested":    memoryErr == nil && memoryItemID > 0,
+			"memory_item_id":     memoryItemID,
+			"memory_was_created": memoryWasCreated,
+			"memory_ingest_error": func() string {
+				if memoryErr != nil {
+					return memoryErr.Error()
+				}
+				return ""
+			}(),
+		})
+	}
+
+	return map[string]interface{}{
+		"status":        models.OperatorSkillRunStatusNeedsContext,
+		"runs":          runSummaries,
+		"run_count":     len(runSummaries),
+		"needs_context": true,
+	}, nil
+}
+
 func executeSelectedOperatorSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
 	output := map[string]interface{}{}
 
@@ -741,9 +972,20 @@ func executeSelectedOperatorSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey st
 		}
 	}
 
+	if runIDs := selectedBySlug[authContextNeededSkillSlug]; len(runIDs) > 0 {
+		authContextOutput, err := executeAuthContextNeededSkillRunsFromChat(db, uid, ownerKey, target, runIDs)
+		if err != nil {
+			output["auth_context_needed_error"] = err.Error()
+			blockedCount += len(runIDs)
+		} else if authContextOutput != nil {
+			output["auth_context_needed"] = authContextOutput
+			executedCount += len(runIDs)
+		}
+	}
+
 	notImplemented := make([]map[string]interface{}, 0)
 	for slug, runIDs := range selectedBySlug {
-		if slug == parameterInventorySkillSlug || slug == httpEvidenceAnalysisSkillSlug {
+		if slug == parameterInventorySkillSlug || slug == httpEvidenceAnalysisSkillSlug || slug == authContextNeededSkillSlug {
 			continue
 		}
 
