@@ -58,7 +58,7 @@ export const MainLayout = () => {
              <MustacheLogo />
           </div>
           <h1 className="hack-title text-2xl !tracking-widest">
-            HUNT<span className="text-white">OS</span> v3.13.0
+            HUNT<span className="text-white">OS</span> v3.15.0
           </h1>
           <div className="mt-2 flex items-center gap-2 text-[10px] text-hack-dim uppercase tracking-[0.2em]">
             <div className="w-2 h-2 rounded-full bg-hack-primary animate-pulse" />

@@ -59,6 +59,51 @@ const actionLabel = (value: string) =>
     .replaceAll("_", " ")
     .replace(/\b\w/g, (ch) => ch.toUpperCase());
 
+const methodologyTitle = (item: any) =>
+  String(item?.title || item?.name || "Untitled methodology").trim();
+
+const methodologySkillSlug = (item: any) =>
+  String(item?.skill_slug || item?.skillSlug || "").trim();
+
+const methodologyBugClass = (item: any) =>
+  String(item?.bug_class || item?.bugClass || "").trim();
+
+const methodologySummary = (item: any) =>
+  String(item?.summary || item?.content || "").trim();
+
+const buildAppliedMethodologyRows = (selectedSkills: any[]) => {
+  const rows: Array<{
+    key: string;
+    title: string;
+    skillSlug: string;
+    bugClass: string;
+    summary: string;
+  }> = [];
+  const seen = new Set<string>();
+
+  selectedSkills.forEach((skill) => {
+    const skillSlug = String(skill?.slug || "").trim();
+    const applied = asArray(skill?.applied_methodologies);
+    applied.forEach((methodology) => {
+      const title = methodologyTitle(methodology);
+      const bugClass = methodologyBugClass(methodology);
+      const summary = methodologySummary(methodology);
+      const key = `${skillSlug}:${methodology?.id || title}`;
+      if (!title || seen.has(key)) return;
+      seen.add(key);
+      rows.push({
+        key,
+        title,
+        skillSlug,
+        bugClass,
+        summary,
+      });
+    });
+  });
+
+  return rows;
+};
+
 const MessageBubble = ({
   message,
   onJumpToActions,
@@ -86,6 +131,11 @@ const MessageBubble = ({
   const autopilotRuns = asArray(autopilot?.controlled_runs);
   const autopilotResults = asArray(autopilot?.controlled_results);
   const autopilotErrors = asArray(autopilot?.errors);
+
+  const selectedSkills = asArray(output?.selected_skills);
+  const selectedMethodologies = asArray(output?.selected_methodologies);
+  const methodologyContextUsed = Boolean(output?.operator_methodology_context_used);
+  const appliedMethodologyRows = buildAppliedMethodologyRows(selectedSkills);
 
   const numericActionIds = actionIds
     .map((item: any) => Number(item))
@@ -205,6 +255,89 @@ const MessageBubble = ({
               <span className="border border-hack-border bg-black/30 px-2 py-1 text-hack-dim">
                 {provider} / {model || "-"}
               </span>
+            )}
+          </div>
+        )}
+
+        {!isUser && (methodologyContextUsed || selectedMethodologies.length > 0 || appliedMethodologyRows.length > 0) && (
+          <div className="mt-3 border border-purple-400/40 bg-purple-500/10 p-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="font-mono text-[10px] uppercase tracking-wider text-purple-300">
+                Operator Methodology Applied
+              </div>
+              <div className="flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-wider">
+                <span className="border border-purple-400/50 bg-black/30 px-2 py-1 text-purple-300">
+                  context: {methodologyContextUsed ? "used" : "not used"}
+                </span>
+                <span className="border border-purple-400/50 bg-black/30 px-2 py-1 text-purple-300">
+                  records: {selectedMethodologies.length}
+                </span>
+                <span className="border border-purple-400/50 bg-black/30 px-2 py-1 text-purple-300">
+                  applied: {appliedMethodologyRows.length}
+                </span>
+              </div>
+            </div>
+
+            {appliedMethodologyRows.length > 0 ? (
+              <div className="space-y-2">
+                {appliedMethodologyRows.slice(0, 6).map((row) => (
+                  <div key={`${message.id}-methodology-${row.key}`} className="border border-purple-400/30 bg-black/30 p-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-xs text-white">{row.title}</span>
+                      {row.skillSlug && (
+                        <span className="rounded border border-purple-400/40 bg-purple-500/10 px-1.5 py-0.5 font-mono text-[10px] text-purple-300">
+                          → {row.skillSlug}
+                        </span>
+                      )}
+                      {row.bugClass && (
+                        <span className="rounded border border-blue-400/40 bg-blue-500/10 px-1.5 py-0.5 font-mono text-[10px] text-blue-300">
+                          {row.bugClass}
+                        </span>
+                      )}
+                    </div>
+                    {row.summary && (
+                      <div className="mt-1 text-xs text-hack-dim">
+                        {truncateText(row.summary, 220)}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : selectedMethodologies.length > 0 ? (
+              <div className="space-y-2">
+                {selectedMethodologies.slice(0, 6).map((methodology: any, index: number) => {
+                  const title = methodologyTitle(methodology);
+                  const skillSlug = methodologySkillSlug(methodology);
+                  const bugClass = methodologyBugClass(methodology);
+                  const summary = methodologySummary(methodology);
+                  return (
+                    <div key={`${message.id}-selected-methodology-${methodology?.id || index}`} className="border border-purple-400/30 bg-black/30 p-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono text-xs text-white">{title}</span>
+                        {skillSlug && (
+                          <span className="rounded border border-purple-400/40 bg-purple-500/10 px-1.5 py-0.5 font-mono text-[10px] text-purple-300">
+                            skill: {skillSlug}
+                          </span>
+                        )}
+                        {bugClass && (
+                          <span className="rounded border border-blue-400/40 bg-blue-500/10 px-1.5 py-0.5 font-mono text-[10px] text-blue-300">
+                            bug: {bugClass}
+                          </span>
+                        )}
+                      </div>
+                      {summary && (
+                        <div className="mt-1 text-xs text-hack-dim">
+                          {truncateText(summary, 220)}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="text-xs text-hack-dim">
+                Methodology context was passed to the operator planner, but no per-skill methodology attachment was reported for this message.
+              </div>
             )}
           </div>
         )}
@@ -577,9 +710,10 @@ const AgentChatPanel = ({ targetId, enabled = true, onJumpToActions }: Props) =>
             <MessageSquare className="h-5 w-5" /> Attack Surface Chat
           </h2>
           <p className="mt-1 max-w-4xl text-sm text-hack-dim">
-            RAG-backed v3.11 Operator MVP. The agent uses target memory and
-            policy context to create owner-scoped, approval-gated pentest action
-            proposals. Direct chat execution remains disabled.
+            AI-driven v3.15 authorized pentest operator. The agent uses target
+            memory, policy context, executable skills, and selected methodology
+            records to plan evidence-driven validation and controlled action
+            workflows under the target's authorization boundaries.
           </p>
         </div>
 
