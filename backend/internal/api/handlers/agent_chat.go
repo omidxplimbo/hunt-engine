@@ -3735,6 +3735,27 @@ func buildSkillExecutionText(skillExecution map[string]interface{}) string {
 		}
 	}
 
+	if pathRaw, ok := skillExecution["path_traversal_baseline"]; ok && pathRaw != nil {
+		if pathOutput, ok := pathRaw.(map[string]interface{}); ok {
+			status := strings.TrimSpace(fmt.Sprint(pathOutput["status"]))
+			runCount := strings.TrimSpace(fmt.Sprint(pathOutput["run_count"]))
+			candidateCount := strings.TrimSpace(fmt.Sprint(pathOutput["candidate_count"]))
+			if status == "" || status == "<nil>" {
+				status = "completed"
+			}
+			if runCount == "" || runCount == "<nil>" {
+				runCount = "0"
+			}
+			if candidateCount == "" || candidateCount == "<nil>" {
+				candidateCount = "0"
+			}
+
+			lines = append(lines, fmt.Sprintf("- Path Traversal Planning: status=%s, runs=%s, candidates=%s", status, runCount, candidateCount))
+			lines = append(lines, "  Scope: planning only; no traversal payload execution or file-read validation was performed.")
+			lines = append(lines, "  Next: use controlled runtime for file-read/path traversal behavior validation only when scope and policy allow.")
+		}
+	}
+
 	return strings.Join(lines, "\n")
 }
 

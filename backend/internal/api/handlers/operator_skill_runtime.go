@@ -12,12 +12,13 @@ import (
 )
 
 const (
-	parameterInventorySkillSlug   = "parameter_inventory"
-	httpEvidenceAnalysisSkillSlug = "http_evidence_analysis"
-	authContextNeededSkillSlug    = "auth_context_needed"
-	jsAuditSkillSlug              = "js_audit"
-	xssReflectionSkillSlug        = "xss_reflection"
-	openRedirectSkillSlug         = "open_redirect"
+	parameterInventorySkillSlug    = "parameter_inventory"
+	httpEvidenceAnalysisSkillSlug  = "http_evidence_analysis"
+	authContextNeededSkillSlug     = "auth_context_needed"
+	jsAuditSkillSlug               = "js_audit"
+	xssReflectionSkillSlug         = "xss_reflection"
+	openRedirectSkillSlug          = "open_redirect"
+	pathTraversalBaselineSkillSlug = "path_traversal_baseline"
 )
 
 type parameterInventoryCandidate struct {
@@ -1441,6 +1442,455 @@ func persistOpenRedirectSkillMemory(uid uint, ownerKey string, target *models.Ta
 	return row.ID, wasCreated, nil
 }
 
+type pathTraversalCandidate struct {
+	ParamName  string
+	URL        string
+	Source     string
+	Reason     string
+	Confidence int
+}
+
+func isPathTraversalRelevantParam(name string) bool {
+	p := strings.ToLower(strings.TrimSpace(name))
+	if p == "" {
+		return false
+	}
+
+	return p == "file" ||
+		p == "filename" ||
+		p == "path" ||
+		p == "filepath" ||
+		p == "dir" ||
+		p == "directory" ||
+		p == "folder" ||
+		p == "download" ||
+		p == "template" ||
+		p == "tpl" ||
+		p == "view" ||
+		p == "page" ||
+		p == "include" ||
+		p == "load" ||
+		p == "resource" ||
+		p == "document" ||
+		p == "doc" ||
+		p == "export" ||
+		p == "import" ||
+		strings.Contains(p, "file") ||
+		strings.Contains(p, "path") ||
+		strings.HasPrefix(p, "dir_") ||
+		strings.HasSuffix(p, "_dir") ||
+		strings.Contains(p, "directory") ||
+		strings.Contains(p, "download") ||
+		strings.Contains(p, "template") ||
+		strings.Contains(p, "include") ||
+		strings.Contains(p, "folder")
+}
+
+func buildPathTraversalCandidates(foundURLs []models.FoundURL, parameterObservations []models.OperatorSkillObservation) []pathTraversalCandidate {
+	seen := map[string]bool{}
+	out := make([]pathTraversalCandidate, 0)
+
+	add := func(candidate pathTraversalCandidate) {
+		candidate.ParamName = strings.TrimSpace(candidate.ParamName)
+		candidate.URL = strings.TrimSpace(candidate.URL)
+		if candidate.ParamName == "" && candidate.URL == "" {
+			return
+		}
+
+		key := strings.ToLower(candidate.ParamName) + "\x00" + candidate.URL
+		if seen[key] {
+			return
+		}
+
+		seen[key] = true
+		if candidate.Confidence <= 0 {
+			candidate.Confidence = 65
+		}
+		out = append(out, candidate)
+	}
+
+	for _, observation := range parameterObservations {
+		if !strings.EqualFold(observation.BugClass, "path_traversal_file_read") && !strings.EqualFold(observation.BugClass, "path_traversal") && !isPathTraversalRelevantParam(observation.ParamName) {
+			continue
+		}
+
+		reason := observation.Summary
+		if strings.TrimSpace(reason) == "" {
+			reason = "Parameter inventory observation indicates a file/path/template-like parameter candidate."
+		}
+
+		add(pathTraversalCandidate{
+			ParamName:  observation.ParamName,
+			URL:        observation.URL,
+			Source:     "parameter_inventory_observation",
+			Reason:     reason,
+			Confidence: observation.Confidence,
+		})
+	}
+
+	for _, foundURL := range foundURLs {
+		value := strings.TrimSpace(foundURL.Value)
+		if value == "" || !strings.Contains(value, "?") {
+			continue
+		}
+
+		parsed, err := url.Parse(value)
+		if err != nil {
+			continue
+		}
+
+		for paramName := range parsed.Query() {
+			if !isPathTraversalRelevantParam(paramName) {
+				continue
+			}
+
+			add(pathTraversalCandidate{
+				ParamName:  paramName,
+				URL:        value,
+				Source:     "found_url_query_parameter",
+				Reason:     "URL inventory contains a file/path/template-like query parameter. Runtime v1 only records a candidate and does not execute traversal or file-read validation.",
+				Confidence: 70,
+			})
+		}
+
+		if len(out) >= 50 {
+			break
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Confidence == out[j].Confidence {
+			if out[i].ParamName == out[j].ParamName {
+				return out[i].URL < out[j].URL
+			}
+			return out[i].ParamName < out[j].ParamName
+		}
+		return out[i].Confidence > out[j].Confidence
+	})
+
+	if len(out) > 50 {
+		out = out[:50]
+	}
+
+	return out
+}
+
+func pathTraversalMemoryContent(target *models.Target, candidates []pathTraversalCandidate, sampledURLCount int) (string, string) {
+	root := "target"
+	if target != nil && strings.TrimSpace(target.RootDomain) != "" {
+		root = target.RootDomain
+	}
+
+	if len(candidates) == 0 {
+		content := strings.Join([]string{
+			"Operator skill: path_traversal_baseline",
+			"Target: " + root,
+			fmt.Sprintf("Sampled URL inventory: %d", sampledURLCount),
+			"",
+			"No path traversal/file-read candidate parameters were found from current parameter inventory or found URLs.",
+			"Learning: the operator needs richer crawling, download/export route discovery, file/template parameter inventory, or upload/download workflow mapping before controlled file-read validation can be meaningful.",
+			"Execution note: runtime v1 does not execute traversal payloads or file-read validation.",
+		}, "\n")
+		return content, "Path traversal planning found no file/path-like candidate parameters from current inventory."
+	}
+
+	lines := []string{
+		"Operator skill: path_traversal_baseline",
+		"Target: " + root,
+		fmt.Sprintf("Candidate count: %d", len(candidates)),
+		"",
+		"Top file/path candidates:",
+	}
+
+	for idx, candidate := range candidates {
+		if idx >= 15 {
+			break
+		}
+		lines = append(lines, fmt.Sprintf("- param=%s url=%s", candidate.ParamName, candidate.URL))
+		lines = append(lines, "  "+candidate.Reason)
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, "Execution note: runtime v1 records path traversal/file-read candidates only. Actual file-read behavior validation must be handled by controlled runtime with policy/scope/rate-limit controls.")
+
+	return strings.Join(lines, "\n"), fmt.Sprintf("Path traversal planning found %d candidate parameter(s) for controlled validation planning.", len(candidates))
+}
+
+func persistPathTraversalSkillMemory(uid uint, ownerKey string, target *models.Target, run models.OperatorSkillRun, candidates []pathTraversalCandidate, observationIDs []uint, sampledURLCount int) (uint, bool, error) {
+	if target == nil {
+		return 0, false, nil
+	}
+
+	content, summary := pathTraversalMemoryContent(target, candidates, sampledURLCount)
+	sourceID := run.ID
+
+	item := models.TargetMemoryItem{
+		UserID:     uid,
+		OwnerKey:   ownerKey,
+		TargetID:   target.ID,
+		SourceType: models.TargetMemorySourceAgentAction,
+		SourceID:   &sourceID,
+		MemoryType: models.TargetMemoryTypeVulnerabilityHypothesis,
+		Title:      "Operator path traversal plan: " + target.RootDomain,
+		Content:    content,
+		Summary:    summary,
+		Tags: memoryJSON([]string{
+			"operator_skill",
+			"path_traversal_baseline",
+			"path_traversal",
+			"file_read",
+			"download",
+			"template",
+			"parameter_inventory",
+			"vulnerability_hypothesis",
+			"authorized_validation",
+			"rag",
+			"operator",
+		}, "[]"),
+		Importance: 65,
+		Confidence: 70,
+		SourceHash: memoryHash(
+			"operator_skill_path_traversal_latest",
+			fmt.Sprint(target.ID),
+			ownerKey,
+		),
+		Metadata: memoryJSON(map[string]interface{}{
+			"ingest_version":     "operator-skill-path-traversal-memory-v1",
+			"skill":              pathTraversalBaselineSkillSlug,
+			"skill_run_id":       run.ID,
+			"chat_session_id":    run.ChatSessionID,
+			"chat_message_id":    run.ChatMessageID,
+			"sampled_url_count":  sampledURLCount,
+			"candidate_count":    len(candidates),
+			"observation_count":  len(observationIDs),
+			"observation_ids":    observationIDs,
+			"runtime_scope":      "planning_only_no_file_read_validation",
+			"next_operator_hint": "Use controlled runtime for file-read/path traversal behavior validation only when scope and policy allow.",
+		}, "{}"),
+	}
+
+	if len(candidates) == 0 {
+		item.Importance = 50
+		item.Confidence = 60
+	}
+
+	row, wasCreated, err := upsertTargetMemoryItem(item)
+	if err != nil {
+		return 0, false, err
+	}
+
+	return row.ID, wasCreated, nil
+}
+
+func executePathTraversalSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
+	if target == nil || len(selectedSkillRunIDs) == 0 {
+		return nil, nil
+	}
+
+	runs := make([]models.OperatorSkillRun, 0)
+	if err := db.
+		Where("id IN ? AND target_id = ? AND user_id = ? AND owner_key = ? AND skill_slug = ?", selectedSkillRunIDs, target.ID, uid, ownerKey, pathTraversalBaselineSkillSlug).
+		Order("id ASC").
+		Find(&runs).Error; err != nil {
+		return nil, err
+	}
+
+	if len(runs) == 0 {
+		return nil, nil
+	}
+
+	foundURLs := make([]models.FoundURL, 0)
+	if err := db.
+		Where("target_id = ?", target.ID).
+		Order("last_seen DESC NULLS LAST, id DESC").
+		Limit(1000).
+		Find(&foundURLs).Error; err != nil {
+		return nil, err
+	}
+
+	parameterObservations := make([]models.OperatorSkillObservation, 0)
+	_ = db.
+		Where("target_id = ? AND user_id = ? AND owner_key = ? AND skill_slug = ? AND observation_type = ?",
+			target.ID,
+			uid,
+			ownerKey,
+			parameterInventorySkillSlug,
+			models.OperatorSkillObservationTypeCandidate,
+		).
+		Order("created_at DESC, id DESC").
+		Limit(200).
+		Find(&parameterObservations).Error
+
+	candidates := buildPathTraversalCandidates(foundURLs, parameterObservations)
+	now := time.Now().UTC()
+	runSummaries := make([]map[string]interface{}, 0, len(runs))
+
+	for _, run := range runs {
+		startedAt := now
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":     models.OperatorSkillRunStatusRunning,
+				"started_at": &startedAt,
+				"updated_at": now,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		createdObservationIDs := make([]uint, 0, len(candidates))
+
+		if len(candidates) == 0 {
+			observation := models.OperatorSkillObservation{
+				UserID:          uid,
+				OwnerKey:        ownerKey,
+				TargetID:        target.ID,
+				SkillRunID:      run.ID,
+				SkillSlug:       pathTraversalBaselineSkillSlug,
+				ObservationType: models.OperatorSkillObservationTypeLearning,
+				Title:           "Path traversal planning needs file/path-like parameters",
+				Summary:         "No file/path/template/download candidate parameters were found from current inventory.",
+				Content:         "Learning: improve crawling, download/export route discovery, file/template parameter inventory, or upload/download workflow mapping before controlled path traversal/file-read validation. Runtime v1 does not execute traversal payloads.",
+				BugClass:        "path_traversal_file_read",
+				Confidence:      60,
+				Severity:        models.FindingSeverityInfo,
+				Status:          models.OperatorSkillRunStatusCompleted,
+				EvidenceJSON: chatJSON(map[string]interface{}{
+					"sampled_url_count":           len(foundURLs),
+					"parameter_observation_count": len(parameterObservations),
+					"candidate_count":             0,
+					"skill":                       pathTraversalBaselineSkillSlug,
+					"runtime_scope":               "planning_only_no_file_read_validation",
+				}),
+				Metadata: chatJSON(map[string]interface{}{
+					"created_by":          "path-traversal-skill-v1",
+					"operator_skill_run":  run.ID,
+					"target_id":           target.ID,
+					"observation_version": "path-traversal-learning-v1",
+				}),
+			}
+
+			if err := db.Create(&observation).Error; err != nil {
+				return nil, err
+			}
+			createdObservationIDs = append(createdObservationIDs, observation.ID)
+		} else {
+			for _, candidate := range candidates {
+				observation := models.OperatorSkillObservation{
+					UserID:          uid,
+					OwnerKey:        ownerKey,
+					TargetID:        target.ID,
+					SkillRunID:      run.ID,
+					SkillSlug:       pathTraversalBaselineSkillSlug,
+					ObservationType: models.OperatorSkillObservationTypeCandidate,
+					Title:           fmt.Sprintf("Path traversal candidate: %s", candidate.ParamName),
+					Summary:         fmt.Sprintf("Parameter %q is a candidate for controlled file-read/path traversal validation.", candidate.ParamName),
+					Content:         candidate.Reason + "\nRuntime v1 does not execute traversal or file-read validation.",
+					URL:             candidate.URL,
+					ParamName:       candidate.ParamName,
+					BugClass:        "path_traversal_file_read",
+					Confidence:      candidate.Confidence,
+					Severity:        models.FindingSeverityInfo,
+					Status:          "candidate",
+					EvidenceJSON: chatJSON(map[string]interface{}{
+						"parameter":     candidate.ParamName,
+						"url":           candidate.URL,
+						"source":        candidate.Source,
+						"reason":        candidate.Reason,
+						"confidence":    candidate.Confidence,
+						"skill":         pathTraversalBaselineSkillSlug,
+						"runtime_scope": "planning_only_no_file_read_validation",
+					}),
+					Metadata: chatJSON(map[string]interface{}{
+						"created_by":          "path-traversal-skill-v1",
+						"operator_skill_run":  run.ID,
+						"target_id":           target.ID,
+						"observation_version": "path-traversal-candidate-v1",
+					}),
+				}
+
+				if err := db.Create(&observation).Error; err != nil {
+					return nil, err
+				}
+				createdObservationIDs = append(createdObservationIDs, observation.ID)
+			}
+		}
+
+		memoryItemID, memoryWasCreated, memoryErr := persistPathTraversalSkillMemory(uid, ownerKey, target, run, candidates, createdObservationIDs, len(foundURLs))
+
+		status := models.OperatorSkillRunStatusCompleted
+		resultSummary := fmt.Sprintf("Path traversal planning reviewed %d URL(s), %d parameter observation(s), and found %d candidate(s).", len(foundURLs), len(parameterObservations), len(candidates))
+		nextStep := "Use controlled runtime for file-read/path traversal behavior validation only when scope and policy allow."
+		if len(candidates) == 0 {
+			nextStep = "Improve URL discovery, download/export route discovery, file/template parameter inventory, or workflow mapping before controlled file-read/path traversal validation."
+		}
+
+		output := map[string]interface{}{
+			"status":                      status,
+			"skill":                       pathTraversalBaselineSkillSlug,
+			"runtime_version":             "path-traversal-skill-runtime-v1",
+			"sampled_url_count":           len(foundURLs),
+			"parameter_observation_count": len(parameterObservations),
+			"candidate_count":             len(candidates),
+			"observation_count":           len(createdObservationIDs),
+			"observation_ids":             createdObservationIDs,
+			"memory_ingested":             memoryErr == nil && memoryItemID > 0,
+			"memory_item_id":              memoryItemID,
+			"memory_was_created":          memoryWasCreated,
+			"runtime_scope":               "planning_only_no_file_read_validation",
+			"next_recommended_skills": []string{
+				"path_traversal_probe",
+				"http_evidence_analysis",
+			},
+		}
+
+		if memoryErr != nil {
+			output["memory_ingest_error"] = memoryErr.Error()
+		}
+
+		completedAt := time.Now().UTC()
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":         status,
+				"output_json":    chatJSON(output),
+				"result_summary": resultSummary,
+				"next_step":      nextStep,
+				"completed_at":   &completedAt,
+				"updated_at":     completedAt,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		runSummaries = append(runSummaries, map[string]interface{}{
+			"skill_run_id":                run.ID,
+			"status":                      status,
+			"sampled_url_count":           len(foundURLs),
+			"parameter_observation_count": len(parameterObservations),
+			"candidate_count":             len(candidates),
+			"observation_count":           len(createdObservationIDs),
+			"observation_ids":             createdObservationIDs,
+			"memory_ingested":             memoryErr == nil && memoryItemID > 0,
+			"memory_item_id":              memoryItemID,
+			"memory_was_created":          memoryWasCreated,
+			"runtime_scope":               "planning_only_no_file_read_validation",
+			"memory_ingest_error": func() string {
+				if memoryErr != nil {
+					return memoryErr.Error()
+				}
+				return ""
+			}(),
+		})
+	}
+
+	return map[string]interface{}{
+		"status":          models.OperatorSkillRunStatusCompleted,
+		"runs":            runSummaries,
+		"run_count":       len(runSummaries),
+		"candidate_count": len(candidates),
+		"runtime_scope":   "planning_only_no_file_read_validation",
+	}, nil
+}
+
 func executeOpenRedirectSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
 	if target == nil || len(selectedSkillRunIDs) == 0 {
 		return nil, nil
@@ -2319,9 +2769,20 @@ func executeSelectedOperatorSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey st
 		}
 	}
 
+	if runIDs := selectedBySlug[pathTraversalBaselineSkillSlug]; len(runIDs) > 0 {
+		pathTraversalOutput, err := executePathTraversalSkillRunsFromChat(db, uid, ownerKey, target, runIDs)
+		if err != nil {
+			output["path_traversal_baseline_error"] = err.Error()
+			blockedCount += len(runIDs)
+		} else if pathTraversalOutput != nil {
+			output["path_traversal_baseline"] = pathTraversalOutput
+			executedCount += len(runIDs)
+		}
+	}
+
 	notImplemented := make([]map[string]interface{}, 0)
 	for slug, runIDs := range selectedBySlug {
-		if slug == parameterInventorySkillSlug || slug == httpEvidenceAnalysisSkillSlug || slug == authContextNeededSkillSlug || slug == jsAuditSkillSlug || slug == xssReflectionSkillSlug || slug == openRedirectSkillSlug {
+		if slug == parameterInventorySkillSlug || slug == httpEvidenceAnalysisSkillSlug || slug == authContextNeededSkillSlug || slug == jsAuditSkillSlug || slug == xssReflectionSkillSlug || slug == openRedirectSkillSlug || slug == pathTraversalBaselineSkillSlug {
 			continue
 		}
 
