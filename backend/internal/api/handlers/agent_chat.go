@@ -3672,6 +3672,27 @@ func buildSkillExecutionText(skillExecution map[string]interface{}) string {
 		}
 	}
 
+	if jsRaw, ok := skillExecution["js_audit"]; ok && jsRaw != nil {
+		if jsOutput, ok := jsRaw.(map[string]interface{}); ok {
+			status := strings.TrimSpace(fmt.Sprint(jsOutput["status"]))
+			runCount := strings.TrimSpace(fmt.Sprint(jsOutput["run_count"]))
+			candidateCount := strings.TrimSpace(fmt.Sprint(jsOutput["candidate_count"]))
+			if status == "" || status == "<nil>" {
+				status = "completed"
+			}
+			if runCount == "" || runCount == "<nil>" {
+				runCount = "0"
+			}
+			if candidateCount == "" || candidateCount == "<nil>" {
+				candidateCount = "0"
+			}
+
+			lines = append(lines, fmt.Sprintf("- JS Audit: status=%s, runs=%s, candidates=%s", status, runCount, candidateCount))
+			lines = append(lines, "  Learned: JS/API-like inventory was reviewed from existing found URLs; no new crawl was executed by this skill.")
+			lines = append(lines, "  Next: use JS/API candidates for endpoint mining, DOM sink review, secrets review, and authorized API/access-control validation planning.")
+		}
+	}
+
 	return strings.Join(lines, "\n")
 }
 

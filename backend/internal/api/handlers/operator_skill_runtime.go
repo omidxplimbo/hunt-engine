@@ -15,6 +15,7 @@ const (
 	parameterInventorySkillSlug   = "parameter_inventory"
 	httpEvidenceAnalysisSkillSlug = "http_evidence_analysis"
 	authContextNeededSkillSlug    = "auth_context_needed"
+	jsAuditSkillSlug              = "js_audit"
 )
 
 type parameterInventoryCandidate struct {
@@ -773,6 +774,426 @@ func persistAuthContextNeededSkillMemory(uid uint, ownerKey string, target *mode
 	return row.ID, wasCreated, nil
 }
 
+type jsAuditCandidate struct {
+	URL        string
+	Kind       string
+	BugClasses []string
+	Reason     string
+	Source     string
+	Score      int
+}
+
+func classifyJSAuditURL(rawURL string, source string) (jsAuditCandidate, bool) {
+	value := strings.TrimSpace(rawURL)
+	if value == "" {
+		return jsAuditCandidate{}, false
+	}
+
+	lower := strings.ToLower(value)
+	parsed, _ := url.Parse(value)
+	pathValue := strings.ToLower(parsed.Path)
+
+	candidate := jsAuditCandidate{
+		URL:        value,
+		Source:     strings.TrimSpace(source),
+		BugClasses: []string{"client_side_attack_surface"},
+		Score:      35,
+	}
+
+	addClass := func(class string) {
+		for _, existing := range candidate.BugClasses {
+			if existing == class {
+				return
+			}
+		}
+		candidate.BugClasses = append(candidate.BugClasses, class)
+	}
+
+	switch {
+	case strings.HasSuffix(pathValue, ".js") || strings.Contains(lower, ".js?"):
+		candidate.Kind = "javascript_asset"
+		candidate.Reason = "JavaScript asset discovered in URL inventory; useful for endpoint mining, secrets review, source map checks, and DOM sink discovery."
+		addClass("js_review")
+		addClass("dom_xss")
+		addClass("exposed_secrets")
+		candidate.Score = 75
+	case strings.HasSuffix(pathValue, ".map") || strings.Contains(lower, ".js.map"):
+		candidate.Kind = "sourcemap_candidate"
+		candidate.Reason = "Source map-like asset discovered; source maps may expose original client code, routes, comments, or sensitive implementation details."
+		addClass("source_map_exposure")
+		addClass("exposed_secrets")
+		candidate.Score = 80
+	case strings.Contains(pathValue, "/api/") || strings.Contains(pathValue, "/ajax/") || strings.Contains(pathValue, "/rest/") || strings.Contains(pathValue, "/graphql") || strings.Contains(pathValue, "/v1/") || strings.Contains(pathValue, "/v2/") || strings.Contains(pathValue, "/v3/"):
+		candidate.Kind = "api_like_route"
+		candidate.Reason = "API-like route discovered in URL inventory; useful for parameter mining, authz testing, IDOR/BOLA hypotheses, and schema discovery."
+		addClass("api_authorization")
+		addClass("idor_bola")
+		addClass("parameterized_endpoint")
+		candidate.Score = 70
+	case strings.Contains(pathValue, "/app") || strings.Contains(pathValue, "/dashboard") || strings.Contains(pathValue, "/admin") || strings.Contains(pathValue, "/account") || strings.Contains(pathValue, "/profile") || strings.Contains(pathValue, "/user"):
+		candidate.Kind = "frontend_route"
+		candidate.Reason = "Frontend/application route discovered; useful for authenticated workflow mapping, DOM route review, and access-control context planning."
+		addClass("access_control")
+		addClass("business_logic")
+		candidate.Score = 55
+	default:
+		return jsAuditCandidate{}, false
+	}
+
+	return candidate, true
+}
+
+func buildJSAuditCandidates(foundURLs []models.FoundURL) []jsAuditCandidate {
+	seen := map[string]bool{}
+	out := make([]jsAuditCandidate, 0)
+
+	for _, foundURL := range foundURLs {
+		candidate, ok := classifyJSAuditURL(foundURL.Value, foundURL.Source)
+		if !ok {
+			continue
+		}
+
+		key := candidate.Kind + "\x00" + candidate.URL
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, candidate)
+
+		if len(out) >= 50 {
+			break
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Score == out[j].Score {
+			return out[i].URL < out[j].URL
+		}
+		return out[i].Score > out[j].Score
+	})
+
+	return out
+}
+
+func jsAuditMemoryContent(target *models.Target, candidates []jsAuditCandidate, sampledURLCount int) (string, string) {
+	root := "target"
+	if target != nil && strings.TrimSpace(target.RootDomain) != "" {
+		root = target.RootDomain
+	}
+
+	if len(candidates) == 0 {
+		content := strings.Join([]string{
+			"Operator skill: js_audit",
+			"Target: " + root,
+			fmt.Sprintf("Sampled URL inventory: %d", sampledURLCount),
+			"",
+			"No JavaScript/API-like candidates were found in the sampled URL inventory.",
+			"Learning: the operator needs better crawling, JS collection, browser-aware discovery, or imported JS resources before DOM/API/client-side validation can be meaningful.",
+		}, "\n")
+		return content, "JS audit found no JavaScript/API-like candidates in the sampled URL inventory."
+	}
+
+	lines := []string{
+		"Operator skill: js_audit",
+		"Target: " + root,
+		fmt.Sprintf("Sampled URL inventory: %d", sampledURLCount),
+		fmt.Sprintf("JS/API candidates: %d", len(candidates)),
+		"",
+		"Top candidates:",
+	}
+
+	for idx, candidate := range candidates {
+		if idx >= 15 {
+			break
+		}
+		lines = append(lines, fmt.Sprintf("- [%s] %s", candidate.Kind, candidate.URL))
+		lines = append(lines, "  "+candidate.Reason)
+	}
+
+	return strings.Join(lines, "\n"), fmt.Sprintf("JS audit found %d JavaScript/API-like candidate(s) for client-side and API route analysis.", len(candidates))
+}
+
+func persistJSAuditSkillMemory(uid uint, ownerKey string, target *models.Target, run models.OperatorSkillRun, candidates []jsAuditCandidate, observationIDs []uint, sampledURLCount int) (uint, bool, error) {
+	if target == nil {
+		return 0, false, nil
+	}
+
+	content, summary := jsAuditMemoryContent(target, candidates, sampledURLCount)
+	sourceID := run.ID
+
+	item := models.TargetMemoryItem{
+		UserID:     uid,
+		OwnerKey:   ownerKey,
+		TargetID:   target.ID,
+		SourceType: models.TargetMemorySourceAgentAction,
+		SourceID:   &sourceID,
+		MemoryType: models.TargetMemoryTypeAttackSurface,
+		Title:      "Operator JS audit: " + target.RootDomain,
+		Content:    content,
+		Summary:    summary,
+		Tags: memoryJSON([]string{
+			"operator_skill",
+			"js_audit",
+			"javascript",
+			"client_side",
+			"api_routes",
+			"attack_surface",
+			"authorized_validation",
+			"rag",
+			"operator",
+		}, "[]"),
+		Importance: 70,
+		Confidence: 70,
+		SourceHash: memoryHash(
+			"operator_skill_js_audit_latest",
+			fmt.Sprint(target.ID),
+			ownerKey,
+		),
+		Metadata: memoryJSON(map[string]interface{}{
+			"ingest_version":      "operator-skill-js-audit-memory-v1",
+			"skill":               jsAuditSkillSlug,
+			"skill_run_id":        run.ID,
+			"chat_session_id":     run.ChatSessionID,
+			"chat_message_id":     run.ChatMessageID,
+			"sampled_url_count":   sampledURLCount,
+			"candidate_count":     len(candidates),
+			"observation_count":   len(observationIDs),
+			"observation_ids":     observationIDs,
+			"next_operator_hint":  "Use JS/API candidates for endpoint mining, DOM sink review, secrets review, and authorized API/access-control validation planning.",
+			"runtime_scope":       "inventory_only_no_new_crawl",
+			"requires_browser_v2": len(candidates) == 0,
+		}, "{}"),
+	}
+
+	if len(candidates) == 0 {
+		item.Importance = 55
+		item.Confidence = 65
+	}
+
+	row, wasCreated, err := upsertTargetMemoryItem(item)
+	if err != nil {
+		return 0, false, err
+	}
+
+	return row.ID, wasCreated, nil
+}
+
+func executeJSAuditSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
+	if target == nil || len(selectedSkillRunIDs) == 0 {
+		return nil, nil
+	}
+
+	runs := make([]models.OperatorSkillRun, 0)
+	if err := db.
+		Where("id IN ? AND target_id = ? AND user_id = ? AND owner_key = ? AND skill_slug = ?", selectedSkillRunIDs, target.ID, uid, ownerKey, jsAuditSkillSlug).
+		Order("id ASC").
+		Find(&runs).Error; err != nil {
+		return nil, err
+	}
+
+	if len(runs) == 0 {
+		return nil, nil
+	}
+
+	foundURLs := make([]models.FoundURL, 0)
+	if err := db.
+		Where("target_id = ?", target.ID).
+		Order("last_seen DESC NULLS LAST, id DESC").
+		Limit(1000).
+		Find(&foundURLs).Error; err != nil {
+		return nil, err
+	}
+
+	candidates := buildJSAuditCandidates(foundURLs)
+	now := time.Now().UTC()
+	runSummaries := make([]map[string]interface{}, 0, len(runs))
+
+	for _, run := range runs {
+		startedAt := now
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":     models.OperatorSkillRunStatusRunning,
+				"started_at": &startedAt,
+				"updated_at": now,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		createdObservationIDs := make([]uint, 0, len(candidates))
+
+		if len(candidates) == 0 {
+			observation := models.OperatorSkillObservation{
+				UserID:          uid,
+				OwnerKey:        ownerKey,
+				TargetID:        target.ID,
+				SkillRunID:      run.ID,
+				SkillSlug:       jsAuditSkillSlug,
+				ObservationType: models.OperatorSkillObservationTypeLearning,
+				Title:           "JS audit needs URL/JS inventory",
+				Summary:         "No JavaScript/API-like candidates were found in the sampled URL inventory.",
+				Content:         "Learning: run or improve crawling, JS collection, browser-aware discovery, or JS intelligence before client-side/API route validation.",
+				BugClass:        "js_review",
+				Confidence:      65,
+				Severity:        models.FindingSeverityInfo,
+				Status:          models.OperatorSkillRunStatusCompleted,
+				EvidenceJSON: chatJSON(map[string]interface{}{
+					"sampled_url_count": len(foundURLs),
+					"candidate_count":   0,
+					"skill":             jsAuditSkillSlug,
+				}),
+				Metadata: chatJSON(map[string]interface{}{
+					"created_by":          "js-audit-skill-v1",
+					"operator_skill_run":  run.ID,
+					"target_id":           target.ID,
+					"observation_version": "js-audit-learning-v1",
+				}),
+			}
+
+			if err := db.Create(&observation).Error; err != nil {
+				return nil, err
+			}
+			createdObservationIDs = append(createdObservationIDs, observation.ID)
+		} else {
+			for _, candidate := range candidates {
+				observation := models.OperatorSkillObservation{
+					UserID:          uid,
+					OwnerKey:        ownerKey,
+					TargetID:        target.ID,
+					SkillRunID:      run.ID,
+					SkillSlug:       jsAuditSkillSlug,
+					ObservationType: models.OperatorSkillObservationTypeCandidate,
+					Title:           fmt.Sprintf("JS/API candidate: %s", candidate.Kind),
+					Summary:         fmt.Sprintf("%s candidate discovered for JS/API/client-side analysis: %s", candidate.Kind, candidate.URL),
+					Content:         candidate.Reason,
+					URL:             candidate.URL,
+					BugClass:        candidate.BugClasses[0],
+					Confidence:      candidate.Score,
+					Severity:        models.FindingSeverityInfo,
+					Status:          "candidate",
+					EvidenceJSON: chatJSON(map[string]interface{}{
+						"url":                   candidate.URL,
+						"kind":                  candidate.Kind,
+						"candidate_bug_classes": candidate.BugClasses,
+						"reason":                candidate.Reason,
+						"source":                candidate.Source,
+						"score":                 candidate.Score,
+						"skill":                 jsAuditSkillSlug,
+					}),
+					Metadata: chatJSON(map[string]interface{}{
+						"created_by":          "js-audit-skill-v1",
+						"operator_skill_run":  run.ID,
+						"target_id":           target.ID,
+						"observation_version": "js-audit-candidate-v1",
+					}),
+				}
+
+				if err := db.Create(&observation).Error; err != nil {
+					return nil, err
+				}
+				createdObservationIDs = append(createdObservationIDs, observation.ID)
+			}
+		}
+
+		memoryItemID, memoryWasCreated, memoryErr := persistJSAuditSkillMemory(uid, ownerKey, target, run, candidates, createdObservationIDs, len(foundURLs))
+
+		status := models.OperatorSkillRunStatusCompleted
+		resultSummary := fmt.Sprintf("JS audit reviewed %d sampled URL(s) and found %d JS/API-like candidate(s).", len(foundURLs), len(candidates))
+		nextStep := "Use JS/API candidates for endpoint mining, DOM sink review, secrets review, and authorized API/access-control validation planning."
+		if len(candidates) == 0 {
+			nextStep = "Improve crawling, JS collection, browser-aware discovery, or JS intelligence before relying on JS audit results."
+		}
+
+		jsAssetCount := 0
+		sourceMapCount := 0
+		apiLikeCount := 0
+		frontendRouteCount := 0
+		for _, candidate := range candidates {
+			switch candidate.Kind {
+			case "javascript_asset":
+				jsAssetCount++
+			case "sourcemap_candidate":
+				sourceMapCount++
+			case "api_like_route":
+				apiLikeCount++
+			case "frontend_route":
+				frontendRouteCount++
+			}
+		}
+
+		output := map[string]interface{}{
+			"status":               status,
+			"skill":                jsAuditSkillSlug,
+			"runtime_version":      "js-audit-skill-runtime-v1",
+			"sampled_url_count":    len(foundURLs),
+			"candidate_count":      len(candidates),
+			"js_asset_count":       jsAssetCount,
+			"sourcemap_count":      sourceMapCount,
+			"api_like_route_count": apiLikeCount,
+			"frontend_route_count": frontendRouteCount,
+			"observation_count":    len(createdObservationIDs),
+			"observation_ids":      createdObservationIDs,
+			"memory_ingested":      memoryErr == nil && memoryItemID > 0,
+			"memory_item_id":       memoryItemID,
+			"memory_was_created":   memoryWasCreated,
+			"next_recommended_skills": []string{
+				"dom_xss_audit",
+				"parameter_inventory",
+				"auth_context_needed",
+				"http_evidence_analysis",
+			},
+		}
+
+		if memoryErr != nil {
+			output["memory_ingest_error"] = memoryErr.Error()
+		}
+
+		completedAt := time.Now().UTC()
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":         status,
+				"output_json":    chatJSON(output),
+				"result_summary": resultSummary,
+				"next_step":      nextStep,
+				"completed_at":   &completedAt,
+				"updated_at":     completedAt,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		runSummaries = append(runSummaries, map[string]interface{}{
+			"skill_run_id":         run.ID,
+			"status":               status,
+			"sampled_url_count":    len(foundURLs),
+			"candidate_count":      len(candidates),
+			"js_asset_count":       jsAssetCount,
+			"sourcemap_count":      sourceMapCount,
+			"api_like_route_count": apiLikeCount,
+			"frontend_route_count": frontendRouteCount,
+			"observation_count":    len(createdObservationIDs),
+			"observation_ids":      createdObservationIDs,
+			"memory_ingested":      memoryErr == nil && memoryItemID > 0,
+			"memory_item_id":       memoryItemID,
+			"memory_was_created":   memoryWasCreated,
+			"memory_ingest_error": func() string {
+				if memoryErr != nil {
+					return memoryErr.Error()
+				}
+				return ""
+			}(),
+		})
+	}
+
+	totalCandidates := len(candidates)
+	return map[string]interface{}{
+		"status":          models.OperatorSkillRunStatusCompleted,
+		"runs":            runSummaries,
+		"run_count":       len(runSummaries),
+		"candidate_count": totalCandidates,
+	}, nil
+}
+
 func executeAuthContextNeededSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
 	if target == nil || len(selectedSkillRunIDs) == 0 {
 		return nil, nil
@@ -983,9 +1404,20 @@ func executeSelectedOperatorSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey st
 		}
 	}
 
+	if runIDs := selectedBySlug[jsAuditSkillSlug]; len(runIDs) > 0 {
+		jsAuditOutput, err := executeJSAuditSkillRunsFromChat(db, uid, ownerKey, target, runIDs)
+		if err != nil {
+			output["js_audit_error"] = err.Error()
+			blockedCount += len(runIDs)
+		} else if jsAuditOutput != nil {
+			output["js_audit"] = jsAuditOutput
+			executedCount += len(runIDs)
+		}
+	}
+
 	notImplemented := make([]map[string]interface{}, 0)
 	for slug, runIDs := range selectedBySlug {
-		if slug == parameterInventorySkillSlug || slug == httpEvidenceAnalysisSkillSlug || slug == authContextNeededSkillSlug {
+		if slug == parameterInventorySkillSlug || slug == httpEvidenceAnalysisSkillSlug || slug == authContextNeededSkillSlug || slug == jsAuditSkillSlug {
 			continue
 		}
 
