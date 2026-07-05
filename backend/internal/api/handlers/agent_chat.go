@@ -3203,6 +3203,740 @@ func GetTargetAgentChatMessages(c *fiber.Ctx) error {
 	})
 }
 
+func chatSkillSelectionIntent(text string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	if t == "" {
+		return false
+	}
+
+	needles := []string{
+		"real bug",
+		"real bugs",
+		"critical",
+		"high impact",
+		"high-impact",
+		"find bugs",
+		"hunt bugs",
+		"bug bounty",
+		"pentest",
+		"exploit",
+		"exploitation",
+		"vulnerability",
+		"vulnerabilities",
+		"authorized",
+		"بگرد",
+		"باگ",
+		"باگ واقعی",
+		"کریتیکال",
+		"حفره",
+		"آسیب پذیری",
+		"اکسپلویت",
+		"نفوذ",
+	}
+
+	for _, needle := range needles {
+		if strings.Contains(t, needle) {
+			return true
+		}
+	}
+
+	return false
+}
+
+type operatorSkillSelectorSignals struct {
+	FoundURLCount          int64
+	ParameterizedURLCount  int64
+	ControlledResultCount  int64
+	ParameterMemoryCount   int64
+	NoParameterMemoryCount int64
+	AuthNeedMemoryCount    int64
+	HasXSSSignal           bool
+	HasRedirectSignal      bool
+	HasFilePathSignal      bool
+	HasAuthAccessSignal    bool
+	HasJSAuditSignal       bool
+	SignalSummary          []string
+}
+
+func textHasAnySignal(text string, needles ...string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	if t == "" {
+		return false
+	}
+
+	for _, needle := range needles {
+		n := strings.ToLower(strings.TrimSpace(needle))
+		if n != "" && strings.Contains(t, n) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func collectOperatorSkillSelectorSignals(text string, targetID uint, ownerKey string, uid uint) operatorSkillSelectorSignals {
+	signals := operatorSkillSelectorSignals{
+		HasXSSSignal: textHasAnySignal(text,
+			"xss", "reflection", "reflect", "search", "query", "dom", "script", "html injection",
+			"رفلکت", "ایکس اس اس",
+		),
+		HasRedirectSignal: textHasAnySignal(text,
+			"redirect", "open redirect", "return_url", "return url", "callback", "next=", "url=", "redirect_uri",
+			"ریدایرکت",
+		),
+		HasFilePathSignal: textHasAnySignal(text,
+			"path traversal", "lfi", "file read", "download", "upload", "export", "import", "file=", "path=", "template",
+			"فایل", "دانلود", "آپلود",
+		),
+		HasAuthAccessSignal: textHasAnySignal(text,
+			"idor", "bola", "bfla", "authorization", "access control", "auth", "account", "tenant", "role", "jwt", "oauth", "api authorization",
+			"احراز", "دسترسی", "اکانت",
+		),
+		HasJSAuditSignal: textHasAnySignal(text,
+			"js", "javascript", "dom", "spa", "api", "endpoint", "crawl", "crawling", "route",
+			"جاوااسکریپت", "کراول", "اندپوینت",
+		),
+	}
+
+	if targetID == 0 {
+		return signals
+	}
+
+	_ = database.DB.Model(&models.FoundURL{}).
+		Where("target_id = ?", targetID).
+		Count(&signals.FoundURLCount).Error
+
+	_ = database.DB.Model(&models.FoundURL{}).
+		Where("target_id = ? AND value LIKE ?", targetID, "%?%").
+		Count(&signals.ParameterizedURLCount).Error
+
+	_ = database.DB.Model(&models.ControlledTestResult{}).
+		Where("target_id = ? AND user_id = ? AND owner_key = ?", targetID, uid, ownerKey).
+		Count(&signals.ControlledResultCount).Error
+
+	_ = database.DB.Model(&models.TargetMemoryItem{}).
+		Where("target_id = ? AND owner_key = ? AND memory_type = ?", targetID, ownerKey, models.TargetMemoryTypeParameterNote).
+		Count(&signals.ParameterMemoryCount).Error
+
+	_ = database.DB.Model(&models.TargetMemoryItem{}).
+		Where("target_id = ? AND owner_key = ? AND memory_type = ? AND (summary ILIKE ? OR content ILIKE ?)",
+			targetID,
+			ownerKey,
+			models.TargetMemoryTypeParameterNote,
+			"%no query parameters%",
+			"%No parameterized URLs%",
+		).
+		Count(&signals.NoParameterMemoryCount).Error
+
+	_ = database.DB.Model(&models.TargetMemoryItem{}).
+		Where("target_id = ? AND owner_key = ? AND (content ILIKE ? OR summary ILIKE ? OR content ILIKE ? OR summary ILIKE ?)",
+			targetID,
+			ownerKey,
+			"%auth%",
+			"%auth%",
+			"%authenticated%",
+			"%authenticated%",
+		).
+		Count(&signals.AuthNeedMemoryCount).Error
+
+	if signals.FoundURLCount == 0 || signals.NoParameterMemoryCount > 0 {
+		signals.HasJSAuditSignal = true
+		signals.SignalSummary = append(signals.SignalSummary, "URL/parameter inventory is sparse; JS/API discovery can expand attack surface.")
+	}
+
+	if signals.ParameterizedURLCount > 0 || signals.ParameterMemoryCount > 0 {
+		signals.SignalSummary = append(signals.SignalSummary, "Parameterized URL or parameter memory exists.")
+	}
+
+	if signals.ControlledResultCount > 0 {
+		signals.SignalSummary = append(signals.SignalSummary, "Controlled runtime evidence exists for HTTP evidence analysis.")
+	}
+
+	if signals.AuthNeedMemoryCount > 0 {
+		signals.HasAuthAccessSignal = true
+		signals.SignalSummary = append(signals.SignalSummary, "Target memory indicates auth/authenticated context may be needed.")
+	}
+
+	if signals.HasXSSSignal {
+		signals.SignalSummary = append(signals.SignalSummary, "XSS/reflection signal detected.")
+	}
+	if signals.HasRedirectSignal {
+		signals.SignalSummary = append(signals.SignalSummary, "Redirect/url-like signal detected.")
+	}
+	if signals.HasFilePathSignal {
+		signals.SignalSummary = append(signals.SignalSummary, "File/path-like signal detected.")
+	}
+	if signals.HasAuthAccessSignal {
+		signals.SignalSummary = append(signals.SignalSummary, "Auth/access-control signal detected.")
+	}
+
+	return signals
+}
+
+func addOperatorSkillSeed(seeds *[]selectedSkillSeed, seen map[string]bool, slug string, reason string) {
+	slug = strings.ToLower(strings.TrimSpace(slug))
+	reason = strings.TrimSpace(reason)
+	if slug == "" || seen[slug] {
+		return
+	}
+
+	seen[slug] = true
+	*seeds = append(*seeds, selectedSkillSeed{Slug: slug, Reason: reason})
+}
+
+type selectedSkillSeed struct {
+	Slug   string
+	Reason string
+}
+
+func selectedOperatorSkillsForChat(text string, targetID uint, ownerKey string, uid uint) []map[string]interface{} {
+	if !chatSkillSelectionIntent(text) {
+		return nil
+	}
+
+	signals := collectOperatorSkillSelectorSignals(text, targetID, ownerKey, uid)
+
+	seeds := make([]selectedSkillSeed, 0, 8)
+	seen := map[string]bool{}
+
+	addOperatorSkillSeed(&seeds, seen, "parameter_inventory", "High-impact authorized hunting needs a parameter and surface inventory before class-specific validation.")
+	addOperatorSkillSeed(&seeds, seen, "http_evidence_analysis", "Controlled runtime evidence must be classified before choosing authorized exploit validation skills.")
+
+	if signals.HasJSAuditSignal {
+		addOperatorSkillSeed(&seeds, seen, "js_audit", "Sparse URL/parameter inventory or JS/API/crawling signals indicate JavaScript and API route mining can expand the attack surface.")
+	}
+
+	if signals.HasAuthAccessSignal {
+		addOperatorSkillSeed(&seeds, seen, "auth_context_needed", "High-impact IDOR/API authorization/access-control validation requires authenticated context and usually a second test account.")
+	}
+
+	if signals.HasXSSSignal || signals.ParameterizedURLCount > 0 {
+		addOperatorSkillSeed(&seeds, seen, "xss_reflection", "Parameterized/reflection signals exist; controlled XSS reflection/context validation may be useful when policy allows.")
+	}
+
+	if signals.HasRedirectSignal {
+		addOperatorSkillSeed(&seeds, seen, "open_redirect", "Redirect or URL-like signals exist; open redirect and redirect-chain validation may be useful when policy allows.")
+	}
+
+	if signals.HasFilePathSignal {
+		addOperatorSkillSeed(&seeds, seen, "path_traversal_baseline", "File/path/download/template signals exist; non-destructive path traversal/file-read baseline validation may be useful when policy allows.")
+	}
+
+	slugs := make([]string, 0, len(seeds))
+	reasons := map[string]string{}
+	order := map[string]int{}
+	for idx, seed := range seeds {
+		slugs = append(slugs, seed.Slug)
+		reasons[seed.Slug] = seed.Reason
+		order[seed.Slug] = idx + 1
+	}
+
+	rows := make([]models.OperatorSkill, 0)
+	if err := database.DB.
+		Where("slug IN ? AND is_enabled = true", slugs).
+		Find(&rows).Error; err != nil {
+		return nil
+	}
+
+	sort.Slice(rows, func(i, j int) bool {
+		return order[rows[i].Slug] < order[rows[j].Slug]
+	})
+
+	out := make([]map[string]interface{}, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, map[string]interface{}{
+			"id":                     row.ID,
+			"slug":                   row.Slug,
+			"name":                   row.Name,
+			"category":               row.Category,
+			"bug_class":              row.BugClass,
+			"default_risk_level":     row.DefaultRiskLevel,
+			"default_safety_level":   row.DefaultSafetyLevel,
+			"default_test_level":     row.DefaultTestLevel,
+			"default_autonomy_level": row.DefaultAutonomyLevel,
+			"permission_mode":        row.PermissionMode,
+			"is_builtin":             row.IsBuiltIn,
+			"is_enabled":             row.IsEnabled,
+			"reason":                 reasons[row.Slug],
+			"status":                 "selected",
+			"selector_version":       "operator-skill-selector-evidence-aware-v1",
+			"selector_signals": map[string]interface{}{
+				"found_url_count":           signals.FoundURLCount,
+				"parameterized_url_count":   signals.ParameterizedURLCount,
+				"controlled_result_count":   signals.ControlledResultCount,
+				"parameter_memory_count":    signals.ParameterMemoryCount,
+				"no_parameter_memory_count": signals.NoParameterMemoryCount,
+				"auth_need_memory_count":    signals.AuthNeedMemoryCount,
+				"signal_summary":            signals.SignalSummary,
+			},
+		})
+	}
+
+	return out
+}
+
+func buildSkillDispatchStatusText(skillExecution map[string]interface{}) string {
+	if len(skillExecution) == 0 {
+		return ""
+	}
+
+	notImplementedRaw, ok := skillExecution["not_implemented"]
+	if !ok || notImplementedRaw == nil {
+		return ""
+	}
+
+	items, ok := notImplementedRaw.([]map[string]interface{})
+	if !ok || len(items) == 0 {
+		// JSON-like data can also arrive as []interface{} depending on the source path.
+		if genericItems, ok := notImplementedRaw.([]interface{}); ok {
+			lines := []string{"Operator skill queue:"}
+			for _, raw := range genericItems {
+				item, ok := raw.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				slug := strings.TrimSpace(fmt.Sprint(item["skill_slug"]))
+				status := strings.TrimSpace(fmt.Sprint(item["status"]))
+				reason := strings.TrimSpace(fmt.Sprint(item["reason"]))
+				if slug == "" || slug == "<nil>" {
+					continue
+				}
+				if status == "" || status == "<nil>" {
+					status = "planned"
+				}
+				if reason == "" || reason == "<nil>" {
+					reason = "Skill runtime is registered but not implemented yet."
+				}
+				lines = append(lines, fmt.Sprintf("- %s: status=%s — %s", slug, status, reason))
+			}
+			if len(lines) > 1 {
+				lines = append(lines, "Next: these planned skills remain queued for future runtime implementation or explicit operator workflow expansion.")
+				return strings.Join(lines, "\n")
+			}
+		}
+		return ""
+	}
+
+	lines := []string{"Operator skill queue:"}
+	for _, item := range items {
+		slug := strings.TrimSpace(fmt.Sprint(item["skill_slug"]))
+		status := strings.TrimSpace(fmt.Sprint(item["status"]))
+		reason := strings.TrimSpace(fmt.Sprint(item["reason"]))
+		if slug == "" || slug == "<nil>" {
+			continue
+		}
+		if status == "" || status == "<nil>" {
+			status = "planned"
+		}
+		if reason == "" || reason == "<nil>" {
+			reason = "Skill runtime is registered but not implemented yet."
+		}
+		lines = append(lines, fmt.Sprintf("- %s: status=%s — %s", slug, status, reason))
+	}
+
+	if len(lines) == 1 {
+		return ""
+	}
+
+	lines = append(lines, "Next: these planned skills remain queued for future runtime implementation or explicit operator workflow expansion.")
+	return strings.Join(lines, "\n")
+}
+
+func buildSkillExecutionText(skillExecution map[string]interface{}) string {
+	if len(skillExecution) == 0 {
+		return ""
+	}
+
+	parameterRaw, ok := skillExecution["parameter_inventory"]
+	if !ok || parameterRaw == nil {
+		return ""
+	}
+
+	parameterOutput, ok := parameterRaw.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+
+	lines := []string{"Operator skill execution:"}
+
+	status := strings.TrimSpace(fmt.Sprint(parameterOutput["status"]))
+	runCount := strings.TrimSpace(fmt.Sprint(parameterOutput["run_count"]))
+	parameterCount := strings.TrimSpace(fmt.Sprint(parameterOutput["parameter_count"]))
+	foundURLSample := strings.TrimSpace(fmt.Sprint(parameterOutput["found_url_sample"]))
+
+	if status == "" {
+		status = "completed"
+	}
+	if runCount == "" || runCount == "<nil>" {
+		runCount = "0"
+	}
+	if parameterCount == "" || parameterCount == "<nil>" {
+		parameterCount = "0"
+	}
+	if foundURLSample == "" || foundURLSample == "<nil>" {
+		foundURLSample = "0"
+	}
+
+	lines = append(lines, fmt.Sprintf("- Parameter Inventory: status=%s, runs=%s, sampled_urls=%s, parameters=%s", status, runCount, foundURLSample, parameterCount))
+
+	if runsRaw, ok := parameterOutput["runs"].([]map[string]interface{}); ok && len(runsRaw) > 0 {
+		run := runsRaw[0]
+		observationCount := strings.TrimSpace(fmt.Sprint(run["observation_count"]))
+		memoryItemID := strings.TrimSpace(fmt.Sprint(run["memory_item_id"]))
+		memoryIngested := strings.TrimSpace(fmt.Sprint(run["memory_ingested"]))
+
+		if observationCount == "" || observationCount == "<nil>" {
+			observationCount = "0"
+		}
+
+		lines = append(lines, fmt.Sprintf("  Observations: %s", observationCount))
+		if memoryItemID != "" && memoryItemID != "<nil>" && memoryItemID != "0" {
+			lines = append(lines, fmt.Sprintf("  Memory: ingested=%s memory_item_id=%s", memoryIngested, memoryItemID))
+		}
+
+		if topRaw, ok := run["top_parameters"].([]parameterInventoryCandidate); ok && len(topRaw) > 0 {
+			limit := len(topRaw)
+			if limit > 5 {
+				limit = 5
+			}
+			lines = append(lines, "  Top parameter candidates:")
+			for i := 0; i < limit; i++ {
+				candidate := topRaw[i]
+				lines = append(lines, fmt.Sprintf("  - %s: score=%d classes=%s", candidate.Name, candidate.Score, strings.Join(candidate.BugClasses, ", ")))
+			}
+		}
+	}
+
+	if parameterCount == "0" {
+		lines = append(lines, "  Learned: no parameterized URLs were available in the sampled URL inventory for this target at execution time.")
+		lines = append(lines, "  Next: improve URL discovery/crawling/JS/API mining before class-specific parameter validation.")
+	} else {
+		lines = append(lines, "  Next: use observations to choose class-specific controlled validation skills for authorized exploitation workflows.")
+	}
+
+	if httpRaw, ok := skillExecution["http_evidence_analysis"]; ok && httpRaw != nil {
+		if httpOutput, ok := httpRaw.(map[string]interface{}); ok {
+			status := strings.TrimSpace(fmt.Sprint(httpOutput["status"]))
+			runCount := strings.TrimSpace(fmt.Sprint(httpOutput["run_count"]))
+			resultCount := strings.TrimSpace(fmt.Sprint(httpOutput["result_count"]))
+			if status == "" || status == "<nil>" {
+				status = "completed"
+			}
+			if runCount == "" || runCount == "<nil>" {
+				runCount = "0"
+			}
+			if resultCount == "" || resultCount == "<nil>" {
+				resultCount = "0"
+			}
+
+			lines = append(lines, fmt.Sprintf("- HTTP Evidence Analysis: status=%s, runs=%s, controlled_results=%s", status, runCount, resultCount))
+
+			if runsRaw, ok := httpOutput["runs"].([]map[string]interface{}); ok && len(runsRaw) > 0 {
+				run := runsRaw[0]
+				observationCount := strings.TrimSpace(fmt.Sprint(run["observation_count"]))
+				memoryItemID := strings.TrimSpace(fmt.Sprint(run["memory_item_id"]))
+				memoryIngested := strings.TrimSpace(fmt.Sprint(run["memory_ingested"]))
+				if observationCount == "" || observationCount == "<nil>" {
+					observationCount = "0"
+				}
+				lines = append(lines, fmt.Sprintf("  Observations: %s", observationCount))
+				if memoryItemID != "" && memoryItemID != "<nil>" && memoryItemID != "0" {
+					lines = append(lines, fmt.Sprintf("  Memory: ingested=%s memory_item_id=%s", memoryIngested, memoryItemID))
+				}
+			}
+
+			if resultCount == "0" {
+				lines = append(lines, "  Learned: no controlled runtime HTTP evidence was available for this target at execution time.")
+				lines = append(lines, "  Next: run controlled baseline probes before relying on HTTP evidence analysis.")
+			} else {
+				lines = append(lines, "  Learned: controlled runtime evidence has been analyzed for follow-up authorized validation decisions.")
+				lines = append(lines, "  Next: use evidence observations to avoid overclaiming blocked/inconclusive results and select class-specific validation.")
+			}
+		}
+	}
+
+	if authRaw, ok := skillExecution["auth_context_needed"]; ok && authRaw != nil {
+		if authOutput, ok := authRaw.(map[string]interface{}); ok {
+			status := strings.TrimSpace(fmt.Sprint(authOutput["status"]))
+			runCount := strings.TrimSpace(fmt.Sprint(authOutput["run_count"]))
+			if status == "" || status == "<nil>" {
+				status = "needs_context"
+			}
+			if runCount == "" || runCount == "<nil>" {
+				runCount = "0"
+			}
+
+			lines = append(lines, fmt.Sprintf("- Auth Context Needed: status=%s, runs=%s", status, runCount))
+			lines = append(lines, "  Needed: authenticated session/test credentials, preferably two accounts, role/tenant boundaries, explicit authorization, and stop conditions.")
+			lines = append(lines, "  Next: ask the user for auth context before real IDOR/API authorization/business-logic validation.")
+		}
+	}
+
+	if jsRaw, ok := skillExecution["js_audit"]; ok && jsRaw != nil {
+		if jsOutput, ok := jsRaw.(map[string]interface{}); ok {
+			status := strings.TrimSpace(fmt.Sprint(jsOutput["status"]))
+			runCount := strings.TrimSpace(fmt.Sprint(jsOutput["run_count"]))
+			candidateCount := strings.TrimSpace(fmt.Sprint(jsOutput["candidate_count"]))
+			if status == "" || status == "<nil>" {
+				status = "completed"
+			}
+			if runCount == "" || runCount == "<nil>" {
+				runCount = "0"
+			}
+			if candidateCount == "" || candidateCount == "<nil>" {
+				candidateCount = "0"
+			}
+
+			lines = append(lines, fmt.Sprintf("- JS Audit: status=%s, runs=%s, candidates=%s", status, runCount, candidateCount))
+			lines = append(lines, "  Learned: JS/API-like inventory was reviewed from existing found URLs; no new crawl was executed by this skill.")
+			lines = append(lines, "  Next: use JS/API candidates for endpoint mining, DOM sink review, secrets review, and authorized API/access-control validation planning.")
+		}
+	}
+
+	if xssRaw, ok := skillExecution["xss_reflection"]; ok && xssRaw != nil {
+		if xssOutput, ok := xssRaw.(map[string]interface{}); ok {
+			status := strings.TrimSpace(fmt.Sprint(xssOutput["status"]))
+			runCount := strings.TrimSpace(fmt.Sprint(xssOutput["run_count"]))
+			candidateCount := strings.TrimSpace(fmt.Sprint(xssOutput["candidate_count"]))
+			if status == "" || status == "<nil>" {
+				status = "completed"
+			}
+			if runCount == "" || runCount == "<nil>" {
+				runCount = "0"
+			}
+			if candidateCount == "" || candidateCount == "<nil>" {
+				candidateCount = "0"
+			}
+
+			lines = append(lines, fmt.Sprintf("- XSS Reflection Planning: status=%s, runs=%s, candidates=%s", status, runCount, candidateCount))
+			lines = append(lines, "  Scope: planning only; no payload execution was performed.")
+			lines = append(lines, "  Next: use controlled runtime for reflection/context probing only when scope and policy allow.")
+		}
+	}
+
+	if redirectRaw, ok := skillExecution["open_redirect"]; ok && redirectRaw != nil {
+		if redirectOutput, ok := redirectRaw.(map[string]interface{}); ok {
+			status := strings.TrimSpace(fmt.Sprint(redirectOutput["status"]))
+			runCount := strings.TrimSpace(fmt.Sprint(redirectOutput["run_count"]))
+			candidateCount := strings.TrimSpace(fmt.Sprint(redirectOutput["candidate_count"]))
+			if status == "" || status == "<nil>" {
+				status = "completed"
+			}
+			if runCount == "" || runCount == "<nil>" {
+				runCount = "0"
+			}
+			if candidateCount == "" || candidateCount == "<nil>" {
+				candidateCount = "0"
+			}
+
+			lines = append(lines, fmt.Sprintf("- Open Redirect Planning: status=%s, runs=%s, candidates=%s", status, runCount, candidateCount))
+			lines = append(lines, "  Scope: planning only; no redirect payload execution or external validation was performed.")
+			lines = append(lines, "  Next: use controlled runtime for redirect behavior validation only when scope and policy allow.")
+		}
+	}
+
+	if pathRaw, ok := skillExecution["path_traversal_baseline"]; ok && pathRaw != nil {
+		if pathOutput, ok := pathRaw.(map[string]interface{}); ok {
+			status := strings.TrimSpace(fmt.Sprint(pathOutput["status"]))
+			runCount := strings.TrimSpace(fmt.Sprint(pathOutput["run_count"]))
+			candidateCount := strings.TrimSpace(fmt.Sprint(pathOutput["candidate_count"]))
+			if status == "" || status == "<nil>" {
+				status = "completed"
+			}
+			if runCount == "" || runCount == "<nil>" {
+				runCount = "0"
+			}
+			if candidateCount == "" || candidateCount == "<nil>" {
+				candidateCount = "0"
+			}
+
+			lines = append(lines, fmt.Sprintf("- Path Traversal Planning: status=%s, runs=%s, candidates=%s", status, runCount, candidateCount))
+			lines = append(lines, "  Scope: planning only; no traversal payload execution or file-read validation was performed.")
+			lines = append(lines, "  Next: use controlled runtime for file-read/path traversal behavior validation only when scope and policy allow.")
+		}
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func buildSelectedOperatorSkillsText(selectedSkills []map[string]interface{}) string {
+	if len(selectedSkills) == 0 {
+		return ""
+	}
+
+	lines := []string{
+		"Operator skills selected:",
+	}
+
+	for _, skill := range selectedSkills {
+		slug, _ := skill["slug"].(string)
+		name, _ := skill["name"].(string)
+		reason, _ := skill["reason"].(string)
+
+		if name == "" {
+			name = slug
+		}
+		if reason == "" {
+			reason = "Selected for this authorized pentest objective."
+		}
+
+		lines = append(lines, fmt.Sprintf("- %s (%s): %s", name, slug, reason))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func uintFromSelectedSkill(value interface{}) uint {
+	switch v := value.(type) {
+	case uint:
+		return v
+	case int:
+		if v > 0 {
+			return uint(v)
+		}
+	case int64:
+		if v > 0 {
+			return uint(v)
+		}
+	case float64:
+		if v > 0 {
+			return uint(v)
+		}
+	}
+
+	return 0
+}
+
+func stringFromSelectedSkill(skill map[string]interface{}, key string) string {
+	if value, ok := skill[key].(string); ok {
+		return strings.TrimSpace(value)
+	}
+	return ""
+}
+
+func intFromSelectedSkill(skill map[string]interface{}, key string, fallback int) int {
+	switch value := skill[key].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	}
+
+	return fallback
+}
+
+func createPlannedOperatorSkillRunsFromChat(tx *gorm.DB, uid uint, ownerKey string, target *models.Target, sessionID uint, userMessageID uint, selectedSkills []map[string]interface{}, objective string) ([]uint, error) {
+	if len(selectedSkills) == 0 || target == nil {
+		return nil, nil
+	}
+
+	runIDs := make([]uint, 0, len(selectedSkills))
+	now := time.Now().UTC()
+
+	for _, skill := range selectedSkills {
+		slug := stringFromSelectedSkill(skill, "slug")
+		if slug == "" {
+			continue
+		}
+
+		name := stringFromSelectedSkill(skill, "name")
+		reason := stringFromSelectedSkill(skill, "reason")
+		riskLevel := stringFromSelectedSkill(skill, "default_risk_level")
+		if riskLevel == "" {
+			riskLevel = models.AgentActionRiskLow
+		}
+
+		skillID := uintFromSelectedSkill(skill["id"])
+		var skillIDPtr *uint
+		if skillID > 0 {
+			skillIDPtr = &skillID
+		}
+
+		safetyLevel := intFromSelectedSkill(skill, "default_safety_level", 1)
+		testLevel := intFromSelectedSkill(skill, "default_test_level", 1)
+		autonomyLevel := intFromSelectedSkill(skill, "default_autonomy_level", 1)
+
+		var registrySkill models.OperatorSkill
+		if err := tx.Where("slug = ? AND is_enabled = true", slug).First(&registrySkill).Error; err == nil {
+			if registrySkill.ID > 0 {
+				if skillIDPtr == nil {
+					skillID := registrySkill.ID
+					skillIDPtr = &skillID
+				}
+				if name == "" {
+					name = registrySkill.Name
+				}
+				if riskLevel == "" {
+					riskLevel = registrySkill.DefaultRiskLevel
+				}
+				safetyLevel = registrySkill.DefaultSafetyLevel
+				testLevel = registrySkill.DefaultTestLevel
+				autonomyLevel = registrySkill.DefaultAutonomyLevel
+			}
+		}
+
+		row := models.OperatorSkillRun{
+			UserID:        uid,
+			OwnerKey:      ownerKey,
+			TargetID:      target.ID,
+			SkillID:       skillIDPtr,
+			SkillSlug:     slug,
+			SkillName:     name,
+			ChatSessionID: &sessionID,
+			ChatMessageID: &userMessageID,
+			Status:        models.OperatorSkillRunStatusPlanned,
+			RiskLevel:     riskLevel,
+			SafetyLevel:   safetyLevel,
+			TestLevel:     testLevel,
+			AutonomyLevel: autonomyLevel,
+
+			Objective:       objective,
+			SelectedBecause: reason,
+			InputJSON: chatJSON(map[string]interface{}{
+				"source":          "agent_chat_skill_selector_v1",
+				"user_message_id": userMessageID,
+				"selected_skill":  skill,
+			}),
+			OutputJSON: chatJSON(map[string]interface{}{
+				"status": "planned",
+				"next":   "Skill execution is not implemented in this patch; this run records operator routing intent.",
+			}),
+			ResultSummary: "Skill selected and queued as a planned operator skill run.",
+			NextStep:      "Execute the skill through the v3.14 operator skill runtime in a later patch.",
+			Metadata: chatJSON(map[string]interface{}{
+				"created_by":    "agent_chat_skill_selector_v1",
+				"selected_at":   now.Format(time.RFC3339),
+				"skill_version": "v1",
+			}),
+		}
+
+		// Use Select("*") so level-0 skill runs are persisted instead of being
+		// replaced by DB/GORM default tags.
+		if err := tx.Select("*").Create(&row).Error; err != nil {
+			return runIDs, err
+		}
+
+		// PostgreSQL column defaults and GORM default tags can still result in
+		// level-0 values being stored as 1 on create. Force-update numeric levels
+		// with a map so zero-values are preserved.
+		if err := tx.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", row.ID).
+			Updates(map[string]interface{}{
+				"safety_level":   safetyLevel,
+				"test_level":     testLevel,
+				"autonomy_level": autonomyLevel,
+			}).Error; err != nil {
+			return runIDs, err
+		}
+
+		runIDs = append(runIDs, row.ID)
+	}
+
+	return runIDs, nil
+}
+
 // CreateTargetAgentChatMessage creates a user message, assistant plan message, and proposed actions.
 func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 	if err := ensureAgentChatEnabled(c); err != nil {
@@ -3273,6 +4007,11 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 	createdActions := make([]models.AgentAction, 0)
 	reusedActionIDs := make([]uint, 0)
 	reusedActionCount := 0
+	selectedSkills := selectedOperatorSkillsForChat(content, target.ID, ownerKey, uid)
+	selectedSkillRunIDs := make([]uint, 0, len(selectedSkills))
+	if selectedSkillsText := buildSelectedOperatorSkillsText(selectedSkills); selectedSkillsText != "" {
+		assistantText = strings.TrimSpace(assistantText + "\n\n" + selectedSkillsText)
+	}
 
 	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
 		userMessage = models.AgentChatMessage{
@@ -3287,6 +4026,12 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 		}
 		if err := tx.Create(&userMessage).Error; err != nil {
 			return err
+		}
+
+		var skillRunErr error
+		selectedSkillRunIDs, skillRunErr = createPlannedOperatorSkillRunsFromChat(tx, uid, ownerKey, target, session.ID, userMessage.ID, selectedSkills, content)
+		if skillRunErr != nil {
+			return skillRunErr
 		}
 
 		for _, planned := range plannedActions {
@@ -3361,16 +4106,18 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 				"operator_error":  operatorError,
 			}),
 			OutputJSON: chatJSON(map[string]interface{}{
-				"action_ids":        actionIDs,
-				"operator_mode":     operatorMode,
-				"operator_plan":     operatorPlan,
-				"operator_error":    operatorError,
-				"llm_assisted":      operatorMode == "llm_operator_plan",
-				"actions_created":   len(actionIDs) - reusedActionCount,
-				"actions_reused":    reusedActionCount,
-				"reused_action_ids": reusedActionIDs,
-				"hunting_session":   buildHuntingSessionOutput(createdActions),
-				"execution_enabled": false,
+				"action_ids":             actionIDs,
+				"operator_mode":          operatorMode,
+				"operator_plan":          operatorPlan,
+				"operator_error":         operatorError,
+				"llm_assisted":           operatorMode == "llm_operator_plan",
+				"actions_created":        len(actionIDs) - reusedActionCount,
+				"actions_reused":         reusedActionCount,
+				"reused_action_ids":      reusedActionIDs,
+				"selected_skills":        selectedSkills,
+				"selected_skill_run_ids": selectedSkillRunIDs,
+				"hunting_session":        buildHuntingSessionOutput(createdActions),
+				"execution_enabled":      false,
 				"guardrails": []string{
 					"low-risk controlled actions may be auto-executed by Operator Autopilot when target policy permits",
 					"higher-risk, active, exploit, payload, auth, rate-limit, or brute-force actions require explicit approval",
@@ -3396,6 +4143,13 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 
 	if txErr != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": txErr.Error()})
+	}
+
+	skillExecution := map[string]interface{}{}
+	if dispatcherOutput, err := executeSelectedOperatorSkillRunsFromChat(database.DB, uid, ownerKey, target, selectedSkillRunIDs); err != nil {
+		skillExecution["dispatcher_error"] = err.Error()
+	} else if dispatcherOutput != nil {
+		skillExecution = dispatcherOutput
 	}
 
 	autopilot := runAgentChatAutopilotForActions(c, target, uid, ownerKey, createdActions)
@@ -3428,6 +4182,19 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 	}
 	if runtimeAnalysisText := buildHuntingRuntimeAnalysisText(huntingSession); runtimeAnalysisText != "" {
 		assistantMessage.Content = strings.TrimSpace(assistantMessage.Content + "\n\n" + runtimeAnalysisText)
+		assistantMessage.Content = formatAssistantTextForChatReadability(assistantMessage.Content)
+	}
+	assistantOutput["selected_skills"] = selectedSkills
+	assistantOutput["selected_skill_run_ids"] = selectedSkillRunIDs
+	assistantOutput["skill_execution"] = skillExecution
+
+	if skillExecutionText := buildSkillExecutionText(skillExecution); skillExecutionText != "" {
+		assistantMessage.Content = strings.TrimSpace(assistantMessage.Content + "\n\n" + skillExecutionText)
+		assistantMessage.Content = formatAssistantTextForChatReadability(assistantMessage.Content)
+	}
+
+	if skillDispatchStatusText := buildSkillDispatchStatusText(skillExecution); skillDispatchStatusText != "" {
+		assistantMessage.Content = strings.TrimSpace(assistantMessage.Content + "\n\n" + skillDispatchStatusText)
 		assistantMessage.Content = formatAssistantTextForChatReadability(assistantMessage.Content)
 	}
 

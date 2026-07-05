@@ -14,8 +14,13 @@ if [ -f .env ]; then
   set +a
 fi
 
-echo "[1/5] gofmt backend"
-gofmt -w backend
+echo "[1/5] gofmt changed backend Go files"
+mapfile -t GO_FILES < <(git ls-files -m -o --exclude-standard -- 'backend/*.go' 'backend/**/*.go')
+if [ "${#GO_FILES[@]}" -gt 0 ]; then
+  gofmt -w "${GO_FILES[@]}"
+else
+  echo "no changed backend Go files to format"
+fi
 
 echo "[2/5] compile checks"
 cd backend

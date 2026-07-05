@@ -94,6 +94,10 @@ func main() {
 	// همه روت‌های زیر نیاز به توکن دارند
 	api.Use(middleware.Protected())
 
+	// Operator Skill Registry Routes
+	api.Get("/operator-skills", handlers.ListOperatorSkills)
+	api.Get("/operator-skills/:slug", handlers.GetOperatorSkill)
+
 	// --- System Configuration & Queue ---
 	api.Get("/config", handlers.GetSystemConfig)
 	api.Put("/config/:key", handlers.UpdateSystemConfig)
@@ -214,6 +218,8 @@ func main() {
 	api.Get("/targets/:id/controlled-tests/runs/:run_id", handlers.GetTargetControlledTestRun)
 	api.Post("/targets/:id/controlled-tests/runs/:run_id/execute", handlers.ExecuteTargetControlledTestRun)
 	api.Get("/targets/:id/controlled-tests/results", handlers.GetTargetControlledTestResults)
+	api.Get("/targets/:id/operator-skill-runs", handlers.GetTargetOperatorSkillRuns)
+	api.Get("/targets/:id/operator-skill-runs/:run_id/observations", handlers.GetTargetOperatorSkillRunObservations)
 
 	api.Get("/targets/:id/bug-tests/runs", handlers.GetTargetBugTestRuns)
 	api.Post("/targets/:id/bug-tests/runs", handlers.CreateTargetBugTestRun)

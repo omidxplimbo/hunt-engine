@@ -70,6 +70,9 @@ func Connect() {
 		&models.AgentRun{},
 		&models.AgentAction{},
 		&models.AgentActionApproval{},
+		&models.OperatorSkill{},
+		&models.OperatorSkillRun{},
+		&models.OperatorSkillObservation{},
 		&models.AgentChatSession{},
 		&models.AgentChatMessage{},
 		&models.BugTestRun{},
@@ -115,6 +118,10 @@ func Connect() {
 
 	if err := migrateTenantScopedUniqueIndexes(DB); err != nil {
 		log.Fatal("❌ Tenant-scoped index migration failed! \n", err)
+	}
+
+	if err := seedBuiltInOperatorSkills(DB); err != nil {
+		log.Fatal("❌ Built-in operator skill seed failed! \n", err)
 	}
 
 	// v3.4.0 structured finding evidence foundation.
