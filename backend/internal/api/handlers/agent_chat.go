@@ -3475,6 +3475,73 @@ func selectedOperatorSkillsForChat(text string, targetID uint, ownerKey string, 
 	return out
 }
 
+func buildSkillDispatchStatusText(skillExecution map[string]interface{}) string {
+	if len(skillExecution) == 0 {
+		return ""
+	}
+
+	notImplementedRaw, ok := skillExecution["not_implemented"]
+	if !ok || notImplementedRaw == nil {
+		return ""
+	}
+
+	items, ok := notImplementedRaw.([]map[string]interface{})
+	if !ok || len(items) == 0 {
+		// JSON-like data can also arrive as []interface{} depending on the source path.
+		if genericItems, ok := notImplementedRaw.([]interface{}); ok {
+			lines := []string{"Operator skill queue:"}
+			for _, raw := range genericItems {
+				item, ok := raw.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				slug := strings.TrimSpace(fmt.Sprint(item["skill_slug"]))
+				status := strings.TrimSpace(fmt.Sprint(item["status"]))
+				reason := strings.TrimSpace(fmt.Sprint(item["reason"]))
+				if slug == "" || slug == "<nil>" {
+					continue
+				}
+				if status == "" || status == "<nil>" {
+					status = "planned"
+				}
+				if reason == "" || reason == "<nil>" {
+					reason = "Skill runtime is registered but not implemented yet."
+				}
+				lines = append(lines, fmt.Sprintf("- %s: status=%s — %s", slug, status, reason))
+			}
+			if len(lines) > 1 {
+				lines = append(lines, "Next: these planned skills remain queued for future runtime implementation or explicit operator workflow expansion.")
+				return strings.Join(lines, "\n")
+			}
+		}
+		return ""
+	}
+
+	lines := []string{"Operator skill queue:"}
+	for _, item := range items {
+		slug := strings.TrimSpace(fmt.Sprint(item["skill_slug"]))
+		status := strings.TrimSpace(fmt.Sprint(item["status"]))
+		reason := strings.TrimSpace(fmt.Sprint(item["reason"]))
+		if slug == "" || slug == "<nil>" {
+			continue
+		}
+		if status == "" || status == "<nil>" {
+			status = "planned"
+		}
+		if reason == "" || reason == "<nil>" {
+			reason = "Skill runtime is registered but not implemented yet."
+		}
+		lines = append(lines, fmt.Sprintf("- %s: status=%s — %s", slug, status, reason))
+	}
+
+	if len(lines) == 1 {
+		return ""
+	}
+
+	lines = append(lines, "Next: these planned skills remain queued for future runtime implementation or explicit operator workflow expansion.")
+	return strings.Join(lines, "\n")
+}
+
 func buildSkillExecutionText(skillExecution map[string]interface{}) string {
 	if len(skillExecution) == 0 {
 		return ""
@@ -4039,6 +4106,11 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 
 	if skillExecutionText := buildSkillExecutionText(skillExecution); skillExecutionText != "" {
 		assistantMessage.Content = strings.TrimSpace(assistantMessage.Content + "\n\n" + skillExecutionText)
+		assistantMessage.Content = formatAssistantTextForChatReadability(assistantMessage.Content)
+	}
+
+	if skillDispatchStatusText := buildSkillDispatchStatusText(skillExecution); skillDispatchStatusText != "" {
+		assistantMessage.Content = strings.TrimSpace(assistantMessage.Content + "\n\n" + skillDispatchStatusText)
 		assistantMessage.Content = formatAssistantTextForChatReadability(assistantMessage.Content)
 	}
 
