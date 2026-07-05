@@ -97,6 +97,8 @@ func main() {
 	// Operator Skill Registry Routes
 	api.Get("/operator-skills", handlers.ListOperatorSkills)
 	api.Get("/operator-skills/:slug", handlers.GetOperatorSkill)
+	api.Get("/operator-learning", handlers.ListOperatorLearningRecords)
+	api.Get("/operator-learning/:id", handlers.GetOperatorLearningRecord)
 
 	// --- System Configuration & Queue ---
 	api.Get("/config", handlers.GetSystemConfig)
