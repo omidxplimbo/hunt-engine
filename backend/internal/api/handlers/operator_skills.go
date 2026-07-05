@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 
@@ -118,6 +119,90 @@ func GetOperatorSkill(c *fiber.Ctx) error {
 	})
 }
 
+func operatorSkillRunStatusGroup(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case models.OperatorSkillRunStatusCompleted:
+		return "done"
+	case models.OperatorSkillRunStatusNeedsContext, models.OperatorSkillRunStatusNeedsApproval:
+		return "waiting"
+	case models.OperatorSkillRunStatusPlanned, models.OperatorSkillRunStatusRunning:
+		return "active"
+	case models.OperatorSkillRunStatusFailed, models.OperatorSkillRunStatusBlockedByPolicy, models.OperatorSkillRunStatusCancelled:
+		return "stopped"
+	default:
+		return "unknown"
+	}
+}
+
+func operatorSkillRunNeedsContext(status string, output map[string]interface{}) bool {
+	if strings.EqualFold(strings.TrimSpace(status), models.OperatorSkillRunStatusNeedsContext) {
+		return true
+	}
+
+	if value, ok := output["needs_context"].(bool); ok {
+		return value
+	}
+
+	return false
+}
+
+func operatorSkillRunMemoryItemID(output map[string]interface{}) interface{} {
+	if value, ok := output["memory_item_id"]; ok {
+		return value
+	}
+
+	if runsRaw, ok := output["runs"].([]interface{}); ok && len(runsRaw) > 0 {
+		if first, ok := runsRaw[0].(map[string]interface{}); ok {
+			if value, ok := first["memory_item_id"]; ok {
+				return value
+			}
+		}
+	}
+
+	return nil
+}
+
+func operatorSkillRunOutputMap(row models.OperatorSkillRun) map[string]interface{} {
+	out := map[string]interface{}{}
+	if len(row.OutputJSON) > 0 {
+		_ = json.Unmarshal(row.OutputJSON, &out)
+	}
+	return out
+}
+
+func enrichOperatorSkillRun(row models.OperatorSkillRun, observationCount int64, latestObservation *models.OperatorSkillObservation) fiber.Map {
+	output := operatorSkillRunOutputMap(row)
+
+	enriched := fiber.Map{
+		"run":               row,
+		"observation_count": observationCount,
+		"has_observations":  observationCount > 0,
+		"status_group":      operatorSkillRunStatusGroup(row.Status),
+		"needs_context":     operatorSkillRunNeedsContext(row.Status, output),
+		"memory_item_id":    operatorSkillRunMemoryItemID(output),
+	}
+
+	if latestObservation != nil {
+		enriched["latest_observation"] = fiber.Map{
+			"id":               latestObservation.ID,
+			"created_at":       latestObservation.CreatedAt,
+			"observation_type": latestObservation.ObservationType,
+			"title":            latestObservation.Title,
+			"summary":          latestObservation.Summary,
+			"bug_class":        latestObservation.BugClass,
+			"status":           latestObservation.Status,
+			"severity":         latestObservation.Severity,
+			"confidence":       latestObservation.Confidence,
+			"url":              latestObservation.URL,
+			"param_name":       latestObservation.ParamName,
+		}
+	} else {
+		enriched["latest_observation"] = nil
+	}
+
+	return enriched
+}
+
 // GetTargetOperatorSkillRuns lists skill run records for an accessible target.
 func GetTargetOperatorSkillRuns(c *fiber.Ctx) error {
 	uid, err := currentUserID(c)
@@ -171,6 +256,54 @@ func GetTargetOperatorSkillRuns(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, "failed to list operator skill runs")
 	}
 
+	runIDs := make([]uint, 0, len(rows))
+	for _, row := range rows {
+		runIDs = append(runIDs, row.ID)
+	}
+
+	observationCounts := map[uint]int64{}
+	latestObservations := map[uint]models.OperatorSkillObservation{}
+
+	if len(runIDs) > 0 {
+		type observationCountRow struct {
+			SkillRunID uint  `json:"skill_run_id"`
+			Count      int64 `json:"count"`
+		}
+
+		countRows := make([]observationCountRow, 0)
+		_ = database.DB.Model(&models.OperatorSkillObservation{}).
+			Select("skill_run_id, COUNT(*) as count").
+			Where("target_id = ? AND user_id = ? AND skill_run_id IN ?", target.ID, uid, runIDs).
+			Group("skill_run_id").
+			Scan(&countRows).Error
+
+		for _, countRow := range countRows {
+			observationCounts[countRow.SkillRunID] = countRow.Count
+		}
+
+		latestRows := make([]models.OperatorSkillObservation, 0)
+		_ = database.DB.
+			Where("target_id = ? AND user_id = ? AND skill_run_id IN ?", target.ID, uid, runIDs).
+			Order("skill_run_id ASC, created_at DESC, id DESC").
+			Find(&latestRows).Error
+
+		for _, observation := range latestRows {
+			if _, exists := latestObservations[observation.SkillRunID]; !exists {
+				latestObservations[observation.SkillRunID] = observation
+			}
+		}
+	}
+
+	enrichedRows := make([]fiber.Map, 0, len(rows))
+	for _, row := range rows {
+		var latest *models.OperatorSkillObservation
+		if observation, ok := latestObservations[row.ID]; ok {
+			obs := observation
+			latest = &obs
+		}
+		enrichedRows = append(enrichedRows, enrichOperatorSkillRun(row, observationCounts[row.ID], latest))
+	}
+
 	return c.JSON(fiber.Map{
 		"status": "success",
 		"count":  count,
@@ -180,7 +313,8 @@ func GetTargetOperatorSkillRuns(c *fiber.Ctx) error {
 			"id":          target.ID,
 			"root_domain": target.RootDomain,
 		},
-		"skill_runs": rows,
+		"skill_runs":          rows,
+		"skill_runs_enriched": enrichedRows,
 	})
 }
 
