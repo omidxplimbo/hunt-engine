@@ -3714,6 +3714,27 @@ func buildSkillExecutionText(skillExecution map[string]interface{}) string {
 		}
 	}
 
+	if redirectRaw, ok := skillExecution["open_redirect"]; ok && redirectRaw != nil {
+		if redirectOutput, ok := redirectRaw.(map[string]interface{}); ok {
+			status := strings.TrimSpace(fmt.Sprint(redirectOutput["status"]))
+			runCount := strings.TrimSpace(fmt.Sprint(redirectOutput["run_count"]))
+			candidateCount := strings.TrimSpace(fmt.Sprint(redirectOutput["candidate_count"]))
+			if status == "" || status == "<nil>" {
+				status = "completed"
+			}
+			if runCount == "" || runCount == "<nil>" {
+				runCount = "0"
+			}
+			if candidateCount == "" || candidateCount == "<nil>" {
+				candidateCount = "0"
+			}
+
+			lines = append(lines, fmt.Sprintf("- Open Redirect Planning: status=%s, runs=%s, candidates=%s", status, runCount, candidateCount))
+			lines = append(lines, "  Scope: planning only; no redirect payload execution or external validation was performed.")
+			lines = append(lines, "  Next: use controlled runtime for redirect behavior validation only when scope and policy allow.")
+		}
+	}
+
 	return strings.Join(lines, "\n")
 }
 
