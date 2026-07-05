@@ -1,5 +1,17 @@
 <!-- HUNT_V3_12_0_START -->
 
+## v3.14.0 — Pentest Skill Registry + Operator Skill Runtime Foundation
+
+v3.14.0 adds the first modular Operator Skill foundation for Hunt Engine AI-driven authorized pentest workflow. The Operator can now select skills from evidence signals, create planned skill runs from chat, dispatch implemented skill runtimes, create observations, persist target memory, enrich skill run APIs, and show executed/queued skill status directly in chat.
+
+Implemented v3.14 skill runtimes include parameter inventory, HTTP evidence analysis, authenticated-context requirements, JS/API inventory audit, XSS reflection planning, open redirect planning, and path traversal/file-read planning.
+
+Planning runtimes in v3.14.0 do not execute payloads or claim impact. They prepare evidence-driven candidates and memory for future controlled validation and authorized exploitation workflows under scope, policy, rate-limit, audit, and approval controls.
+
+See docs/release-notes/v3.14.0.md for details. The official smoke test for this milestone is:
+
+    ./scripts/smoke_operator_skill_runtime_coverage_v314.sh
+
 ## v3.13.0 — Controlled Runtime Expansion + AI Pentest Reasoning Foundation
 
 v3.13.0 adds the first evidence-driven AI Pentest Operator hunting foundation. The Operator can now select multiple high-value candidates, run controlled low-risk baseline probes through policy-aware Autopilot, analyze runtime evidence, persist analyzer learning into target memory, and avoid retesting blocked or low-value candidates.
