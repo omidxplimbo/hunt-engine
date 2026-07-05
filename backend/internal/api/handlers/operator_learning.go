@@ -91,6 +91,30 @@ func normalizeOperatorLearningSkillSlug(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
+func parseOperatorLearningRecordID(c *fiber.Ctx) (uint, error) {
+	raw := strings.TrimSpace(c.Params("id"))
+	if raw == "" {
+		return 0, fiber.NewError(fiber.StatusBadRequest, "learning record id is required")
+	}
+
+	id, parseErr := strconv.ParseUint(raw, 10, 64)
+	if parseErr != nil || id == 0 {
+		return 0, fiber.NewError(fiber.StatusBadRequest, "invalid learning record id")
+	}
+
+	return uint(id), nil
+}
+
+func getOwnedOperatorLearningRecord(c *fiber.Ctx, uid uint, id uint) (models.OperatorLearningRecord, error) {
+	var row models.OperatorLearningRecord
+	if err := database.DB.
+		Where("deleted_at IS NULL AND user_id = ? AND id = ?", uid, id).
+		First(&row).Error; err != nil {
+		return row, fiber.NewError(fiber.StatusNotFound, "operator learning record not found")
+	}
+	return row, nil
+}
+
 // ListOperatorLearningRecords lists the authenticated user's reusable operator
 // learning records. These records are personal/project/target methodology and
 // execution hints that can later influence skill selection across projects.
@@ -188,21 +212,14 @@ func GetOperatorLearningRecord(c *fiber.Ctx) error {
 		return err
 	}
 
-	raw := strings.TrimSpace(c.Params("id"))
-	if raw == "" {
-		return fiber.NewError(fiber.StatusBadRequest, "learning record id is required")
+	id, err := parseOperatorLearningRecordID(c)
+	if err != nil {
+		return err
 	}
 
-	id, parseErr := strconv.ParseUint(raw, 10, 64)
-	if parseErr != nil || id == 0 {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid learning record id")
-	}
-
-	var row models.OperatorLearningRecord
-	if err := database.DB.
-		Where("deleted_at IS NULL AND user_id = ? AND id = ?", uid, id).
-		First(&row).Error; err != nil {
-		return fiber.NewError(fiber.StatusNotFound, "operator learning record not found")
+	row, err := getOwnedOperatorLearningRecord(c, uid, id)
+	if err != nil {
+		return err
 	}
 
 	return c.JSON(fiber.Map{
@@ -294,5 +311,168 @@ func CreateOperatorLearningRecord(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"status":   "success",
 		"learning": row,
+	})
+}
+
+// UpdateOperatorLearningRecord updates one learning/methodology record owned by
+// the current user. It preserves per-user isolation and blocks organization-wide
+// scope until team/org RBAC is implemented.
+func UpdateOperatorLearningRecord(c *fiber.Ctx) error {
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+
+	id, err := parseOperatorLearningRecordID(c)
+	if err != nil {
+		return err
+	}
+
+	row, err := getOwnedOperatorLearningRecord(c, uid, id)
+	if err != nil {
+		return err
+	}
+
+	var req createOperatorLearningRecordRequest
+	if err := json.Unmarshal(c.Body(), &req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid learning record payload")
+	}
+
+	if strings.TrimSpace(req.Title) != "" {
+		row.Title = strings.TrimSpace(req.Title)
+	}
+
+	if req.Scope != "" {
+		scope := normalizeOperatorLearningScope(req.Scope)
+		if scope == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid scope")
+		}
+		if scope == "organization_global" {
+			return fiber.NewError(fiber.StatusForbidden, "organization_global learning requires team RBAC and is not available yet")
+		}
+		row.Scope = scope
+	}
+
+	if req.Source != "" {
+		source := normalizeOperatorLearningSource(req.Source)
+		if source == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid source")
+		}
+		row.Source = source
+	}
+
+	if req.Status != "" {
+		status := normalizeOperatorLearningStatus(req.Status)
+		if status == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid status")
+		}
+		row.Status = status
+	}
+
+	if req.TargetID != nil {
+		if *req.TargetID > 0 {
+			if _, err := getAccessibleTarget(c, *req.TargetID); err != nil {
+				return err
+			}
+			row.TargetID = req.TargetID
+		} else {
+			row.TargetID = nil
+		}
+	}
+
+	confidence := req.Confidence
+	if confidence > 0 {
+		if confidence > 100 {
+			confidence = 100
+		}
+		row.Confidence = confidence
+	}
+
+	row.ProjectKey = strings.TrimSpace(req.ProjectKey)
+	row.Summary = strings.TrimSpace(req.Summary)
+	row.Content = strings.TrimSpace(req.Content)
+	row.BugClass = normalizeOperatorLearningBugClass(req.BugClass)
+	row.SkillSlug = normalizeOperatorLearningSkillSlug(req.SkillSlug)
+
+	if len(req.AppliesTo) > 0 {
+		if !json.Valid(req.AppliesTo) {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid applies_to JSON")
+		}
+		row.AppliesTo = []byte(req.AppliesTo)
+	}
+	if len(req.TriggerSignals) > 0 {
+		if !json.Valid(req.TriggerSignals) {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid trigger_signals JSON")
+		}
+		row.TriggerSignals = []byte(req.TriggerSignals)
+	}
+	if len(req.Methodology) > 0 {
+		if !json.Valid(req.Methodology) {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid methodology JSON")
+		}
+		row.Methodology = []byte(req.Methodology)
+	}
+	if len(req.Constraints) > 0 {
+		if !json.Valid(req.Constraints) {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid constraints JSON")
+		}
+		row.Constraints = []byte(req.Constraints)
+	}
+	if len(req.ExecutionHints) > 0 {
+		if !json.Valid(req.ExecutionHints) {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid execution_hints JSON")
+		}
+		row.ExecutionHints = []byte(req.ExecutionHints)
+	}
+	if len(req.EvidenceJSON) > 0 {
+		if !json.Valid(req.EvidenceJSON) {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid evidence_json JSON")
+		}
+		row.EvidenceJSON = []byte(req.EvidenceJSON)
+	}
+	if len(req.Metadata) > 0 {
+		if !json.Valid(req.Metadata) {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid metadata JSON")
+		}
+		row.Metadata = []byte(req.Metadata)
+	}
+
+	if err := database.DB.Save(&row).Error; err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to update operator learning record")
+	}
+
+	return c.JSON(fiber.Map{
+		"status":   "success",
+		"learning": row,
+	})
+}
+
+// DeleteOperatorLearningRecord soft-deletes one learning/methodology record owned
+// by the current user. The row remains recoverable/auditable through GORM soft
+// delete, but it no longer appears in normal list/profile selectors.
+func DeleteOperatorLearningRecord(c *fiber.Ctx) error {
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+
+	id, err := parseOperatorLearningRecordID(c)
+	if err != nil {
+		return err
+	}
+
+	row, err := getOwnedOperatorLearningRecord(c, uid, id)
+	if err != nil {
+		return err
+	}
+
+	if err := database.DB.Delete(&row).Error; err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to delete operator learning record")
+	}
+
+	return c.JSON(fiber.Map{
+		"status":  "success",
+		"deleted": true,
+		"id":      id,
 	})
 }

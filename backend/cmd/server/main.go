@@ -102,6 +102,8 @@ func main() {
 	api.Get("/operator-learning", handlers.ListOperatorLearningRecords)
 	api.Post("/operator-learning", handlers.CreateOperatorLearningRecord)
 	api.Get("/operator-learning/:id", handlers.GetOperatorLearningRecord)
+	api.Patch("/operator-learning/:id", handlers.UpdateOperatorLearningRecord)
+	api.Delete("/operator-learning/:id", handlers.DeleteOperatorLearningRecord)
 
 	// --- System Configuration & Queue ---
 	api.Get("/config", handlers.GetSystemConfig)
