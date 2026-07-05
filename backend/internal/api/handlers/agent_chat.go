@@ -3243,41 +3243,204 @@ func chatSkillSelectionIntent(text string) bool {
 	return false
 }
 
-func selectedOperatorSkillsForChat(text string) []map[string]interface{} {
+type operatorSkillSelectorSignals struct {
+	FoundURLCount          int64
+	ParameterizedURLCount  int64
+	ControlledResultCount  int64
+	ParameterMemoryCount   int64
+	NoParameterMemoryCount int64
+	AuthNeedMemoryCount    int64
+	HasXSSSignal           bool
+	HasRedirectSignal      bool
+	HasFilePathSignal      bool
+	HasAuthAccessSignal    bool
+	HasJSAuditSignal       bool
+	SignalSummary          []string
+}
+
+func textHasAnySignal(text string, needles ...string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	if t == "" {
+		return false
+	}
+
+	for _, needle := range needles {
+		n := strings.ToLower(strings.TrimSpace(needle))
+		if n != "" && strings.Contains(t, n) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func collectOperatorSkillSelectorSignals(text string, targetID uint, ownerKey string, uid uint) operatorSkillSelectorSignals {
+	signals := operatorSkillSelectorSignals{
+		HasXSSSignal: textHasAnySignal(text,
+			"xss", "reflection", "reflect", "search", "query", "dom", "script", "html injection",
+			"رفلکت", "ایکس اس اس",
+		),
+		HasRedirectSignal: textHasAnySignal(text,
+			"redirect", "open redirect", "return_url", "return url", "callback", "next=", "url=", "redirect_uri",
+			"ریدایرکت",
+		),
+		HasFilePathSignal: textHasAnySignal(text,
+			"path traversal", "lfi", "file read", "download", "upload", "export", "import", "file=", "path=", "template",
+			"فایل", "دانلود", "آپلود",
+		),
+		HasAuthAccessSignal: textHasAnySignal(text,
+			"idor", "bola", "bfla", "authorization", "access control", "auth", "account", "tenant", "role", "jwt", "oauth", "api authorization",
+			"احراز", "دسترسی", "اکانت",
+		),
+		HasJSAuditSignal: textHasAnySignal(text,
+			"js", "javascript", "dom", "spa", "api", "endpoint", "crawl", "crawling", "route",
+			"جاوااسکریپت", "کراول", "اندپوینت",
+		),
+	}
+
+	if targetID == 0 {
+		return signals
+	}
+
+	_ = database.DB.Model(&models.FoundURL{}).
+		Where("target_id = ?", targetID).
+		Count(&signals.FoundURLCount).Error
+
+	_ = database.DB.Model(&models.FoundURL{}).
+		Where("target_id = ? AND value LIKE ?", targetID, "%?%").
+		Count(&signals.ParameterizedURLCount).Error
+
+	_ = database.DB.Model(&models.ControlledTestResult{}).
+		Where("target_id = ? AND user_id = ? AND owner_key = ?", targetID, uid, ownerKey).
+		Count(&signals.ControlledResultCount).Error
+
+	_ = database.DB.Model(&models.TargetMemoryItem{}).
+		Where("target_id = ? AND owner_key = ? AND memory_type = ?", targetID, ownerKey, models.TargetMemoryTypeParameterNote).
+		Count(&signals.ParameterMemoryCount).Error
+
+	_ = database.DB.Model(&models.TargetMemoryItem{}).
+		Where("target_id = ? AND owner_key = ? AND memory_type = ? AND (summary ILIKE ? OR content ILIKE ?)",
+			targetID,
+			ownerKey,
+			models.TargetMemoryTypeParameterNote,
+			"%no query parameters%",
+			"%No parameterized URLs%",
+		).
+		Count(&signals.NoParameterMemoryCount).Error
+
+	_ = database.DB.Model(&models.TargetMemoryItem{}).
+		Where("target_id = ? AND owner_key = ? AND (content ILIKE ? OR summary ILIKE ? OR content ILIKE ? OR summary ILIKE ?)",
+			targetID,
+			ownerKey,
+			"%auth%",
+			"%auth%",
+			"%authenticated%",
+			"%authenticated%",
+		).
+		Count(&signals.AuthNeedMemoryCount).Error
+
+	if signals.FoundURLCount == 0 || signals.NoParameterMemoryCount > 0 {
+		signals.HasJSAuditSignal = true
+		signals.SignalSummary = append(signals.SignalSummary, "URL/parameter inventory is sparse; JS/API discovery can expand attack surface.")
+	}
+
+	if signals.ParameterizedURLCount > 0 || signals.ParameterMemoryCount > 0 {
+		signals.SignalSummary = append(signals.SignalSummary, "Parameterized URL or parameter memory exists.")
+	}
+
+	if signals.ControlledResultCount > 0 {
+		signals.SignalSummary = append(signals.SignalSummary, "Controlled runtime evidence exists for HTTP evidence analysis.")
+	}
+
+	if signals.AuthNeedMemoryCount > 0 {
+		signals.HasAuthAccessSignal = true
+		signals.SignalSummary = append(signals.SignalSummary, "Target memory indicates auth/authenticated context may be needed.")
+	}
+
+	if signals.HasXSSSignal {
+		signals.SignalSummary = append(signals.SignalSummary, "XSS/reflection signal detected.")
+	}
+	if signals.HasRedirectSignal {
+		signals.SignalSummary = append(signals.SignalSummary, "Redirect/url-like signal detected.")
+	}
+	if signals.HasFilePathSignal {
+		signals.SignalSummary = append(signals.SignalSummary, "File/path-like signal detected.")
+	}
+	if signals.HasAuthAccessSignal {
+		signals.SignalSummary = append(signals.SignalSummary, "Auth/access-control signal detected.")
+	}
+
+	return signals
+}
+
+func addOperatorSkillSeed(seeds *[]selectedSkillSeed, seen map[string]bool, slug string, reason string) {
+	slug = strings.ToLower(strings.TrimSpace(slug))
+	reason = strings.TrimSpace(reason)
+	if slug == "" || seen[slug] {
+		return
+	}
+
+	seen[slug] = true
+	*seeds = append(*seeds, selectedSkillSeed{Slug: slug, Reason: reason})
+}
+
+type selectedSkillSeed struct {
+	Slug   string
+	Reason string
+}
+
+func selectedOperatorSkillsForChat(text string, targetID uint, ownerKey string, uid uint) []map[string]interface{} {
 	if !chatSkillSelectionIntent(text) {
 		return nil
 	}
 
-	type selectedSkillSeed struct {
-		Slug   string
-		Reason string
+	signals := collectOperatorSkillSelectorSignals(text, targetID, ownerKey, uid)
+
+	seeds := make([]selectedSkillSeed, 0, 8)
+	seen := map[string]bool{}
+
+	addOperatorSkillSeed(&seeds, seen, "parameter_inventory", "High-impact authorized hunting needs a parameter and surface inventory before class-specific validation.")
+	addOperatorSkillSeed(&seeds, seen, "http_evidence_analysis", "Controlled runtime evidence must be classified before choosing authorized exploit validation skills.")
+
+	if signals.HasJSAuditSignal {
+		addOperatorSkillSeed(&seeds, seen, "js_audit", "Sparse URL/parameter inventory or JS/API/crawling signals indicate JavaScript and API route mining can expand the attack surface.")
 	}
 
-	seeds := []selectedSkillSeed{
-		{
-			Slug:   "parameter_inventory",
-			Reason: "High-impact authorized hunting needs a parameter and surface inventory before class-specific validation.",
-		},
-		{
-			Slug:   "http_evidence_analysis",
-			Reason: "Controlled runtime evidence must be classified before choosing authorized exploit validation skills.",
-		},
+	if signals.HasAuthAccessSignal {
+		addOperatorSkillSeed(&seeds, seen, "auth_context_needed", "High-impact IDOR/API authorization/access-control validation requires authenticated context and usually a second test account.")
+	}
+
+	if signals.HasXSSSignal || signals.ParameterizedURLCount > 0 {
+		addOperatorSkillSeed(&seeds, seen, "xss_reflection", "Parameterized/reflection signals exist; controlled XSS reflection/context validation may be useful when policy allows.")
+	}
+
+	if signals.HasRedirectSignal {
+		addOperatorSkillSeed(&seeds, seen, "open_redirect", "Redirect or URL-like signals exist; open redirect and redirect-chain validation may be useful when policy allows.")
+	}
+
+	if signals.HasFilePathSignal {
+		addOperatorSkillSeed(&seeds, seen, "path_traversal_baseline", "File/path/download/template signals exist; non-destructive path traversal/file-read baseline validation may be useful when policy allows.")
 	}
 
 	slugs := make([]string, 0, len(seeds))
 	reasons := map[string]string{}
-	for _, seed := range seeds {
+	order := map[string]int{}
+	for idx, seed := range seeds {
 		slugs = append(slugs, seed.Slug)
 		reasons[seed.Slug] = seed.Reason
+		order[seed.Slug] = idx + 1
 	}
 
 	rows := make([]models.OperatorSkill, 0)
 	if err := database.DB.
 		Where("slug IN ? AND is_enabled = true", slugs).
-		Order("CASE slug WHEN 'parameter_inventory' THEN 1 WHEN 'http_evidence_analysis' THEN 2 ELSE 99 END").
 		Find(&rows).Error; err != nil {
 		return nil
 	}
+
+	sort.Slice(rows, func(i, j int) bool {
+		return order[rows[i].Slug] < order[rows[j].Slug]
+	})
 
 	out := make([]map[string]interface{}, 0, len(rows))
 	for _, row := range rows {
@@ -3296,6 +3459,16 @@ func selectedOperatorSkillsForChat(text string) []map[string]interface{} {
 			"is_enabled":             row.IsEnabled,
 			"reason":                 reasons[row.Slug],
 			"status":                 "selected",
+			"selector_version":       "operator-skill-selector-evidence-aware-v1",
+			"selector_signals": map[string]interface{}{
+				"found_url_count":           signals.FoundURLCount,
+				"parameterized_url_count":   signals.ParameterizedURLCount,
+				"controlled_result_count":   signals.ControlledResultCount,
+				"parameter_memory_count":    signals.ParameterMemoryCount,
+				"no_parameter_memory_count": signals.NoParameterMemoryCount,
+				"auth_need_memory_count":    signals.AuthNeedMemoryCount,
+				"signal_summary":            signals.SignalSummary,
+			},
 		})
 	}
 
@@ -3666,7 +3839,7 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 	createdActions := make([]models.AgentAction, 0)
 	reusedActionIDs := make([]uint, 0)
 	reusedActionCount := 0
-	selectedSkills := selectedOperatorSkillsForChat(content)
+	selectedSkills := selectedOperatorSkillsForChat(content, target.ID, ownerKey, uid)
 	selectedSkillRunIDs := make([]uint, 0, len(selectedSkills))
 	if selectedSkillsText := buildSelectedOperatorSkillsText(selectedSkills); selectedSkillsText != "" {
 		assistantText = strings.TrimSpace(assistantText + "\n\n" + selectedSkillsText)
