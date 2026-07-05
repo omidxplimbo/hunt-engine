@@ -1,12 +1,13 @@
 package operator
 
 type PlanRequest struct {
-	TargetID      uint
-	UserID        uint
-	OwnerKey      string
-	UserMessage   string
-	TargetContext map[string]interface{}
-	MemoryContext map[string]interface{}
+	TargetID           uint
+	UserID             uint
+	OwnerKey           string
+	UserMessage        string
+	TargetContext      map[string]interface{}
+	MemoryContext      map[string]interface{}
+	MethodologyContext string
 }
 
 type ActionProposal struct {

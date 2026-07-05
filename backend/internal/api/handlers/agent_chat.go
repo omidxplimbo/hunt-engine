@@ -3533,6 +3533,63 @@ func selectedOperatorMethodologiesForChat(targetID uint, ownerKey string, uid ui
 	return out
 }
 
+func buildOperatorMethodologyPromptContext(methodologies []map[string]interface{}) string {
+	if len(methodologies) == 0 {
+		return ""
+	}
+
+	lines := []string{
+		"Target-selected operator methodology / skill instructions:",
+		"Use these as user-authored guidance for matching bug_class or skill_slug workflows. They are not vulnerability evidence by themselves.",
+	}
+
+	for _, item := range methodologies {
+		title := strings.TrimSpace(fmt.Sprint(item["title"]))
+		if title == "" || title == "<nil>" {
+			title = "Untitled methodology"
+		}
+
+		id := strings.TrimSpace(fmt.Sprint(item["id"]))
+		bugClass := strings.TrimSpace(fmt.Sprint(item["bug_class"]))
+		skillSlug := strings.TrimSpace(fmt.Sprint(item["skill_slug"]))
+		summary := strings.TrimSpace(fmt.Sprint(item["summary"]))
+		content := strings.TrimSpace(fmt.Sprint(item["content"]))
+		confidence := strings.TrimSpace(fmt.Sprint(item["confidence"]))
+		methodology := strings.TrimSpace(fmt.Sprint(item["methodology"]))
+		executionHints := strings.TrimSpace(fmt.Sprint(item["execution_hints"]))
+
+		headerParts := []string{fmt.Sprintf("- %s", title)}
+		if id != "" && id != "<nil>" {
+			headerParts = append(headerParts, fmt.Sprintf("(id=%s)", id))
+		}
+		if skillSlug != "" && skillSlug != "<nil>" {
+			headerParts = append(headerParts, fmt.Sprintf("skill_slug=%s", skillSlug))
+		}
+		if bugClass != "" && bugClass != "<nil>" {
+			headerParts = append(headerParts, fmt.Sprintf("bug_class=%s", bugClass))
+		}
+		if confidence != "" && confidence != "<nil>" {
+			headerParts = append(headerParts, fmt.Sprintf("confidence=%s", confidence))
+		}
+		lines = append(lines, strings.Join(headerParts, " "))
+
+		if summary != "" && summary != "<nil>" {
+			lines = append(lines, fmt.Sprintf("  summary: %s", summary))
+		}
+		if content != "" && content != "<nil>" {
+			lines = append(lines, fmt.Sprintf("  content: %s", content))
+		}
+		if methodology != "" && methodology != "<nil>" {
+			lines = append(lines, fmt.Sprintf("  methodology: %s", methodology))
+		}
+		if executionHints != "" && executionHints != "<nil>" {
+			lines = append(lines, fmt.Sprintf("  execution_hints: %s", executionHints))
+		}
+	}
+
+	return strings.Join(lines, "\n")
+}
+
 func buildAppliedOperatorMethodologyText(selectedSkills []map[string]interface{}) string {
 	if len(selectedSkills) == 0 {
 		return ""
@@ -4193,6 +4250,8 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 	}
 
 	memoryContext := buildAgentChatMemoryContext(target.ID, ownerKey)
+	selectedMethodologies := selectedOperatorMethodologiesForChat(target.ID, ownerKey, uid)
+	methodologyContext := buildOperatorMethodologyPromptContext(selectedMethodologies)
 
 	plannedActions, assistantText := planActionsFromChat(content)
 	var operatorPlan *operator.Plan
@@ -4200,12 +4259,13 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 	operatorError := ""
 
 	if plan, err := operator.GeneratePlan(context.Background(), operator.PlanRequest{
-		TargetID:      target.ID,
-		UserID:        uid,
-		OwnerKey:      ownerKey,
-		UserMessage:   content,
-		TargetContext: chatContext,
-		MemoryContext: memoryContext,
+		TargetID:           target.ID,
+		UserID:             uid,
+		OwnerKey:           ownerKey,
+		UserMessage:        content,
+		TargetContext:      chatContext,
+		MemoryContext:      memoryContext,
+		MethodologyContext: methodologyContext,
 	}); err == nil && plan != nil {
 		llmActions := convertOperatorPlanActions(plan)
 		llmActions = replaceLowValueActionsForHypothesisMode(content, llmActions, plan)
@@ -4227,7 +4287,6 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 	reusedActionIDs := make([]uint, 0)
 	reusedActionCount := 0
 	selectedSkills := selectedOperatorSkillsForChat(content, target.ID, ownerKey, uid)
-	selectedMethodologies := selectedOperatorMethodologiesForChat(target.ID, ownerKey, uid)
 	selectedSkillRunIDs := make([]uint, 0, len(selectedSkills))
 	if selectedSkillsText := buildSelectedOperatorSkillsText(selectedSkills); selectedSkillsText != "" {
 		assistantText = strings.TrimSpace(assistantText + "\n\n" + selectedSkillsText)
@@ -4322,11 +4381,12 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 			MessageType:     models.AgentChatMessageTypeActionPlan,
 			Content:         assistantText,
 			InputJSON: chatJSON(map[string]interface{}{
-				"user_message_id": userMessage.ID,
-				"context":         chatContext,
-				"memory_context":  memoryContext,
-				"operator_mode":   operatorMode,
-				"operator_error":  operatorError,
+				"user_message_id":     userMessage.ID,
+				"context":             chatContext,
+				"memory_context":      memoryContext,
+				"methodology_context": methodologyContext,
+				"operator_mode":       operatorMode,
+				"operator_error":      operatorError,
 			}),
 			OutputJSON: chatJSON(map[string]interface{}{
 				"action_ids":             actionIDs,
@@ -4409,6 +4469,7 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 	}
 	assistantOutput["selected_skills"] = selectedSkills
 	assistantOutput["selected_methodologies"] = selectedMethodologies
+	assistantOutput["operator_methodology_context_used"] = methodologyContext != ""
 	assistantOutput["selected_skill_run_ids"] = selectedSkillRunIDs
 	assistantOutput["skill_execution"] = skillExecution
 

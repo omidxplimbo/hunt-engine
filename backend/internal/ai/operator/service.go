@@ -277,14 +277,25 @@ func GeneratePlanWithConfig(ctx context.Context, cfg *llmclient.Config, req Plan
 	}
 
 	contextFacts := buildContextFacts(req.TargetContext, req.MemoryContext)
+	if len(contextFacts) == 0 {
+		contextFacts = append(contextFacts, "no compact target facts were available")
+	}
+
+	methodologyContext := strings.TrimSpace(req.MethodologyContext)
+	methodologyContextUsed := methodologyContext != ""
+	if methodologyContext == "" {
+		methodologyContext = "No target-selected operator methodology records were supplied."
+	}
 
 	payload := map[string]interface{}{
-		"task":                    "Create a safe, approval-gated pentest operator plan for this target chat request.",
-		"context_facts_required":  contextFacts,
-		"operator_prompt_version": PromptVersion,
-		"user_message":            req.UserMessage,
-		"pentest_hypothesis_mode": wantsPentestHypothesisMode(req.UserMessage),
-		"required_min_hypotheses": 5,
+		"task":                     "Create a safe, approval-gated pentest operator plan for this target chat request.",
+		"context_facts_required":   contextFacts,
+		"operator_prompt_version":  PromptVersion,
+		"user_message":             req.UserMessage,
+		"pentest_hypothesis_mode":  wantsPentestHypothesisMode(req.UserMessage),
+		"required_min_hypotheses":  5,
+		"methodology_context":      methodologyContext,
+		"methodology_context_used": methodologyContextUsed,
 		"target": map[string]interface{}{
 			"target_id": req.TargetID,
 			"user_id":   req.UserID,
