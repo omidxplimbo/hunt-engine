@@ -11,6 +11,7 @@ import TargetsPage from './pages/TargetsPages';
 import TargetAssets from './pages/TargetAssets';
 import Settings from './pages/Settings';
 import OperatorLearning from './pages/OperatorLearning';
+import OperatorSkills from './pages/OperatorSkills';
 import NucleiTemplates from './pages/NucleiTemplates';
 import Dashboard from './pages/Dashboard'; // 👈 ایمپورت از فایل جدید
 import Account from './pages/Account';
@@ -71,6 +72,7 @@ function App() {
                 <Route path="/targets" element={<TargetsPage />} />
                 <Route path="/targets/:id" element={<TargetAssets />} />
                 <Route path="/operator-learning" element={<OperatorLearning />} />
+                <Route path="/operator-skills" element={<OperatorSkills />} />
                 <Route element={<AdminRoute />}>
                   <Route path="/nuclei-templates" element={<NucleiTemplates />} />
                   <Route path="/settings" element={<Settings />} />

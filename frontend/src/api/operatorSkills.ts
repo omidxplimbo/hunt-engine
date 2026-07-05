@@ -79,6 +79,63 @@ export async function listOperatorSkills(includeDisabled = false) {
   return response.data;
 }
 
+export interface CreateOperatorSkillPayload {
+  name: string;
+  title?: string;
+  slug?: string;
+  description?: string;
+  scope?: string;
+  skill_type?: string;
+  runtime_backend?: string;
+  project_key?: string;
+  target_id?: number | null;
+  category?: string;
+  bug_class?: string;
+  default_risk_level?: string;
+  default_safety_level?: number;
+  default_test_level?: number;
+  default_autonomy_level?: number;
+  permission_mode?: string;
+  required_context?: unknown[];
+  trigger_signals?: unknown[];
+  supported_actions?: unknown[];
+  success_criteria?: unknown[];
+  failure_criteria?: unknown[];
+  memory_policy?: Record<string, unknown>;
+  execution_profile?: Record<string, unknown>;
+  authorization_requirements?: Record<string, unknown>;
+  budget_defaults?: Record<string, unknown>;
+  stop_conditions?: Record<string, unknown>;
+  user_learning_policy?: Record<string, unknown>;
+  custom_definition?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  is_enabled?: boolean;
+}
+
+export type UpdateOperatorSkillPayload = Partial<CreateOperatorSkillPayload>;
+
+export interface OperatorSkillResponse {
+  status: string;
+  skill: OperatorSkill;
+}
+
+export async function createOperatorSkill(payload: CreateOperatorSkillPayload) {
+  const response = await apiClient.post<OperatorSkillResponse>("/operator-skills", payload);
+  return response.data.skill;
+}
+
+export async function updateOperatorSkill(id: number, payload: UpdateOperatorSkillPayload) {
+  const response = await apiClient.patch<OperatorSkillResponse>(`/operator-skills/${id}`, payload);
+  return response.data.skill;
+}
+
+export async function deleteOperatorSkill(id: number) {
+  const response = await apiClient.delete<{ status: string; deleted_id: number }>(
+    `/operator-skills/${id}`
+  );
+  return response.data;
+}
+
 export async function getTargetOperatorSkillProfile(targetId: number) {
   const response = await apiClient.get<OperatorTargetSkillProfileResponse>(
     `/targets/${targetId}/operator-skill-profile`

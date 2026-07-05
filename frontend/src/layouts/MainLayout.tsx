@@ -77,6 +77,7 @@ export const MainLayout = () => {
           <div onClick={handleNavClick}>
             <NavItem to="/targets" icon={Target}>Targets</NavItem>
             <NavItem to="/operator-learning" icon={BrainCircuit}>Operator Learning</NavItem>
+            <NavItem to="/operator-skills" icon={BrainCircuit}>Executable Skills</NavItem>
           </div>
           {role === 'admin' && (
           <div onClick={handleNavClick}>
