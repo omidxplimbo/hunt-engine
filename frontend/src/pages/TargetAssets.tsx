@@ -935,8 +935,8 @@ const TargetAssets = () => {
                   },
                   {
                     id: "skills",
-                    label: "Operator Skills",
-                    description: "target profile",
+                    label: "Operator Profile",
+                    description: "skills + methodology",
                     enabled: featureAgentChat,
                   },
                 {
