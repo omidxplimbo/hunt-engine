@@ -3389,15 +3389,32 @@ type selectedSkillSeed struct {
 	Reason string
 }
 
-func disabledOperatorSkillSlugsForTarget(targetID uint, ownerKey string, uid uint) map[string]bool {
-	if targetID == 0 || uid == 0 || strings.TrimSpace(ownerKey) == "" {
-		return nil
+func operatorTargetSkillProfileForChat(targetID uint, ownerKey string, uid uint) (*models.OperatorTargetSkillProfile, error) {
+	if targetID == 0 || uid == 0 {
+		return nil, fmt.Errorf("target_id and user_id are required")
 	}
 
 	var profile models.OperatorTargetSkillProfile
+	q := database.DB.Where("target_id = ? AND user_id = ? AND is_enabled = true", targetID, uid)
+
+	if strings.TrimSpace(ownerKey) != "" {
+		if err := q.Where("owner_key = ?", strings.TrimSpace(ownerKey)).First(&profile).Error; err == nil {
+			return &profile, nil
+		}
+	}
+
 	if err := database.DB.
-		Where("target_id = ? AND user_id = ? AND owner_key = ? AND is_enabled = true", targetID, uid, ownerKey).
+		Where("target_id = ? AND user_id = ? AND is_enabled = true", targetID, uid).
 		First(&profile).Error; err != nil {
+		return nil, err
+	}
+
+	return &profile, nil
+}
+
+func disabledOperatorSkillSlugsForTarget(targetID uint, ownerKey string, uid uint) map[string]bool {
+	profile, err := operatorTargetSkillProfileForChat(targetID, ownerKey, uid)
+	if err != nil || profile == nil {
 		return nil
 	}
 
@@ -3415,6 +3432,153 @@ func disabledOperatorSkillSlugsForTarget(targetID uint, ownerKey string, uid uin
 	}
 
 	return out
+}
+
+func preferredOperatorLearningRecordIDsForTarget(targetID uint, ownerKey string, uid uint) []uint {
+	profile, err := operatorTargetSkillProfileForChat(targetID, ownerKey, uid)
+	if err != nil || profile == nil {
+		return nil
+	}
+
+	rawIDs := make([]uint, 0)
+	if err := json.Unmarshal(profile.PreferredLearningRecordIDs, &rawIDs); err != nil {
+		return nil
+	}
+
+	seen := map[uint]bool{}
+	out := make([]uint, 0, len(rawIDs))
+	for _, id := range rawIDs {
+		if id == 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+
+	return out
+}
+
+func selectedOperatorMethodologyRecordsForTarget(targetID uint, ownerKey string, uid uint) []models.OperatorLearningRecord {
+	ids := preferredOperatorLearningRecordIDsForTarget(targetID, ownerKey, uid)
+	if len(ids) == 0 {
+		return nil
+	}
+
+	rows := make([]models.OperatorLearningRecord, 0, len(ids))
+	if err := database.DB.
+		Where("deleted_at IS NULL AND user_id = ? AND id IN ? AND status = ?", uid, ids, models.OperatorLearningStatusActive).
+		Find(&rows).Error; err != nil {
+		return nil
+	}
+
+	order := map[uint]int{}
+	for idx, id := range ids {
+		order[id] = idx
+	}
+
+	sort.Slice(rows, func(i, j int) bool {
+		return order[rows[i].ID] < order[rows[j].ID]
+	})
+
+	return rows
+}
+
+func operatorMethodologyAppliesToSkill(record models.OperatorLearningRecord, skill models.OperatorSkill) bool {
+	recordSkillSlug := strings.ToLower(strings.TrimSpace(record.SkillSlug))
+	recordBugClass := strings.ToLower(strings.TrimSpace(record.BugClass))
+	skillSlug := strings.ToLower(strings.TrimSpace(skill.Slug))
+	skillBugClass := strings.ToLower(strings.TrimSpace(skill.BugClass))
+
+	if recordSkillSlug == "" && recordBugClass == "" {
+		return true
+	}
+	if recordSkillSlug != "" && recordSkillSlug == skillSlug {
+		return true
+	}
+	if recordBugClass != "" && skillBugClass != "" && recordBugClass == skillBugClass {
+		return true
+	}
+	return false
+}
+
+func operatorMethodologyRecordForChat(record models.OperatorLearningRecord) map[string]interface{} {
+	return map[string]interface{}{
+		"id":              record.ID,
+		"title":           record.Title,
+		"summary":         record.Summary,
+		"content":         record.Content,
+		"scope":           record.Scope,
+		"source":          record.Source,
+		"status":          record.Status,
+		"bug_class":       record.BugClass,
+		"skill_slug":      record.SkillSlug,
+		"applies_to":      record.AppliesTo,
+		"trigger_signals": record.TriggerSignals,
+		"methodology":     record.Methodology,
+		"execution_hints": record.ExecutionHints,
+		"confidence":      record.Confidence,
+	}
+}
+
+func selectedOperatorMethodologiesForChat(targetID uint, ownerKey string, uid uint) []map[string]interface{} {
+	records := selectedOperatorMethodologyRecordsForTarget(targetID, ownerKey, uid)
+	if len(records) == 0 {
+		return nil
+	}
+
+	out := make([]map[string]interface{}, 0, len(records))
+	for _, record := range records {
+		out = append(out, operatorMethodologyRecordForChat(record))
+	}
+	return out
+}
+
+func buildAppliedOperatorMethodologyText(selectedSkills []map[string]interface{}) string {
+	if len(selectedSkills) == 0 {
+		return ""
+	}
+
+	lines := []string{}
+	seen := map[string]bool{}
+
+	for _, skill := range selectedSkills {
+		slug := strings.TrimSpace(fmt.Sprint(skill["slug"]))
+		if slug == "" || slug == "<nil>" {
+			continue
+		}
+
+		raw, ok := skill["applied_methodologies"]
+		if !ok || raw == nil {
+			continue
+		}
+
+		items, ok := raw.([]map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		for _, item := range items {
+			title := strings.TrimSpace(fmt.Sprint(item["title"]))
+			id := strings.TrimSpace(fmt.Sprint(item["id"]))
+			if title == "" || title == "<nil>" {
+				continue
+			}
+
+			key := slug + ":" + id + ":" + title
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+
+			lines = append(lines, fmt.Sprintf("- %s -> %s", title, slug))
+		}
+	}
+
+	if len(lines) == 0 {
+		return ""
+	}
+
+	return "Applied operator methodology:\n" + strings.Join(lines, "\n")
 }
 
 func selectedOperatorSkillsForChat(text string, targetID uint, ownerKey string, uid uint) []map[string]interface{} {
@@ -3482,12 +3646,21 @@ func selectedOperatorSkillsForChat(text string, targetID uint, ownerKey string, 
 		return nil
 	}
 
+	methodologyRecords := selectedOperatorMethodologyRecordsForTarget(targetID, ownerKey, uid)
+
 	sort.Slice(rows, func(i, j int) bool {
 		return order[rows[i].Slug] < order[rows[j].Slug]
 	})
 
 	out := make([]map[string]interface{}, 0, len(rows))
 	for _, row := range rows {
+		appliedMethodologies := make([]map[string]interface{}, 0)
+		for _, record := range methodologyRecords {
+			if operatorMethodologyAppliesToSkill(record, row) {
+				appliedMethodologies = append(appliedMethodologies, operatorMethodologyRecordForChat(record))
+			}
+		}
+
 		out = append(out, map[string]interface{}{
 			"id":                     row.ID,
 			"slug":                   row.Slug,
@@ -3504,6 +3677,8 @@ func selectedOperatorSkillsForChat(text string, targetID uint, ownerKey string, 
 			"reason":                 reasons[row.Slug],
 			"status":                 "selected",
 			"selector_version":       "operator-skill-selector-evidence-aware-v1",
+			"applied_methodologies":  appliedMethodologies,
+			"methodology_count":      len(appliedMethodologies),
 			"selector_signals": map[string]interface{}{
 				"found_url_count":           signals.FoundURLCount,
 				"parameterized_url_count":   signals.ParameterizedURLCount,
@@ -4052,9 +4227,13 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 	reusedActionIDs := make([]uint, 0)
 	reusedActionCount := 0
 	selectedSkills := selectedOperatorSkillsForChat(content, target.ID, ownerKey, uid)
+	selectedMethodologies := selectedOperatorMethodologiesForChat(target.ID, ownerKey, uid)
 	selectedSkillRunIDs := make([]uint, 0, len(selectedSkills))
 	if selectedSkillsText := buildSelectedOperatorSkillsText(selectedSkills); selectedSkillsText != "" {
 		assistantText = strings.TrimSpace(assistantText + "\n\n" + selectedSkillsText)
+	}
+	if methodologyText := buildAppliedOperatorMethodologyText(selectedSkills); methodologyText != "" {
+		assistantText = strings.TrimSpace(assistantText + "\n\n" + methodologyText)
 	}
 
 	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
@@ -4229,6 +4408,7 @@ func CreateTargetAgentChatMessage(c *fiber.Ctx) error {
 		assistantMessage.Content = formatAssistantTextForChatReadability(assistantMessage.Content)
 	}
 	assistantOutput["selected_skills"] = selectedSkills
+	assistantOutput["selected_methodologies"] = selectedMethodologies
 	assistantOutput["selected_skill_run_ids"] = selectedSkillRunIDs
 	assistantOutput["skill_execution"] = skillExecution
 
