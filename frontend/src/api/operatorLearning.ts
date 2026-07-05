@@ -104,3 +104,23 @@ export async function createOperatorLearningRecord(payload: CreateOperatorLearni
   );
   return response.data;
 }
+
+export type UpdateOperatorLearningRecordPayload = Partial<CreateOperatorLearningRecordPayload>;
+
+export async function updateOperatorLearningRecord(
+  id: number,
+  payload: UpdateOperatorLearningRecordPayload
+) {
+  const response = await apiClient.patch<OperatorLearningRecordResponse>(
+    `/operator-learning/${id}`,
+    payload
+  );
+  return response.data;
+}
+
+export async function deleteOperatorLearningRecord(id: number) {
+  const response = await apiClient.delete<{ status: string; deleted: boolean; id: number }>(
+    `/operator-learning/${id}`
+  );
+  return response.data;
+}
