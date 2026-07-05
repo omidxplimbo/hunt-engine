@@ -3638,6 +3638,163 @@ func buildAppliedOperatorMethodologyText(selectedSkills []map[string]interface{}
 	return "Applied operator methodology:\n" + strings.Join(lines, "\n")
 }
 
+func jsonArrayStringsForOperatorSkill(raw []byte) []string {
+	items := make([]string, 0)
+	if len(raw) == 0 {
+		return items
+	}
+
+	var direct []string
+	if err := json.Unmarshal(raw, &direct); err == nil {
+		for _, item := range direct {
+			item = strings.ToLower(strings.TrimSpace(item))
+			if item != "" {
+				items = append(items, item)
+			}
+		}
+		return items
+	}
+
+	var generic []interface{}
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		return items
+	}
+	for _, item := range generic {
+		text := strings.ToLower(strings.TrimSpace(fmt.Sprint(item)))
+		if text != "" && text != "<nil>" {
+			items = append(items, text)
+		}
+	}
+
+	return items
+}
+
+func customOperatorSkillMatchesChat(row models.OperatorSkill, text string, signals operatorSkillSelectorSignals) (bool, string) {
+	normalizedText := strings.ToLower(strings.TrimSpace(text))
+	if normalizedText == "" {
+		return false, ""
+	}
+
+	matches := make([]string, 0)
+
+	fields := []struct {
+		label string
+		value string
+	}{
+		{"slug", row.Slug},
+		{"name", row.Name},
+		{"category", row.Category},
+		{"bug_class", row.BugClass},
+		{"skill_type", row.SkillType},
+		{"runtime_backend", row.RuntimeBackend},
+	}
+
+	for _, field := range fields {
+		value := strings.ToLower(strings.TrimSpace(field.value))
+		if value == "" {
+			continue
+		}
+		valueVariants := []string{value, strings.ReplaceAll(value, "_", " "), strings.ReplaceAll(value, "-", " ")}
+		for _, variant := range valueVariants {
+			variant = strings.TrimSpace(variant)
+			if variant != "" && strings.Contains(normalizedText, variant) {
+				matches = append(matches, fmt.Sprintf("%s matched %q", field.label, value))
+				break
+			}
+		}
+	}
+
+	for _, signal := range jsonArrayStringsForOperatorSkill(row.TriggerSignals) {
+		if signal == "" {
+			continue
+		}
+		variants := []string{signal, strings.ReplaceAll(signal, "_", " "), strings.ReplaceAll(signal, "-", " ")}
+		for _, variant := range variants {
+			variant = strings.TrimSpace(variant)
+			if variant != "" && strings.Contains(normalizedText, variant) {
+				matches = append(matches, fmt.Sprintf("trigger signal matched %q", signal))
+				break
+			}
+		}
+	}
+
+	bugClass := strings.ToLower(strings.TrimSpace(row.BugClass))
+	switch bugClass {
+	case "xss", "dom_xss", "html_injection":
+		if signals.HasXSSSignal {
+			matches = append(matches, "target/chat has XSS/reflection signal")
+		}
+	case "open_redirect", "redirect":
+		if signals.HasRedirectSignal {
+			matches = append(matches, "target/chat has redirect/url-like signal")
+		}
+	case "path_traversal", "lfi", "file_read":
+		if signals.HasFilePathSignal {
+			matches = append(matches, "target/chat has file/path signal")
+		}
+	case "idor", "bola", "bfla", "access_control", "auth":
+		if signals.HasAuthAccessSignal {
+			matches = append(matches, "target/chat has auth/access-control signal")
+		}
+	}
+
+	if strings.Contains(normalizedText, "high-impact") || strings.Contains(normalizedText, "critical") || strings.Contains(normalizedText, "reportable") || strings.Contains(normalizedText, "real bug") {
+		if row.SkillType == models.OperatorSkillTypeActiveValidation || row.SkillType == models.OperatorSkillTypeExploitRuntime || row.SkillType == models.OperatorSkillTypeChain {
+			matches = append(matches, "high-impact/reportable hunting intent matched active user-defined skill")
+		}
+	}
+
+	if len(matches) == 0 {
+		return false, ""
+	}
+
+	return true, "User-defined executable skill matched chat/target selector signals: " + strings.Join(matches, "; ") + ". Runtime execution remains dispatcher-gated."
+}
+
+func customOperatorSkillsForChat(text string, targetID uint, ownerKey string, uid uint, disabledSkillSlugs map[string]bool, existingOrder int, signals operatorSkillSelectorSignals) ([]models.OperatorSkill, map[string]string, map[string]int) {
+	if uid == 0 {
+		return nil, nil, nil
+	}
+
+	ownerKey = strings.TrimSpace(ownerKey)
+	if ownerKey == "" {
+		ownerKey = fmt.Sprintf("user:%d", uid)
+	}
+
+	rows := make([]models.OperatorSkill, 0)
+	if err := database.DB.
+		Where("deleted_at IS NULL AND is_enabled = true AND origin = ? AND (created_by_user_id = ? OR owner_key = ?)", models.OperatorSkillOriginUser, uid, ownerKey).
+		Order("category ASC, slug ASC").
+		Limit(50).
+		Find(&rows).Error; err != nil {
+		return nil, nil, nil
+	}
+
+	selected := make([]models.OperatorSkill, 0)
+	reasons := map[string]string{}
+	order := map[string]int{}
+	nextOrder := existingOrder + 1
+
+	for _, row := range rows {
+		slug := strings.ToLower(strings.TrimSpace(row.Slug))
+		if slug == "" || disabledSkillSlugs[slug] {
+			continue
+		}
+
+		matched, reason := customOperatorSkillMatchesChat(row, text, signals)
+		if !matched {
+			continue
+		}
+
+		selected = append(selected, row)
+		reasons[row.Slug] = reason
+		order[row.Slug] = nextOrder
+		nextOrder++
+	}
+
+	return selected, reasons, order
+}
+
 func selectedOperatorSkillsForChat(text string, targetID uint, ownerKey string, uid uint) []map[string]interface{} {
 	if !chatSkillSelectionIntent(text) {
 		return nil
@@ -3683,10 +3840,6 @@ func selectedOperatorSkillsForChat(text string, targetID uint, ownerKey string, 
 		seeds = filtered
 	}
 
-	if len(seeds) == 0 {
-		return nil
-	}
-
 	slugs := make([]string, 0, len(seeds))
 	reasons := map[string]string{}
 	order := map[string]int{}
@@ -3697,9 +3850,29 @@ func selectedOperatorSkillsForChat(text string, targetID uint, ownerKey string, 
 	}
 
 	rows := make([]models.OperatorSkill, 0)
-	if err := database.DB.
-		Where("slug IN ? AND is_enabled = true", slugs).
-		Find(&rows).Error; err != nil {
+	if len(slugs) > 0 {
+		if err := database.DB.
+			Where("slug IN ? AND is_enabled = true", slugs).
+			Find(&rows).Error; err != nil {
+			return nil
+		}
+	}
+
+	customRows, customReasons, customOrder := customOperatorSkillsForChat(text, targetID, ownerKey, uid, disabledSkillSlugs, len(order), signals)
+	if len(customRows) > 0 {
+		for _, row := range customRows {
+			slug := strings.ToLower(strings.TrimSpace(row.Slug))
+			if slug == "" || seen[slug] {
+				continue
+			}
+			seen[slug] = true
+			rows = append(rows, row)
+			reasons[row.Slug] = customReasons[row.Slug]
+			order[row.Slug] = customOrder[row.Slug]
+		}
+	}
+
+	if len(rows) == 0 {
 		return nil
 	}
 
@@ -3718,12 +3891,16 @@ func selectedOperatorSkillsForChat(text string, targetID uint, ownerKey string, 
 			}
 		}
 
-		out = append(out, map[string]interface{}{
+		selected := map[string]interface{}{
 			"id":                     row.ID,
 			"slug":                   row.Slug,
 			"name":                   row.Name,
 			"category":               row.Category,
 			"bug_class":              row.BugClass,
+			"scope":                  row.Scope,
+			"origin":                 row.Origin,
+			"skill_type":             row.SkillType,
+			"runtime_backend":        row.RuntimeBackend,
 			"default_risk_level":     row.DefaultRiskLevel,
 			"default_safety_level":   row.DefaultSafetyLevel,
 			"default_test_level":     row.DefaultTestLevel,
@@ -3733,7 +3910,7 @@ func selectedOperatorSkillsForChat(text string, targetID uint, ownerKey string, 
 			"is_enabled":             row.IsEnabled,
 			"reason":                 reasons[row.Slug],
 			"status":                 "selected",
-			"selector_version":       "operator-skill-selector-evidence-aware-v1",
+			"selector_version":       "operator-skill-selector-custom-aware-v1",
 			"applied_methodologies":  appliedMethodologies,
 			"methodology_count":      len(appliedMethodologies),
 			"selector_signals": map[string]interface{}{
@@ -3745,7 +3922,17 @@ func selectedOperatorSkillsForChat(text string, targetID uint, ownerKey string, 
 				"auth_need_memory_count":    signals.AuthNeedMemoryCount,
 				"signal_summary":            signals.SignalSummary,
 			},
-		})
+		}
+
+		if !row.IsBuiltIn || row.Origin == models.OperatorSkillOriginUser {
+			selected["custom_definition"] = row.CustomDefinition
+			selected["trigger_signals"] = row.TriggerSignals
+			selected["budget_defaults"] = row.BudgetDefaults
+			selected["stop_conditions"] = row.StopConditions
+			selected["runtime_note"] = "User-defined skill selected for planning/queueing only; custom runtime execution is not wired in this patch."
+		}
+
+		out = append(out, selected)
 	}
 
 	return out
