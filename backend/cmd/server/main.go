@@ -97,6 +97,8 @@ func main() {
 	// Operator Skill Registry Routes
 	api.Get("/operator-skills", handlers.ListOperatorSkills)
 	api.Get("/operator-skills/:slug", handlers.GetOperatorSkill)
+	api.Get("/targets/:id/operator-skill-profile", handlers.GetTargetOperatorSkillProfile)
+	api.Put("/targets/:id/operator-skill-profile", handlers.UpsertTargetOperatorSkillProfile)
 	api.Get("/operator-learning", handlers.ListOperatorLearningRecords)
 	api.Post("/operator-learning", handlers.CreateOperatorLearningRecord)
 	api.Get("/operator-learning/:id", handlers.GetOperatorLearningRecord)

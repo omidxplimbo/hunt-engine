@@ -74,6 +74,7 @@ func Connect() {
 		&models.OperatorSkillRun{},
 		&models.OperatorSkillObservation{},
 		&models.OperatorLearningRecord{},
+		&models.OperatorTargetSkillProfile{},
 		&models.AgentChatSession{},
 		&models.AgentChatMessage{},
 		&models.BugTestRun{},

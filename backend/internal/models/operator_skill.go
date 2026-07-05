@@ -266,3 +266,30 @@ type OperatorLearningRecord struct {
 
 	PromotedFromObservationID *uint `gorm:"index" json:"promoted_from_observation_id"`
 }
+
+// OperatorTargetSkillProfile stores per-user, per-target operator skill usage
+// preferences. It controls which skills/learning records should influence the
+// AI pentest operator for a specific authorized target.
+type OperatorTargetSkillProfile struct {
+	ID        uint           `gorm:"primaryKey" json:"id"`
+	CreatedAt time.Time      `gorm:"index" json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+
+	UserID   uint   `gorm:"not null;index;uniqueIndex:idx_operator_target_skill_profiles_user_target,priority:1" json:"user_id"`
+	OwnerKey string `gorm:"size:80;index" json:"owner_key"`
+	TargetID uint   `gorm:"not null;index;uniqueIndex:idx_operator_target_skill_profiles_user_target,priority:2" json:"target_id"`
+
+	IsEnabled      bool   `gorm:"not null;default:true;index" json:"is_enabled"`
+	PermissionMode string `gorm:"size:80;not null;default:'scope_aware_authorized'" json:"permission_mode"`
+
+	EnabledSkillSlugs          datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"enabled_skill_slugs"`
+	DisabledSkillSlugs         datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"disabled_skill_slugs"`
+	PreferredLearningRecordIDs datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"preferred_learning_record_ids"`
+	AllowedRuntimeBackends     datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"allowed_runtime_backends"`
+	BudgetDefaults             datatypes.JSON `gorm:"type:jsonb;default:'{}'" json:"budget_defaults"`
+	StopConditions             datatypes.JSON `gorm:"type:jsonb;default:'{}'" json:"stop_conditions"`
+	Metadata                   datatypes.JSON `gorm:"type:jsonb;default:'{}'" json:"metadata"`
+
+	Target *Target `gorm:"foreignKey:TargetID" json:"-"`
+}

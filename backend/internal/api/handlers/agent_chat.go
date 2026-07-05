@@ -3389,6 +3389,34 @@ type selectedSkillSeed struct {
 	Reason string
 }
 
+func disabledOperatorSkillSlugsForTarget(targetID uint, ownerKey string, uid uint) map[string]bool {
+	if targetID == 0 || uid == 0 || strings.TrimSpace(ownerKey) == "" {
+		return nil
+	}
+
+	var profile models.OperatorTargetSkillProfile
+	if err := database.DB.
+		Where("target_id = ? AND user_id = ? AND owner_key = ? AND is_enabled = true", targetID, uid, ownerKey).
+		First(&profile).Error; err != nil {
+		return nil
+	}
+
+	slugs := make([]string, 0)
+	if err := json.Unmarshal(profile.DisabledSkillSlugs, &slugs); err != nil {
+		return nil
+	}
+
+	out := map[string]bool{}
+	for _, slug := range slugs {
+		slug = strings.ToLower(strings.TrimSpace(slug))
+		if slug != "" {
+			out[slug] = true
+		}
+	}
+
+	return out
+}
+
 func selectedOperatorSkillsForChat(text string, targetID uint, ownerKey string, uid uint) []map[string]interface{} {
 	if !chatSkillSelectionIntent(text) {
 		return nil
@@ -3420,6 +3448,22 @@ func selectedOperatorSkillsForChat(text string, targetID uint, ownerKey string, 
 
 	if signals.HasFilePathSignal {
 		addOperatorSkillSeed(&seeds, seen, "path_traversal_baseline", "File/path/download/template signals exist; non-destructive path traversal/file-read baseline validation may be useful when policy allows.")
+	}
+
+	disabledSkillSlugs := disabledOperatorSkillSlugsForTarget(targetID, ownerKey, uid)
+	if len(disabledSkillSlugs) > 0 {
+		filtered := make([]selectedSkillSeed, 0, len(seeds))
+		for _, seed := range seeds {
+			if disabledSkillSlugs[seed.Slug] {
+				continue
+			}
+			filtered = append(filtered, seed)
+		}
+		seeds = filtered
+	}
+
+	if len(seeds) == 0 {
+		return nil
 	}
 
 	slugs := make([]string, 0, len(seeds))

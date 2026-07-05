@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -45,6 +46,149 @@ func parseOperatorSkillTargetID(c *fiber.Ctx) (uint, error) {
 	}
 
 	return uint(id), nil
+}
+
+type updateOperatorTargetSkillProfileRequest struct {
+	IsEnabled                  *bool           `json:"is_enabled"`
+	PermissionMode             string          `json:"permission_mode"`
+	EnabledSkillSlugs          json.RawMessage `json:"enabled_skill_slugs"`
+	DisabledSkillSlugs         json.RawMessage `json:"disabled_skill_slugs"`
+	PreferredLearningRecordIDs json.RawMessage `json:"preferred_learning_record_ids"`
+	AllowedRuntimeBackends     json.RawMessage `json:"allowed_runtime_backends"`
+	BudgetDefaults             json.RawMessage `json:"budget_defaults"`
+	StopConditions             json.RawMessage `json:"stop_conditions"`
+	Metadata                   json.RawMessage `json:"metadata"`
+}
+
+func operatorProfileJSONOrDefault(raw json.RawMessage, fallback string) []byte {
+	if len(raw) == 0 {
+		return []byte(fallback)
+	}
+	if json.Valid(raw) {
+		return raw
+	}
+	return []byte(fallback)
+}
+
+func normalizeOperatorSkillPermissionMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case models.OperatorSkillPermissionScopeAwareAuthorized:
+		return models.OperatorSkillPermissionScopeAwareAuthorized
+	case models.OperatorSkillPermissionManualApproval:
+		return models.OperatorSkillPermissionManualApproval
+	case models.OperatorSkillPermissionAssistedAutopilot:
+		return models.OperatorSkillPermissionAssistedAutopilot
+	case models.OperatorSkillPermissionAuthorizedAutonomous:
+		return models.OperatorSkillPermissionAuthorizedAutonomous
+	default:
+		return models.OperatorSkillPermissionScopeAwareAuthorized
+	}
+}
+
+func defaultOperatorTargetSkillProfile(uid uint, ownerKey string, targetID uint) models.OperatorTargetSkillProfile {
+	return models.OperatorTargetSkillProfile{
+		UserID:                     uid,
+		OwnerKey:                   ownerKey,
+		TargetID:                   targetID,
+		IsEnabled:                  true,
+		PermissionMode:             models.OperatorSkillPermissionScopeAwareAuthorized,
+		EnabledSkillSlugs:          []byte("[]"),
+		DisabledSkillSlugs:         []byte("[]"),
+		PreferredLearningRecordIDs: []byte("[]"),
+		AllowedRuntimeBackends:     []byte("[]"),
+		BudgetDefaults:             []byte("{}"),
+		StopConditions:             []byte("{}"),
+		Metadata:                   []byte("{}"),
+	}
+}
+
+// GetTargetOperatorSkillProfile returns the authenticated user's skill usage
+// profile for one accessible target. If no profile exists yet, default values
+// are returned without creating a row.
+func GetTargetOperatorSkillProfile(c *fiber.Ctx) error {
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+
+	targetID, err := parseOperatorSkillTargetID(c)
+	if err != nil {
+		return err
+	}
+
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	ownerKey := fmt.Sprintf("user:%d", uid)
+	profile := defaultOperatorTargetSkillProfile(uid, ownerKey, target.ID)
+
+	if err := database.DB.
+		Where("target_id = ? AND user_id = ? AND owner_key = ?", target.ID, uid, ownerKey).
+		FirstOrInit(&profile).Error; err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to load operator skill profile")
+	}
+
+	return c.JSON(fiber.Map{
+		"status":  "success",
+		"profile": profile,
+	})
+}
+
+// UpsertTargetOperatorSkillProfile creates or updates the authenticated user's
+// skill usage profile for one accessible target.
+func UpsertTargetOperatorSkillProfile(c *fiber.Ctx) error {
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+
+	targetID, err := parseOperatorSkillTargetID(c)
+	if err != nil {
+		return err
+	}
+
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	var req updateOperatorTargetSkillProfileRequest
+	if err := json.Unmarshal(c.Body(), &req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid operator skill profile payload")
+	}
+
+	ownerKey := fmt.Sprintf("user:%d", uid)
+	profile := defaultOperatorTargetSkillProfile(uid, ownerKey, target.ID)
+
+	if err := database.DB.
+		Where("target_id = ? AND user_id = ? AND owner_key = ?", target.ID, uid, ownerKey).
+		FirstOrCreate(&profile).Error; err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to initialize operator skill profile")
+	}
+
+	if req.IsEnabled != nil {
+		profile.IsEnabled = *req.IsEnabled
+	}
+
+	profile.PermissionMode = normalizeOperatorSkillPermissionMode(req.PermissionMode)
+	profile.EnabledSkillSlugs = operatorProfileJSONOrDefault(req.EnabledSkillSlugs, "[]")
+	profile.DisabledSkillSlugs = operatorProfileJSONOrDefault(req.DisabledSkillSlugs, "[]")
+	profile.PreferredLearningRecordIDs = operatorProfileJSONOrDefault(req.PreferredLearningRecordIDs, "[]")
+	profile.AllowedRuntimeBackends = operatorProfileJSONOrDefault(req.AllowedRuntimeBackends, "[]")
+	profile.BudgetDefaults = operatorProfileJSONOrDefault(req.BudgetDefaults, "{}")
+	profile.StopConditions = operatorProfileJSONOrDefault(req.StopConditions, "{}")
+	profile.Metadata = operatorProfileJSONOrDefault(req.Metadata, "{}")
+
+	if err := database.DB.Save(&profile).Error; err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to save operator skill profile")
+	}
+
+	return c.JSON(fiber.Map{
+		"status":  "success",
+		"profile": profile,
+	})
 }
 
 // ListOperatorSkills lists enabled built-in and future owner-scoped pentest skills.
