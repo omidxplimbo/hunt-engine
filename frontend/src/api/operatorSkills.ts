@@ -2,6 +2,16 @@ import { apiClient } from "./client";
 
 export interface OperatorSkill {
   id: number;
+  created_at?: string;
+  updated_at?: string;
+  owner_key?: string;
+  created_by_user_id?: number | null;
+  scope?: string;
+  origin?: string;
+  skill_type?: string;
+  runtime_backend?: string;
+  project_key?: string;
+  target_id?: number | null;
   name: string;
   slug: string;
   version: string;
@@ -13,9 +23,12 @@ export interface OperatorSkill {
   default_test_level: number;
   default_autonomy_level: number;
   permission_mode: string;
-  runtime_backend?: string;
   is_builtin: boolean;
   is_enabled: boolean;
+  trigger_signals?: unknown;
+  custom_definition?: unknown;
+  budget_defaults?: Record<string, unknown>;
+  stop_conditions?: Record<string, unknown>;
 }
 
 export interface OperatorSkillListResponse {

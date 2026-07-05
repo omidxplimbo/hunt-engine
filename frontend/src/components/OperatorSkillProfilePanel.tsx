@@ -52,6 +52,31 @@ function categoryLabel(skill: OperatorSkill) {
   return skill.category?.replaceAll("_", " ") || "uncategorized";
 }
 
+function operatorSkillOriginLabel(skill: OperatorSkill) {
+  if (skill.is_builtin || skill.origin === "builtin") return "built-in";
+  return skill.origin || "user";
+}
+
+function operatorSkillScopeLabel(skill: OperatorSkill) {
+  if (skill.is_builtin || skill.scope === "builtin") return "builtin";
+  return skill.scope || "user";
+}
+
+function operatorSkillRuntimeLabel(skill: OperatorSkill) {
+  return (skill.runtime_backend || "none").replaceAll("_", " ");
+}
+
+function operatorSkillTypeLabel(skill: OperatorSkill) {
+  return (skill.skill_type || "planning").replaceAll("_", " ");
+}
+
+function operatorSkillBadgeClass(skill: OperatorSkill) {
+  if (skill.is_builtin || skill.origin === "builtin") {
+    return "border-hack-primary/40 bg-hack-primary/10 text-hack-primary";
+  }
+  return "border-purple-400/40 bg-purple-500/10 text-purple-300";
+}
+
 function learningAppliesToSkill(learning: OperatorLearningRecord, skill: OperatorSkill) {
   if (!learning.skill_slug && !learning.bug_class) return true;
   if (learning.skill_slug && learning.skill_slug === skill.slug) return true;
@@ -67,8 +92,8 @@ export default function OperatorSkillProfilePanel({
   targetId,
 }: OperatorSkillProfilePanelProps) {
   const skillsQuery = useQuery({
-    queryKey: ["operator-skills", "all"],
-    queryFn: () => listOperatorSkills(false),
+    queryKey: ["operator-skills", "all", "include-disabled"],
+    queryFn: () => listOperatorSkills(true),
   });
 
   const profileQuery = useQuery({
@@ -475,9 +500,28 @@ export default function OperatorSkillProfilePanel({
                               <span className="rounded border border-hack-border px-1.5 py-0.5 font-mono text-[10px] text-hack-dim">
                                 {skill.slug}
                               </span>
+                              <span
+                                className={clsx(
+                                  "rounded border px-1.5 py-0.5 font-mono text-[10px]",
+                                  operatorSkillBadgeClass(skill)
+                                )}
+                              >
+                                {operatorSkillOriginLabel(skill)}
+                              </span>
+                              <span className="rounded border border-hack-border bg-black/30 px-1.5 py-0.5 font-mono text-[10px] text-hack-dim">
+                                scope:{operatorSkillScopeLabel(skill)}
+                              </span>
+                              <span className="rounded border border-hack-border bg-black/30 px-1.5 py-0.5 font-mono text-[10px] text-hack-dim">
+                                type:{operatorSkillTypeLabel(skill)}
+                              </span>
                               {skill.bug_class && (
                                 <span className="rounded border border-hack-primary/40 bg-hack-primary/10 px-1.5 py-0.5 text-[10px] text-hack-primary">
-                                  {skill.bug_class}
+                                  bug:{skill.bug_class}
+                                </span>
+                              )}
+                              {!skill.is_enabled && (
+                                <span className="rounded border border-yellow-500/40 bg-yellow-500/10 px-1.5 py-0.5 text-[10px] text-yellow-300">
+                                  registry disabled
                                 </span>
                               )}
                               {disabled && (
@@ -505,7 +549,14 @@ export default function OperatorSkillProfilePanel({
                               <span>test: {skill.default_test_level}</span>
                               <span>autonomy: {skill.default_autonomy_level}</span>
                               <span>permission: {skill.permission_mode}</span>
+                              <span>runtime: {operatorSkillRuntimeLabel(skill)}</span>
                             </div>
+
+                            {!skill.is_builtin && (
+                              <div className="mt-2 rounded border border-purple-400/30 bg-purple-500/10 px-2 py-1 text-[10px] text-purple-300">
+                                User-defined executable skill definition. It can be selected for this target profile now; runtime execution is wired by later authorized execution patches.
+                              </div>
+                            )}
                           </div>
                         </label>
                       );
