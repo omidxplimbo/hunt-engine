@@ -98,6 +98,7 @@ func main() {
 	api.Get("/operator-skills", handlers.ListOperatorSkills)
 	api.Get("/operator-skills/:slug", handlers.GetOperatorSkill)
 	api.Get("/operator-learning", handlers.ListOperatorLearningRecords)
+	api.Post("/operator-learning", handlers.CreateOperatorLearningRecord)
 	api.Get("/operator-learning/:id", handlers.GetOperatorLearningRecord)
 
 	// --- System Configuration & Queue ---

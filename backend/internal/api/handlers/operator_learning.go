@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -48,6 +50,45 @@ func normalizeOperatorLearningStatus(value string) string {
 	default:
 		return ""
 	}
+}
+
+type createOperatorLearningRecordRequest struct {
+	Scope          string          `json:"scope"`
+	Source         string          `json:"source"`
+	Status         string          `json:"status"`
+	ProjectKey     string          `json:"project_key"`
+	TargetID       *uint           `json:"target_id"`
+	Title          string          `json:"title"`
+	Summary        string          `json:"summary"`
+	Content        string          `json:"content"`
+	BugClass       string          `json:"bug_class"`
+	SkillSlug      string          `json:"skill_slug"`
+	AppliesTo      json.RawMessage `json:"applies_to"`
+	TriggerSignals json.RawMessage `json:"trigger_signals"`
+	Methodology    json.RawMessage `json:"methodology"`
+	Constraints    json.RawMessage `json:"constraints"`
+	ExecutionHints json.RawMessage `json:"execution_hints"`
+	EvidenceJSON   json.RawMessage `json:"evidence_json"`
+	Metadata       json.RawMessage `json:"metadata"`
+	Confidence     int             `json:"confidence"`
+}
+
+func operatorLearningJSONOrDefault(raw json.RawMessage, fallback string) []byte {
+	if len(raw) == 0 {
+		return []byte(fallback)
+	}
+	if json.Valid(raw) {
+		return raw
+	}
+	return []byte(fallback)
+}
+
+func normalizeOperatorLearningBugClass(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func normalizeOperatorLearningSkillSlug(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 // ListOperatorLearningRecords lists the authenticated user's reusable operator
@@ -165,6 +206,89 @@ func GetOperatorLearningRecord(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
+		"status":   "success",
+		"learning": row,
+	})
+}
+
+// CreateOperatorLearningRecord creates a user-owned reusable learning record.
+// These records let users teach the operator personal/project/target methodology
+// that can later influence skill selection, payload strategy, validation flow,
+// authorized execution hints, and cross-project learning without leaking raw
+// target-specific evidence.
+func CreateOperatorLearningRecord(c *fiber.Ctx) error {
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+
+	var req createOperatorLearningRecordRequest
+	if err := json.Unmarshal(c.Body(), &req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid learning record payload")
+	}
+
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "title is required")
+	}
+
+	scope := normalizeOperatorLearningScope(req.Scope)
+	if scope == "" {
+		scope = models.OperatorLearningScopeUserGlobal
+	}
+
+	source := normalizeOperatorLearningSource(req.Source)
+	if source == "" {
+		source = models.OperatorLearningSourceUserConfirmed
+	}
+
+	status := normalizeOperatorLearningStatus(req.Status)
+	if status == "" {
+		status = models.OperatorLearningStatusActive
+	}
+
+	confidence := req.Confidence
+	if confidence <= 0 {
+		confidence = 80
+	}
+	if confidence > 100 {
+		confidence = 100
+	}
+
+	if req.TargetID != nil && *req.TargetID > 0 {
+		if _, err := getAccessibleTarget(c, *req.TargetID); err != nil {
+			return err
+		}
+	}
+
+	row := models.OperatorLearningRecord{
+		UserID:         uid,
+		OwnerKey:       fmt.Sprintf("user:%d", uid),
+		Scope:          scope,
+		Source:         source,
+		Status:         status,
+		ProjectKey:     strings.TrimSpace(req.ProjectKey),
+		TargetID:       req.TargetID,
+		Title:          title,
+		Summary:        strings.TrimSpace(req.Summary),
+		Content:        strings.TrimSpace(req.Content),
+		BugClass:       normalizeOperatorLearningBugClass(req.BugClass),
+		SkillSlug:      normalizeOperatorLearningSkillSlug(req.SkillSlug),
+		AppliesTo:      operatorLearningJSONOrDefault(req.AppliesTo, "[]"),
+		TriggerSignals: operatorLearningJSONOrDefault(req.TriggerSignals, "[]"),
+		Methodology:    operatorLearningJSONOrDefault(req.Methodology, "{}"),
+		Constraints:    operatorLearningJSONOrDefault(req.Constraints, "{}"),
+		ExecutionHints: operatorLearningJSONOrDefault(req.ExecutionHints, "{}"),
+		EvidenceJSON:   operatorLearningJSONOrDefault(req.EvidenceJSON, "{}"),
+		Metadata:       operatorLearningJSONOrDefault(req.Metadata, "{}"),
+		Confidence:     confidence,
+	}
+
+	if err := database.DB.Create(&row).Error; err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to create operator learning record")
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"status":   "success",
 		"learning": row,
 	})
