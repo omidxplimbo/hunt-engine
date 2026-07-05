@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
-import { Target, Settings, LayoutDashboard, LogOut, Menu, X, User2, FileCode2 } from 'lucide-react';
+import { Target, Settings, LayoutDashboard, LogOut, Menu, X, User2, FileCode2, BrainCircuit } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../context/AuthContext';
 import MustacheLogo from '../components/MustacheLogo';
@@ -76,6 +76,7 @@ export const MainLayout = () => {
           </div>
           <div onClick={handleNavClick}>
             <NavItem to="/targets" icon={Target}>Targets</NavItem>
+            <NavItem to="/operator-learning" icon={BrainCircuit}>Operator Learning</NavItem>
           </div>
           {role === 'admin' && (
           <div onClick={handleNavClick}>
