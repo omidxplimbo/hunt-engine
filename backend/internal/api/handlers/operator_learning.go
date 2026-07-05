@@ -236,6 +236,9 @@ func CreateOperatorLearningRecord(c *fiber.Ctx) error {
 	if scope == "" {
 		scope = models.OperatorLearningScopeUserGlobal
 	}
+	if scope == "organization_global" {
+		return fiber.NewError(fiber.StatusForbidden, "organization_global learning requires team RBAC and is not available yet")
+	}
 
 	source := normalizeOperatorLearningSource(req.Source)
 	if source == "" {

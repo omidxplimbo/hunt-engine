@@ -71,3 +71,36 @@ export async function listOperatorLearningRecords(params: OperatorLearningListPa
   });
   return response.data;
 }
+export interface CreateOperatorLearningRecordPayload {
+  scope?: OperatorLearningScope;
+  source?: OperatorLearningSource;
+  status?: OperatorLearningStatus;
+  project_key?: string;
+  target_id?: number | null;
+  title: string;
+  summary?: string;
+  content?: string;
+  bug_class?: string;
+  skill_slug?: string;
+  applies_to?: unknown[];
+  trigger_signals?: unknown[];
+  methodology?: Record<string, unknown>;
+  constraints?: Record<string, unknown>;
+  execution_hints?: Record<string, unknown>;
+  evidence_json?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  confidence?: number;
+}
+
+export interface OperatorLearningRecordResponse {
+  status: string;
+  learning: OperatorLearningRecord;
+}
+
+export async function createOperatorLearningRecord(payload: CreateOperatorLearningRecordPayload) {
+  const response = await apiClient.post<OperatorLearningRecordResponse>(
+    "/operator-learning",
+    payload
+  );
+  return response.data;
+}
