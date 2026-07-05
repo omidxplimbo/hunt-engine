@@ -501,7 +501,7 @@ func executeHTTPEvidenceAnalysisSkillRunsFromChat(db *gorm.DB, uid uint, ownerKe
 
 	runs := make([]models.OperatorSkillRun, 0)
 	if err := db.
-		Where("id IN ? AND target_id = ? AND user_id = ? AND skill_slug = ?", selectedSkillRunIDs, target.ID, uid, httpEvidenceAnalysisSkillSlug).
+		Where("id IN ? AND target_id = ? AND user_id = ? AND owner_key = ? AND skill_slug = ?", selectedSkillRunIDs, target.ID, uid, ownerKey, httpEvidenceAnalysisSkillSlug).
 		Order("id ASC").
 		Find(&runs).Error; err != nil {
 		return nil, err
@@ -513,7 +513,7 @@ func executeHTTPEvidenceAnalysisSkillRunsFromChat(db *gorm.DB, uid uint, ownerKe
 
 	results := make([]models.ControlledTestResult, 0)
 	if err := db.
-		Where("target_id = ? AND user_id = ?", target.ID, uid).
+		Where("target_id = ? AND user_id = ? AND owner_key = ?", target.ID, uid, ownerKey).
 		Order("created_at DESC, id DESC").
 		Limit(100).
 		Find(&results).Error; err != nil {
@@ -700,7 +700,7 @@ func executeSelectedOperatorSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey st
 
 	runs := make([]models.OperatorSkillRun, 0)
 	if err := db.
-		Where("id IN ? AND target_id = ? AND user_id = ?", selectedSkillRunIDs, target.ID, uid).
+		Where("id IN ? AND target_id = ? AND user_id = ? AND owner_key = ?", selectedSkillRunIDs, target.ID, uid, ownerKey).
 		Order("id ASC").
 		Find(&runs).Error; err != nil {
 		return output, err
@@ -774,7 +774,7 @@ func executeParameterInventorySkillRunsFromChat(db *gorm.DB, uid uint, ownerKey 
 
 	runs := make([]models.OperatorSkillRun, 0)
 	if err := db.
-		Where("id IN ? AND target_id = ? AND user_id = ? AND skill_slug = ?", selectedSkillRunIDs, target.ID, uid, parameterInventorySkillSlug).
+		Where("id IN ? AND target_id = ? AND user_id = ? AND owner_key = ? AND skill_slug = ?", selectedSkillRunIDs, target.ID, uid, ownerKey, parameterInventorySkillSlug).
 		Order("id ASC").
 		Find(&runs).Error; err != nil {
 		return nil, err
