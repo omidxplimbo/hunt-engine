@@ -1185,6 +1185,263 @@ const featureDocs: DocsFeature[] = [
     screenshot: '/docs/screenshots/fa/settings-feature-flags.png',
   },
 
+  {
+    id: 'account-provider-settings',
+    group: 'settings',
+    icon: 'user',
+    title: { fa: 'Account و Provider Settings', en: 'Account and Provider Settings' },
+    route: '/account',
+    purpose: {
+      fa: 'مدیریت پروفایل کاربر، تغییر رمز، queue شخصی، provider keyها، LLM providerها، Telegram و feature flagهای account.',
+      en: 'Manage user profile, password change, personal queue, provider keys, LLM providers, Telegram, and account feature flags.',
+    },
+    features: {
+      fa: ['username', 'role', 'created date', 'concurrent scan slots', 'change password', 'my scan queue', 'Subfinder provider keys', 'LLM providers', 'Telegram config', 'account feature flags'],
+      en: ['username', 'role', 'created date', 'concurrent scan slots', 'change password', 'my scan queue', 'Subfinder provider keys', 'LLM providers', 'Telegram config', 'account feature flags'],
+    },
+    howToUse: {
+      fa: ['Account را باز کنید.', 'اطلاعات profile و scan slots را بررسی کنید.', 'برای تغییر رمز current و new password را وارد کنید.', 'provider keyها را با show/hide مدیریت کنید.', 'LLM/Telegram/feature flags را در صورت نیاز تنظیم کنید.'],
+      en: ['Open Account.', 'Review profile and scan slots.', 'Enter current and new password to change password.', 'Manage provider keys with show/hide.', 'Configure LLM/Telegram/feature flags when needed.'],
+    },
+    outputs: {
+      fa: ['profile data', 'password update status', 'provider config saved state', 'queue state', 'effective feature flags'],
+      en: ['profile data', 'password update status', 'provider config saved state', 'queue state', 'effective feature flags'],
+    },
+    errors: {
+      fa: ['current password incorrect', 'provider key invalid', 'LLM provider invalid', 'Telegram config invalid', 'feature flag override conflict'],
+      en: ['current password incorrect', 'invalid provider key', 'invalid LLM provider', 'invalid Telegram config', 'feature flag override conflict'],
+    },
+    security: {
+      fa: ['رمز، API key، bot token، chat id و secretها را در screenshot یا docs نمایش ندهید.'],
+      en: ['Do not expose passwords, API keys, bot tokens, chat IDs, or secrets in screenshots or docs.'],
+    },
+    screenshot: '/docs/screenshots/fa/account-profile.png',
+  },
+  {
+    id: 'nuclei-templates-workflow',
+    group: 'nuclei',
+    icon: 'file',
+    title: { fa: 'Nuclei Templates Workflow', en: 'Nuclei Templates Workflow' },
+    route: '/nuclei-templates',
+    purpose: {
+      fa: 'مدیریت templateها، placementها، validation، custom templateها و AI-assisted draft workflow.',
+      en: 'Manage templates, placements, validation, custom templates, and AI-assisted draft workflow.',
+    },
+    features: {
+      fa: ['Root', 'Shared', 'Safe', 'Fast', 'Exposure', 'Balanced', 'Misconfig', 'CVEs', 'CVEs Light', 'Full', 'Custom', 'Search', 'Create', 'Save', 'Validate', 'Delete', 'AI Draft', 'Strategy Signals'],
+      en: ['Root', 'Shared', 'Safe', 'Fast', 'Exposure', 'Balanced', 'Misconfig', 'CVEs', 'CVEs Light', 'Full', 'Custom', 'Search', 'Create', 'Save', 'Validate', 'Delete', 'AI Draft', 'Strategy Signals'],
+    },
+    howToUse: {
+      fa: ['Nuclei Templates را باز کنید.', 'placement مناسب را انتخاب کنید.', 'template را search یا ایجاد کنید.', 'YAML را edit کنید.', 'قبل از save، validate بزنید.', 'AI draftها را human-review کنید.'],
+      en: ['Open Nuclei Templates.', 'Select the proper placement.', 'Search or create a template.', 'Edit YAML.', 'Validate before saving.', 'Human-review AI drafts.'],
+    },
+    outputs: {
+      fa: ['template YAML', 'validation result', 'placement', 'strategy signals', 'generated draft'],
+      en: ['template YAML', 'validation result', 'placement', 'strategy signals', 'generated draft'],
+    },
+    errors: {
+      fa: ['YAML invalid', 'nuclei validation failed', 'placement اشتباه', 'AI draft disabled', 'provider/model missing'],
+      en: ['invalid YAML', 'nuclei validation failed', 'wrong placement', 'AI draft disabled', 'provider/model missing'],
+    },
+    security: {
+      fa: ['Template جدید نباید destructive یا out-of-scope باشد. اجرای خودکار نیازمند authorization و policy است.'],
+      en: ['New templates must not be destructive or out-of-scope. Auto-execution requires authorization and policy.'],
+    },
+    screenshot: '/docs/screenshots/fa/nuclei-templates-list.png',
+  },
+  {
+    id: 'reports-and-exports',
+    group: 'target-detail',
+    icon: 'database',
+    title: { fa: 'Reports و Export Actions', en: 'Reports and Export Actions' },
+    route: '/targets, /targets/:id, Findings',
+    purpose: {
+      fa: 'خروجی گرفتن برای backup، migration، review آفلاین، گزارش PDF و export شواهد.',
+      en: 'Export data for backup, migration, offline review, PDF reports, and evidence sharing.',
+    },
+    features: {
+      fa: ['PDF Report', 'Export Targets', 'Export Assets', 'Export IPs', 'Export URLs', 'Export Findings CSV', 'Export Findings JSON'],
+      en: ['PDF Report', 'Export Targets', 'Export Assets', 'Export IPs', 'Export URLs', 'Export Findings CSV', 'Export Findings JSON'],
+    },
+    howToUse: {
+      fa: ['قبل از export فیلترها را بررسی کنید.', 'Export مناسب را انتخاب کنید.', 'فایل را امن ذخیره کنید.', 'قبل از share کردن sanitize کنید.'],
+      en: ['Review active filters before export.', 'Choose the relevant export.', 'Store the file securely.', 'Sanitize before sharing.'],
+    },
+    outputs: {
+      fa: ['PDF', 'JSON', 'CSV', 'TXT', 'filtered export files'],
+      en: ['PDF', 'JSON', 'CSV', 'TXT', 'filtered export files'],
+    },
+    errors: {
+      fa: ['export خالی به دلیل filter', 'feature flag disabled', 'download blocked', 'schema/version mismatch'],
+      en: ['empty export due to filters', 'feature flag disabled', 'download blocked', 'schema/version mismatch'],
+    },
+    security: {
+      fa: ['Exportها شامل attack surface و evidence حساس هستند. آن‌ها را public commit نکنید.'],
+      en: ['Exports contain sensitive attack-surface and evidence data. Do not commit them publicly.'],
+    },
+    screenshot: '/docs/screenshots/fa/export-assets.png',
+  },
+  {
+    id: 'troubleshooting-frontend',
+    group: 'support',
+    icon: 'terminal',
+    title: { fa: 'Troubleshooting: Frontend Routes', en: 'Troubleshooting: Frontend Routes' },
+    route: 'Stage/Production frontend routes',
+    purpose: {
+      fa: 'عیب‌یابی routeهای React SPA مثل /documentation، /login، /dashboard و routeهای protected.',
+      en: 'Troubleshoot React SPA routes such as /documentation, /login, /dashboard, and protected routes.',
+    },
+    features: {
+      fa: ['HTTP status', 'React shell', 'JS asset bundle', 'bundle markers', 'docker cp dist', 'nginx restart', 'hard refresh'],
+      en: ['HTTP status', 'React shell', 'JS asset bundle', 'bundle markers', 'docker cp dist', 'nginx restart', 'hard refresh'],
+    },
+    howToUse: {
+      fa: ['status code را با curl بگیرید.', 'وجود div root را بررسی کنید.', 'JS asset را پیدا کنید.', 'bundle marker را grep کنید.', 'در dev dist را داخل container کپی کنید و nginx را restart کنید.', 'browser hard refresh کنید.'],
+      en: ['Check status code with curl.', 'Verify div root.', 'Find JS asset.', 'grep bundle markers.', 'Copy dist into container and restart nginx in dev.', 'Hard refresh browser.'],
+    },
+    outputs: {
+      fa: ['HTTP 200', 'React shell', 'asset path', 'marker match', 'route working'],
+      en: ['HTTP 200', 'React shell', 'asset path', 'marker match', 'route working'],
+    },
+    errors: {
+      fa: ['404 route', 'stale asset', 'nginx cache', 'old frontend container content', 'browser cache'],
+      en: ['404 route', 'stale asset', 'nginx cache', 'old frontend container content', 'browser cache'],
+    },
+    security: {
+      fa: ['در خروجی debug توکن یا اطلاعات حساس paste نکنید.'],
+      en: ['Do not paste tokens or sensitive data in debug output.'],
+    },
+    screenshot: '/docs/screenshots/fa/troubleshooting-frontend.png',
+  },
+  {
+    id: 'troubleshooting-backend-api',
+    group: 'support',
+    icon: 'terminal',
+    title: { fa: 'Troubleshooting: Backend و API', en: 'Troubleshooting: Backend and API' },
+    route: '/api/*',
+    purpose: {
+      fa: 'عیب‌یابی API، auth، role، backend reload، DB migration و handler/runtime errorها.',
+      en: 'Troubleshoot API, auth, role, backend reload, DB migrations, and handler/runtime errors.',
+    },
+    features: {
+      fa: ['backend container', 'API status', 'JWT', 'role permission', 'logs', 'DB connection', 'migrations', 'fast backend reload'],
+      en: ['backend container', 'API status', 'JWT', 'role permission', 'logs', 'DB connection', 'migrations', 'fast backend reload'],
+    },
+    howToUse: {
+      fa: ['API endpoint را با auth تست کنید.', 'backend logs را بررسی کنید.', 'DB migrationها را چک کنید.', 'در dev از fast backend reload استفاده کنید.', 'role و feature flag را بررسی کنید.'],
+      en: ['Test API endpoint with auth.', 'Inspect backend logs.', 'Check DB migrations.', 'Use fast backend reload in dev.', 'Review role and feature flag.'],
+    },
+    outputs: {
+      fa: ['API response', 'error context', 'backend log', 'migration state'],
+      en: ['API response', 'error context', 'backend log', 'migration state'],
+    },
+    errors: {
+      fa: ['401 token', '403 permission', '500 handler error', 'DB migration mismatch', 'env missing'],
+      en: ['401 token', '403 permission', '500 handler error', 'DB migration mismatch', 'missing env'],
+    },
+    security: {
+      fa: ['JWT، secrets و env valueهای حساس را در docs یا support paste نکنید.'],
+      en: ['Do not paste JWTs, secrets, or sensitive env values in docs/support.'],
+    },
+    screenshot: '/docs/screenshots/fa/troubleshooting-backend-api.png',
+  },
+  {
+    id: 'troubleshooting-recon',
+    group: 'support',
+    icon: 'terminal',
+    title: { fa: 'Troubleshooting: Recon و DNS', en: 'Troubleshooting: Recon and DNS' },
+    route: 'Targets / Active Processes / Settings',
+    purpose: {
+      fa: 'عیب‌یابی discovery job، DNSX، PureDNS، resolverها، wildcard DNS، AlterX و URL sources.',
+      en: 'Troubleshoot discovery jobs, DNSX, PureDNS, resolvers, wildcard DNS, AlterX, and URL sources.',
+    },
+    features: {
+      fa: ['Active Processes', 'Queue Manager', 'PureDNS progress', 'resolver pool', 'wordlist status', 'wildcard filtering', 'DNSX validation', 'AlterX validation'],
+      en: ['Active Processes', 'Queue Manager', 'PureDNS progress', 'resolver pool', 'wordlist status', 'wildcard filtering', 'DNSX validation', 'AlterX validation'],
+    },
+    howToUse: {
+      fa: ['Active Processes را بررسی کنید.', 'Queue را چک کنید.', 'PureDNS rate/ETA را بخوانید.', 'resolverها و wordlist را بررسی کنید.', 'wildcard filtering و DNSX live parsing را validate کنید.'],
+      en: ['Check Active Processes.', 'Inspect Queue.', 'Read PureDNS rate/ETA.', 'Review resolvers and wordlists.', 'Validate wildcard filtering and DNSX live parsing.'],
+    },
+    outputs: {
+      fa: ['علت کندی یا noise', 'resolver bottleneck', 'wildcard issue', 'module/source issue'],
+      en: ['cause of slowness/noise', 'resolver bottleneck', 'wildcard issue', 'module/source issue'],
+    },
+    errors: {
+      fa: ['PureDNS کند', 'resolver throttle', 'wordlist عظیم', 'wildcard noise', 'false live', 'URL source empty'],
+      en: ['slow PureDNS', 'resolver throttle', 'huge wordlist', 'wildcard noise', 'false live', 'empty URL source'],
+    },
+    security: {
+      fa: ['brute-force و active crawl باید scope-aware، rate-aware و مجاز باشند.'],
+      en: ['brute-force and active crawl must be scope-aware, rate-aware, and authorized.'],
+    },
+    screenshot: '/docs/screenshots/fa/troubleshooting-recon.png',
+  },
+  {
+    id: 'troubleshooting-operator',
+    group: 'support',
+    icon: 'brain',
+    title: { fa: 'Troubleshooting: AI Operator', en: 'Troubleshooting: AI Operator' },
+    route: '/targets/:id → Analysis → Attack Surface Chat',
+    purpose: {
+      fa: 'عیب‌یابی خروجی generic، skill not implemented، policy blocked، approval required، inconclusive و missing context.',
+      en: 'Troubleshoot generic output, skill not implemented, policy blocked, approval required, inconclusive, and missing context states.',
+    },
+    features: {
+      fa: ['selected_skills', 'skill_execution', 'not_implemented', 'policy blocked', 'approval required', 'inconclusive', 'methodology context', 'memory learning'],
+      en: ['selected_skills', 'skill_execution', 'not_implemented', 'policy blocked', 'approval required', 'inconclusive', 'methodology context', 'memory learning'],
+    },
+    howToUse: {
+      fa: ['Target evidence را بررسی کنید.', 'Skill Profile را چک کنید.', 'فعال بودن skill و methodology را بررسی کنید.', 'Policy را ببینید.', 'output_json و observations را بخوانید.', 'برای auth context اطلاعات لازم را فراهم کنید.'],
+      en: ['Review target evidence.', 'Check Skill Profile.', 'Verify skill and methodology are enabled.', 'Review Policy.', 'Read output_json and observations.', 'Provide auth context when needed.'],
+    },
+    outputs: {
+      fa: ['diagnosis', 'next step', 'missing evidence/context', 'policy or runtime reason'],
+      en: ['diagnosis', 'next step', 'missing evidence/context', 'policy or runtime reason'],
+    },
+    errors: {
+      fa: ['LLM provider missing', 'no candidates', 'skill disabled', 'runtime backend blocked', 'policy blocked', 'auth context missing'],
+      en: ['LLM provider missing', 'no candidates', 'skill disabled', 'runtime backend blocked', 'policy blocked', 'auth context missing'],
+    },
+    security: {
+      fa: ['برای رفع policy blocked، policy را کورکورانه باز نکنید؛ authorization واقعی را بررسی کنید.'],
+      en: ['Do not blindly loosen policy to fix blocked actions; verify real authorization.'],
+    },
+    screenshot: '/docs/screenshots/fa/troubleshooting-operator.png',
+  },
+  {
+    id: 'troubleshooting-deployment',
+    group: 'support',
+    icon: 'terminal',
+    title: { fa: 'Troubleshooting: Deployment', en: 'Troubleshooting: Deployment' },
+    route: 'Dev/Stage/Production deployment',
+    purpose: {
+      fa: 'عیب‌یابی deploy در dev/stage/production، frontend bundle، nginx، Cloudflare، SSL و container recreate.',
+      en: 'Troubleshoot dev/stage/production deploys, frontend bundle, nginx, Cloudflare, SSL, and container recreation.',
+    },
+    features: {
+      fa: ['dev path', 'prod path', 'source-based compose', 'frontend build', 'docker cp dist', 'nginx restart', 'Cloudflare origin lock', 'SSL', 'route smoke'],
+      en: ['dev path', 'prod path', 'source-based compose', 'frontend build', 'docker cp dist', 'nginx restart', 'Cloudflare origin lock', 'SSL', 'route smoke'],
+    },
+    howToUse: {
+      fa: ['در dev از /opt/hunt-engine/dev/app استفاده کنید.', 'frontend را build کنید.', 'dist را داخل container کپی کنید.', 'nginx را restart کنید.', 'route smoke بزنید.', 'برای production مسیر /opt/hunt-engine/prod/app را رعایت کنید.'],
+      en: ['Use /opt/hunt-engine/dev/app in dev.', 'Build frontend.', 'Copy dist into the container.', 'Restart nginx.', 'Run route smoke.', 'Use /opt/hunt-engine/prod/app for production.'],
+    },
+    outputs: {
+      fa: ['deploy سالم', 'route 200', 'bundle marker match', 'nginx/SSL درست'],
+      en: ['healthy deploy', 'route 200', 'bundle marker match', 'correct nginx/SSL'],
+    },
+    errors: {
+      fa: ['stale frontend', 'nginx cached old upstream', 'Cloudflare mismatch', 'direct IP blocked intentionally', 'Node version warning'],
+      en: ['stale frontend', 'nginx cached old upstream', 'Cloudflare mismatch', 'direct IP intentionally blocked', 'Node version warning'],
+    },
+    security: {
+      fa: ['direct IP/origin lock باید حفظ شود. production secrets و env را در docs paste نکنید.'],
+      en: ['direct IP/origin lock should remain enforced. Do not paste production secrets/env in docs.'],
+    },
+    screenshot: '/docs/screenshots/fa/troubleshooting-deployment.png',
+  },
+
 ];
 
 const groupLabels: Record<string, { fa: string; en: string }> = {
