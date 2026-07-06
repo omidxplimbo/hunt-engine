@@ -12,13 +12,16 @@ import (
 )
 
 const (
-	parameterInventorySkillSlug    = "parameter_inventory"
-	httpEvidenceAnalysisSkillSlug  = "http_evidence_analysis"
-	authContextNeededSkillSlug     = "auth_context_needed"
-	jsAuditSkillSlug               = "js_audit"
-	xssReflectionSkillSlug         = "xss_reflection"
-	openRedirectSkillSlug          = "open_redirect"
-	pathTraversalBaselineSkillSlug = "path_traversal_baseline"
+	parameterInventorySkillSlug       = "parameter_inventory"
+	httpEvidenceAnalysisSkillSlug     = "http_evidence_analysis"
+	authContextNeededSkillSlug        = "auth_context_needed"
+	jsAuditSkillSlug                  = "js_audit"
+	xssReflectionSkillSlug            = "xss_reflection"
+	openRedirectSkillSlug             = "open_redirect"
+	pathTraversalBaselineSkillSlug    = "path_traversal_baseline"
+	xssReflectionContextSkillSlug     = "xss_reflection_context"
+	openRedirectChainSkillSlug        = "open_redirect_chain"
+	pathTraversalFileReadBaselineSlug = "path_traversal_file_read_baseline"
 )
 
 type parameterInventoryCandidate struct {
@@ -2780,9 +2783,42 @@ func executeSelectedOperatorSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey st
 		}
 	}
 
+	if runIDs := selectedBySlug[xssReflectionContextSkillSlug]; len(runIDs) > 0 {
+		xssContextOutput, err := executeXSSReflectionContextSkillRunsFromChat(db, uid, ownerKey, target, runIDs)
+		if err != nil {
+			output["xss_reflection_context_error"] = err.Error()
+			blockedCount += len(runIDs)
+		} else if xssContextOutput != nil {
+			output["xss_reflection_context"] = xssContextOutput
+			executedCount += len(runIDs)
+		}
+	}
+
+	if runIDs := selectedBySlug[openRedirectChainSkillSlug]; len(runIDs) > 0 {
+		openRedirectChainOutput, err := executeOpenRedirectChainSkillRunsFromChat(db, uid, ownerKey, target, runIDs)
+		if err != nil {
+			output["open_redirect_chain_error"] = err.Error()
+			blockedCount += len(runIDs)
+		} else if openRedirectChainOutput != nil {
+			output["open_redirect_chain"] = openRedirectChainOutput
+			executedCount += len(runIDs)
+		}
+	}
+
+	if runIDs := selectedBySlug[pathTraversalFileReadBaselineSlug]; len(runIDs) > 0 {
+		pathFileReadOutput, err := executePathTraversalFileReadBaselineSkillRunsFromChat(db, uid, ownerKey, target, runIDs)
+		if err != nil {
+			output["path_traversal_file_read_baseline_error"] = err.Error()
+			blockedCount += len(runIDs)
+		} else if pathFileReadOutput != nil {
+			output["path_traversal_file_read_baseline"] = pathFileReadOutput
+			executedCount += len(runIDs)
+		}
+	}
+
 	notImplemented := make([]map[string]interface{}, 0)
 	for slug, runIDs := range selectedBySlug {
-		if slug == parameterInventorySkillSlug || slug == httpEvidenceAnalysisSkillSlug || slug == authContextNeededSkillSlug || slug == jsAuditSkillSlug || slug == xssReflectionSkillSlug || slug == openRedirectSkillSlug || slug == pathTraversalBaselineSkillSlug {
+		if slug == parameterInventorySkillSlug || slug == httpEvidenceAnalysisSkillSlug || slug == authContextNeededSkillSlug || slug == jsAuditSkillSlug || slug == xssReflectionSkillSlug || slug == openRedirectSkillSlug || slug == pathTraversalBaselineSkillSlug || slug == xssReflectionContextSkillSlug || slug == openRedirectChainSkillSlug || slug == pathTraversalFileReadBaselineSlug {
 			continue
 		}
 
@@ -2804,6 +2840,307 @@ func executeSelectedOperatorSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey st
 	output["not_implemented"] = notImplemented
 
 	return output, nil
+}
+
+func executeXSSReflectionContextSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
+	return executeCandidateClassificationAliasSkillRunsFromChat(
+		db,
+		uid,
+		ownerKey,
+		target,
+		selectedSkillRunIDs,
+		xssReflectionContextSkillSlug,
+		"xss",
+		"xss-reflection-context-runtime-v1",
+		"context_classification_no_payload_execution",
+		"XSS reflection context",
+		"Parameter is a candidate for reflection context classification before controlled payload execution is considered.",
+		"Use controlled reflection/context probing only when scope and policy allow.",
+		func(foundURLs []models.FoundURL, parameterObservations []models.OperatorSkillObservation) []map[string]interface{} {
+			candidates := buildXSSReflectionCandidates(foundURLs, parameterObservations)
+			out := make([]map[string]interface{}, 0, len(candidates))
+			for _, candidate := range candidates {
+				out = append(out, map[string]interface{}{
+					"param_name": candidate.ParamName,
+					"url":        candidate.URL,
+					"source":     candidate.Source,
+					"reason":     candidate.Reason,
+					"confidence": candidate.Confidence,
+				})
+			}
+			return out
+		},
+	)
+}
+
+func executeOpenRedirectChainSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
+	return executeCandidateClassificationAliasSkillRunsFromChat(
+		db,
+		uid,
+		ownerKey,
+		target,
+		selectedSkillRunIDs,
+		openRedirectChainSkillSlug,
+		"open_redirect",
+		"open-redirect-chain-runtime-v1",
+		"chain_candidate_classification_no_external_redirect_validation",
+		"Open redirect chain",
+		"Parameter is a candidate for chain-aware redirect validation planning. No external redirect validation is executed in this runtime.",
+		"Use controlled redirect behavior validation only when scope and policy allow.",
+		func(foundURLs []models.FoundURL, parameterObservations []models.OperatorSkillObservation) []map[string]interface{} {
+			candidates := buildOpenRedirectCandidates(foundURLs, parameterObservations)
+			out := make([]map[string]interface{}, 0, len(candidates))
+			for _, candidate := range candidates {
+				out = append(out, map[string]interface{}{
+					"param_name": candidate.ParamName,
+					"url":        candidate.URL,
+					"source":     candidate.Source,
+					"reason":     candidate.Reason,
+					"confidence": candidate.Confidence,
+				})
+			}
+			return out
+		},
+	)
+}
+
+func executePathTraversalFileReadBaselineSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
+	return executeCandidateClassificationAliasSkillRunsFromChat(
+		db,
+		uid,
+		ownerKey,
+		target,
+		selectedSkillRunIDs,
+		pathTraversalFileReadBaselineSlug,
+		"path_traversal_file_read",
+		"path-traversal-file-read-baseline-runtime-v1",
+		"candidate_classification_no_file_read_payload_execution",
+		"Path traversal/file-read baseline",
+		"Parameter is a candidate for controlled file-read/path traversal baseline validation planning. No file-read payload is executed in this runtime.",
+		"Use controlled file-read/path traversal validation only when scope and policy allow.",
+		func(foundURLs []models.FoundURL, parameterObservations []models.OperatorSkillObservation) []map[string]interface{} {
+			candidates := buildPathTraversalCandidates(foundURLs, parameterObservations)
+			out := make([]map[string]interface{}, 0, len(candidates))
+			for _, candidate := range candidates {
+				out = append(out, map[string]interface{}{
+					"param_name": candidate.ParamName,
+					"url":        candidate.URL,
+					"source":     candidate.Source,
+					"reason":     candidate.Reason,
+					"confidence": candidate.Confidence,
+				})
+			}
+			return out
+		},
+	)
+}
+
+func executeCandidateClassificationAliasSkillRunsFromChat(
+	db *gorm.DB,
+	uid uint,
+	ownerKey string,
+	target *models.Target,
+	selectedSkillRunIDs []uint,
+	skillSlug string,
+	bugClass string,
+	runtimeVersion string,
+	runtimeScope string,
+	titlePrefix string,
+	candidateSummary string,
+	nextStep string,
+	buildCandidates func([]models.FoundURL, []models.OperatorSkillObservation) []map[string]interface{},
+) (map[string]interface{}, error) {
+	if target == nil || len(selectedSkillRunIDs) == 0 {
+		return nil, nil
+	}
+
+	runs := make([]models.OperatorSkillRun, 0)
+	if err := db.
+		Where("id IN ? AND target_id = ? AND user_id = ? AND owner_key = ? AND skill_slug = ?", selectedSkillRunIDs, target.ID, uid, ownerKey, skillSlug).
+		Order("id ASC").
+		Find(&runs).Error; err != nil {
+		return nil, err
+	}
+
+	if len(runs) == 0 {
+		return nil, nil
+	}
+
+	foundURLs := make([]models.FoundURL, 0)
+	if err := db.
+		Where("target_id = ?", target.ID).
+		Order("last_seen DESC NULLS LAST, id DESC").
+		Limit(1000).
+		Find(&foundURLs).Error; err != nil {
+		return nil, err
+	}
+
+	parameterObservations := make([]models.OperatorSkillObservation, 0)
+	_ = db.
+		Where("target_id = ? AND user_id = ? AND owner_key = ? AND skill_slug = ? AND observation_type = ?",
+			target.ID,
+			uid,
+			ownerKey,
+			parameterInventorySkillSlug,
+			models.OperatorSkillObservationTypeCandidate,
+		).
+		Order("created_at DESC, id DESC").
+		Limit(200).
+		Find(&parameterObservations).Error
+
+	candidates := buildCandidates(foundURLs, parameterObservations)
+	now := time.Now().UTC()
+	runSummaries := make([]map[string]interface{}, 0, len(runs))
+
+	for _, run := range runs {
+		startedAt := now
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":     models.OperatorSkillRunStatusRunning,
+				"started_at": &startedAt,
+				"updated_at": now,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		createdObservationIDs := make([]uint, 0, len(candidates))
+
+		if len(candidates) == 0 {
+			observation := models.OperatorSkillObservation{
+				UserID:          uid,
+				OwnerKey:        ownerKey,
+				TargetID:        target.ID,
+				SkillRunID:      run.ID,
+				SkillSlug:       skillSlug,
+				ObservationType: models.OperatorSkillObservationTypeLearning,
+				Title:           titlePrefix + " needs candidate evidence",
+				Summary:         "No matching parameter candidates were found from current inventory.",
+				Content:         "Learning: improve crawling, parameter inventory, JS/API route mining, workflow mapping, or baseline HTTP evidence before this validation path can be meaningful. Runtime scope: " + runtimeScope + ".",
+				BugClass:        bugClass,
+				Confidence:      60,
+				Severity:        models.FindingSeverityInfo,
+				Status:          models.OperatorSkillRunStatusCompleted,
+				EvidenceJSON: chatJSON(map[string]interface{}{
+					"sampled_url_count":           len(foundURLs),
+					"parameter_observation_count": len(parameterObservations),
+					"candidate_count":             0,
+					"skill":                       skillSlug,
+					"runtime_scope":               runtimeScope,
+				}),
+				Metadata: chatJSON(map[string]interface{}{
+					"created_by":          runtimeVersion,
+					"operator_skill_run":  run.ID,
+					"target_id":           target.ID,
+					"observation_version": runtimeVersion + "-learning",
+				}),
+			}
+
+			if err := db.Create(&observation).Error; err != nil {
+				return nil, err
+			}
+			createdObservationIDs = append(createdObservationIDs, observation.ID)
+		} else {
+			for _, candidate := range candidates {
+				paramName, _ := candidate["param_name"].(string)
+				rawURL, _ := candidate["url"].(string)
+				source, _ := candidate["source"].(string)
+				reason, _ := candidate["reason"].(string)
+				confidence := 65
+				if rawConfidence, ok := candidate["confidence"].(int); ok && rawConfidence > 0 {
+					confidence = rawConfidence
+				}
+
+				observation := models.OperatorSkillObservation{
+					UserID:          uid,
+					OwnerKey:        ownerKey,
+					TargetID:        target.ID,
+					SkillRunID:      run.ID,
+					SkillSlug:       skillSlug,
+					ObservationType: models.OperatorSkillObservationTypeCandidate,
+					Title:           fmt.Sprintf("%s candidate: %s", titlePrefix, paramName),
+					Summary:         candidateSummary,
+					Content:         reason + "\nRuntime scope: " + runtimeScope + ".",
+					URL:             rawURL,
+					ParamName:       paramName,
+					BugClass:        bugClass,
+					Confidence:      confidence,
+					Severity:        models.FindingSeverityInfo,
+					Status:          "candidate",
+					EvidenceJSON: chatJSON(map[string]interface{}{
+						"parameter":     paramName,
+						"url":           rawURL,
+						"source":        source,
+						"reason":        reason,
+						"confidence":    confidence,
+						"skill":         skillSlug,
+						"runtime_scope": runtimeScope,
+					}),
+					Metadata: chatJSON(map[string]interface{}{
+						"created_by":          runtimeVersion,
+						"operator_skill_run":  run.ID,
+						"target_id":           target.ID,
+						"observation_version": runtimeVersion + "-candidate",
+					}),
+				}
+
+				if err := db.Create(&observation).Error; err != nil {
+					return nil, err
+				}
+				createdObservationIDs = append(createdObservationIDs, observation.ID)
+			}
+		}
+
+		status := models.OperatorSkillRunStatusCompleted
+		resultSummary := fmt.Sprintf("%s reviewed %d URL(s), %d parameter observation(s), and found %d candidate(s).", titlePrefix, len(foundURLs), len(parameterObservations), len(candidates))
+
+		output := map[string]interface{}{
+			"status":                      status,
+			"skill":                       skillSlug,
+			"runtime_version":             runtimeVersion,
+			"sampled_url_count":           len(foundURLs),
+			"parameter_observation_count": len(parameterObservations),
+			"candidate_count":             len(candidates),
+			"observation_count":           len(createdObservationIDs),
+			"observation_ids":             createdObservationIDs,
+			"runtime_scope":               runtimeScope,
+			"memory_ingested":             false,
+			"memory_scope":                "operator_skill_observations_only",
+		}
+
+		completedAt := time.Now().UTC()
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":         status,
+				"output_json":    chatJSON(output),
+				"result_summary": resultSummary,
+				"next_step":      nextStep,
+				"completed_at":   &completedAt,
+				"updated_at":     completedAt,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		runSummaries = append(runSummaries, map[string]interface{}{
+			"skill_run_id":                run.ID,
+			"status":                      status,
+			"sampled_url_count":           len(foundURLs),
+			"parameter_observation_count": len(parameterObservations),
+			"candidate_count":             len(candidates),
+			"observation_count":           len(createdObservationIDs),
+			"observation_ids":             createdObservationIDs,
+			"runtime_scope":               runtimeScope,
+		})
+	}
+
+	return map[string]interface{}{
+		"status":          models.OperatorSkillRunStatusCompleted,
+		"runs":            runSummaries,
+		"run_count":       len(runSummaries),
+		"candidate_count": len(candidates),
+		"runtime_scope":   runtimeScope,
+	}, nil
 }
 
 func executeParameterInventorySkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
