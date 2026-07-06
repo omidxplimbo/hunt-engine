@@ -24,6 +24,7 @@ const (
 	xssReflectionContextSkillSlug     = "xss_reflection_context"
 	openRedirectChainSkillSlug        = "open_redirect_chain"
 	pathTraversalFileReadBaselineSlug = "path_traversal_file_read_baseline"
+	crlfHeaderInjectionSkillSlug      = "crlf_header_injection"
 )
 
 type parameterInventoryCandidate struct {
@@ -2807,6 +2808,17 @@ func executeSelectedOperatorSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey st
 		}
 	}
 
+	if runIDs := selectedBySlug[crlfHeaderInjectionSkillSlug]; len(runIDs) > 0 {
+		crlfOutput, err := executeCRLFHeaderInjectionSkillRunsFromChat(db, uid, ownerKey, target, runIDs)
+		if err != nil {
+			output["crlf_header_injection_error"] = err.Error()
+			blockedCount += len(runIDs)
+		} else if crlfOutput != nil {
+			output["crlf_header_injection"] = crlfOutput
+			executedCount += len(runIDs)
+		}
+	}
+
 	if runIDs := selectedBySlug[pathTraversalFileReadBaselineSlug]; len(runIDs) > 0 {
 		pathFileReadOutput, err := executePathTraversalFileReadBaselineSkillRunsFromChat(db, uid, ownerKey, target, runIDs)
 		if err != nil {
@@ -2820,7 +2832,7 @@ func executeSelectedOperatorSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey st
 
 	notImplemented := make([]map[string]interface{}, 0)
 	for slug, runIDs := range selectedBySlug {
-		if slug == parameterInventorySkillSlug || slug == httpEvidenceAnalysisSkillSlug || slug == authContextNeededSkillSlug || slug == jsAuditSkillSlug || slug == xssReflectionSkillSlug || slug == openRedirectSkillSlug || slug == pathTraversalBaselineSkillSlug || slug == xssReflectionContextSkillSlug || slug == openRedirectChainSkillSlug || slug == pathTraversalFileReadBaselineSlug {
+		if slug == parameterInventorySkillSlug || slug == httpEvidenceAnalysisSkillSlug || slug == authContextNeededSkillSlug || slug == jsAuditSkillSlug || slug == xssReflectionSkillSlug || slug == openRedirectSkillSlug || slug == pathTraversalBaselineSkillSlug || slug == xssReflectionContextSkillSlug || slug == openRedirectChainSkillSlug || slug == pathTraversalFileReadBaselineSlug || slug == crlfHeaderInjectionSkillSlug {
 			continue
 		}
 
@@ -3278,35 +3290,700 @@ func executeXSSReflectionContextSkillRunsFromChat(db *gorm.DB, uid uint, ownerKe
 	}, nil
 }
 
+func redirectClassification(location string, target *models.Target) string {
+	value := strings.TrimSpace(location)
+	if value == "" {
+		return "none"
+	}
+	lower := strings.ToLower(value)
+	if strings.HasPrefix(lower, "//") {
+		return "protocol_relative"
+	}
+	parsed, err := url.Parse(value)
+	if err == nil && parsed != nil && parsed.IsAbs() {
+		host := strings.ToLower(parsed.Hostname())
+		root := ""
+		if target != nil {
+			root = strings.ToLower(strings.TrimSpace(target.RootDomain))
+		}
+		if root != "" && (host == root || strings.HasSuffix(host, "."+root)) {
+			return "same_origin_absolute"
+		}
+		return "external_absolute"
+	}
+	if strings.HasPrefix(value, "/") {
+		return "relative_path"
+	}
+	return "relative_or_opaque"
+}
+
 func executeOpenRedirectChainSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
-	return executeCandidateClassificationAliasSkillRunsFromChat(
-		db,
-		uid,
-		ownerKey,
-		target,
-		selectedSkillRunIDs,
-		openRedirectChainSkillSlug,
-		"open_redirect",
-		"open-redirect-chain-runtime-v1",
-		"chain_candidate_classification_no_external_redirect_validation",
-		"Open redirect chain",
-		"Parameter is a candidate for chain-aware redirect validation planning. No external redirect validation is executed in this runtime.",
-		"Use controlled redirect behavior validation only when scope and policy allow.",
-		func(foundURLs []models.FoundURL, parameterObservations []models.OperatorSkillObservation) []map[string]interface{} {
-			candidates := buildOpenRedirectCandidates(foundURLs, parameterObservations)
-			out := make([]map[string]interface{}, 0, len(candidates))
+	if target == nil || len(selectedSkillRunIDs) == 0 {
+		return nil, nil
+	}
+
+	runs := make([]models.OperatorSkillRun, 0)
+	if err := db.
+		Where("id IN ? AND target_id = ? AND user_id = ? AND owner_key = ? AND skill_slug = ?", selectedSkillRunIDs, target.ID, uid, ownerKey, openRedirectChainSkillSlug).
+		Order("id ASC").
+		Find(&runs).Error; err != nil {
+		return nil, err
+	}
+	if len(runs) == 0 {
+		return nil, nil
+	}
+
+	foundURLs := make([]models.FoundURL, 0)
+	if err := db.Where("target_id = ?", target.ID).
+		Order("last_seen DESC NULLS LAST, id DESC").
+		Limit(1000).
+		Find(&foundURLs).Error; err != nil {
+		return nil, err
+	}
+
+	parameterObservations := make([]models.OperatorSkillObservation, 0)
+	_ = db.Where("target_id = ? AND user_id = ? AND owner_key = ? AND skill_slug = ? AND observation_type = ?",
+		target.ID, uid, ownerKey, parameterInventorySkillSlug, models.OperatorSkillObservationTypeCandidate).
+		Order("created_at DESC, id DESC").
+		Limit(200).
+		Find(&parameterObservations).Error
+
+	candidates := buildOpenRedirectCandidates(foundURLs, parameterObservations)
+	if len(candidates) > 10 {
+		candidates = candidates[:10]
+	}
+
+	now := time.Now().UTC()
+	runSummaries := make([]map[string]interface{}, 0, len(runs))
+
+	for _, run := range runs {
+		startedAt := now
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":     models.OperatorSkillRunStatusRunning,
+				"started_at": &startedAt,
+				"updated_at": now,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		markerHost := fmt.Sprintf("hunt-v3151-open-redirect-%d.invalid", run.ID)
+		markerURL := "https://" + markerHost + "/"
+		createdObservationIDs := make([]uint, 0)
+		probeResults := make([]map[string]interface{}, 0)
+		redirectCount := 0
+		externalCount := 0
+		blockedCount := 0
+		inconclusiveCount := 0
+
+		if len(candidates) == 0 {
+			observation := models.OperatorSkillObservation{
+				UserID:          uid,
+				OwnerKey:        ownerKey,
+				TargetID:        target.ID,
+				SkillRunID:      run.ID,
+				SkillSlug:       openRedirectChainSkillSlug,
+				ObservationType: models.OperatorSkillObservationTypeLearning,
+				Title:           "Open redirect chain validation needs candidates",
+				Summary:         "No redirect/url-like candidates were available for controlled redirect behavior probing.",
+				Content:         "Learning: improve crawling, parameter inventory, OAuth/callback discovery, or redirect-flow mapping before open redirect chain validation.",
+				BugClass:        "open_redirect",
+				Confidence:      60,
+				Severity:        models.FindingSeverityInfo,
+				Status:          models.OperatorSkillRunStatusCompleted,
+				EvidenceJSON: chatJSON(map[string]interface{}{
+					"sampled_url_count":           len(foundURLs),
+					"parameter_observation_count": len(parameterObservations),
+					"candidate_count":             0,
+					"runtime_scope":               "controlled_redirect_behavior_probe_no_external_follow",
+				}),
+				Metadata: chatJSON(map[string]interface{}{
+					"created_by":          "open-redirect-chain-runtime-v1",
+					"operator_skill_run":  run.ID,
+					"target_id":           target.ID,
+					"observation_version": "open-redirect-chain-learning-v1",
+				}),
+			}
+			if err := db.Create(&observation).Error; err != nil {
+				return nil, err
+			}
+			createdObservationIDs = append(createdObservationIDs, observation.ID)
+		} else {
 			for _, candidate := range candidates {
-				out = append(out, map[string]interface{}{
-					"param_name": candidate.ParamName,
-					"url":        candidate.URL,
-					"source":     candidate.Source,
-					"reason":     candidate.Reason,
-					"confidence": candidate.Confidence,
+				probeURL, ok := buildProbeURLWithParam(candidate.URL, candidate.ParamName, markerURL)
+				if !ok {
+					continue
+				}
+
+				probe := controlledGETProbe(probeURL, 8*time.Second)
+				classification := redirectClassification(probe.Location, target)
+				hasRedirect := probe.StatusCode >= 300 && probe.StatusCode < 400 && strings.TrimSpace(probe.Location) != ""
+				markerInLocation := strings.Contains(probe.Location, markerHost)
+
+				if hasRedirect {
+					redirectCount++
+				}
+				if classification == "external_absolute" || classification == "protocol_relative" || markerInLocation {
+					externalCount++
+				}
+				if probe.Blocked {
+					blockedCount++
+				}
+				if probe.Inconclusive {
+					inconclusiveCount++
+				}
+
+				status := "candidate"
+				observationType := models.OperatorSkillObservationTypeCandidate
+				severity := models.FindingSeverityInfo
+				confidence := candidate.Confidence
+				if confidence <= 0 {
+					confidence = 65
+				}
+
+				if markerInLocation && !probe.Inconclusive {
+					status = "evidence"
+					observationType = models.OperatorSkillObservationTypeEvidence
+					severity = models.FindingSeverityMedium
+					confidence += 15
+					if confidence > 90 {
+						confidence = 90
+					}
+				} else if hasRedirect && !probe.Inconclusive {
+					status = "candidate"
+					confidence += 5
+					if confidence > 80 {
+						confidence = 80
+					}
+				}
+
+				if probe.Inconclusive {
+					status = "inconclusive"
+					observationType = models.OperatorSkillObservationTypeLearning
+					if confidence > 65 {
+						confidence = 65
+					}
+				}
+
+				summary := fmt.Sprintf("Controlled redirect probe checked parameter %q; status=%d classification=%s.", candidate.ParamName, probe.StatusCode, classification)
+				if markerInLocation {
+					summary = fmt.Sprintf("Controlled marker URL appeared in Location for parameter %q; chain-aware open redirect evidence candidate.", candidate.ParamName)
+				}
+				if probe.Inconclusive {
+					summary = fmt.Sprintf("Controlled redirect probe for parameter %q was inconclusive or blocked.", candidate.ParamName)
+				}
+
+				observation := models.OperatorSkillObservation{
+					UserID:          uid,
+					OwnerKey:        ownerKey,
+					TargetID:        target.ID,
+					SkillRunID:      run.ID,
+					SkillSlug:       openRedirectChainSkillSlug,
+					ObservationType: observationType,
+					Title:           fmt.Sprintf("Open redirect chain probe: %s", candidate.ParamName),
+					Summary:         summary,
+					Content:         "Runtime scope: controlled_redirect_behavior_probe_no_external_follow. Redirects are not followed; this records Location behavior only.",
+					URL:             probeURL,
+					ParamName:       candidate.ParamName,
+					BugClass:        "open_redirect",
+					Confidence:      confidence,
+					Severity:        severity,
+					Status:          status,
+					EvidenceJSON: chatJSON(map[string]interface{}{
+						"original_url":       candidate.URL,
+						"probe_url":          probeURL,
+						"parameter":          candidate.ParamName,
+						"marker_host":        markerHost,
+						"marker_url":         markerURL,
+						"status_code":        probe.StatusCode,
+						"location":           probe.Location,
+						"classification":     classification,
+						"marker_in_location": markerInLocation,
+						"blocked":            probe.Blocked,
+						"inconclusive":       probe.Inconclusive,
+						"header_sample":      probe.HeaderSample,
+						"error":              probe.Error,
+						"runtime_scope":      "controlled_redirect_behavior_probe_no_external_follow",
+						"execution_level":    2,
+						"destructive":        false,
+						"state_changing":     false,
+						"redirect_followed":  false,
+					}),
+					Metadata: chatJSON(map[string]interface{}{
+						"created_by":          "open-redirect-chain-runtime-v1",
+						"operator_skill_run":  run.ID,
+						"target_id":           target.ID,
+						"observation_version": "open-redirect-chain-probe-v1",
+					}),
+				}
+				if err := db.Create(&observation).Error; err != nil {
+					return nil, err
+				}
+				createdObservationIDs = append(createdObservationIDs, observation.ID)
+
+				probeResults = append(probeResults, map[string]interface{}{
+					"param_name":         candidate.ParamName,
+					"original_url":       candidate.URL,
+					"probe_url":          probeURL,
+					"status_code":        probe.StatusCode,
+					"location":           probe.Location,
+					"classification":     classification,
+					"marker_in_location": markerInLocation,
+					"blocked":            probe.Blocked,
+					"inconclusive":       probe.Inconclusive,
 				})
 			}
-			return out
-		},
-	)
+		}
+
+		status := models.OperatorSkillRunStatusCompleted
+		resultSummary := fmt.Sprintf("Open redirect chain validation probed %d candidate(s), observed %d redirect(s), %d marker/external redirect signal(s), and %d blocked/inconclusive result(s).", len(probeResults), redirectCount, externalCount, blockedCount+inconclusiveCount)
+		nextStep := "If marker URL appears in Location, review impact path and OAuth/callback chaining under explicit authorization."
+
+		output := map[string]interface{}{
+			"status":                      status,
+			"skill":                       openRedirectChainSkillSlug,
+			"runtime_version":             "open-redirect-chain-runtime-v1",
+			"runtime_scope":               "controlled_redirect_behavior_probe_no_external_follow",
+			"execution_level":             2,
+			"sampled_url_count":           len(foundURLs),
+			"parameter_observation_count": len(parameterObservations),
+			"candidate_count":             len(candidates),
+			"probe_count":                 len(probeResults),
+			"redirect_count":              redirectCount,
+			"external_signal_count":       externalCount,
+			"blocked_count":               blockedCount,
+			"inconclusive_count":          inconclusiveCount,
+			"observation_count":           len(createdObservationIDs),
+			"observation_ids":             createdObservationIDs,
+			"probe_results":               probeResults,
+			"memory_ingested":             false,
+			"memory_scope":                "operator_skill_observations_only",
+		}
+
+		completedAt := time.Now().UTC()
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":         status,
+				"output_json":    chatJSON(output),
+				"result_summary": resultSummary,
+				"next_step":      nextStep,
+				"completed_at":   &completedAt,
+				"updated_at":     completedAt,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		runSummaries = append(runSummaries, map[string]interface{}{
+			"skill_run_id":          run.ID,
+			"status":                status,
+			"candidate_count":       len(candidates),
+			"probe_count":           len(probeResults),
+			"redirect_count":        redirectCount,
+			"external_signal_count": externalCount,
+			"blocked_count":         blockedCount,
+			"inconclusive_count":    inconclusiveCount,
+			"observation_count":     len(createdObservationIDs),
+			"observation_ids":       createdObservationIDs,
+			"runtime_scope":         "controlled_redirect_behavior_probe_no_external_follow",
+		})
+	}
+
+	return map[string]interface{}{
+		"status":           models.OperatorSkillRunStatusCompleted,
+		"runs":             runSummaries,
+		"run_count":        len(runSummaries),
+		"runtime_scope":    "controlled_redirect_behavior_probe_no_external_follow",
+		"execution_level":  2,
+		"validation_class": "open_redirect_chain",
+	}, nil
+}
+
+func isCRLFHeaderRelevantParam(name string) bool {
+	p := strings.ToLower(strings.TrimSpace(name))
+	if p == "" {
+		return false
+	}
+	return p == "next" ||
+		p == "return" ||
+		p == "url" ||
+		p == "redirect" ||
+		p == "redirect_url" ||
+		p == "callback" ||
+		p == "continue" ||
+		p == "header" ||
+		p == "headers" ||
+		p == "cookie" ||
+		p == "set-cookie" ||
+		p == "location" ||
+		p == "host" ||
+		strings.Contains(p, "header") ||
+		strings.Contains(p, "redirect") ||
+		strings.Contains(p, "return") ||
+		strings.Contains(p, "callback") ||
+		strings.Contains(p, "url")
+}
+
+func buildCRLFHeaderCandidates(foundURLs []models.FoundURL, parameterObservations []models.OperatorSkillObservation) []openRedirectCandidate {
+	seen := map[string]bool{}
+	out := make([]openRedirectCandidate, 0)
+
+	add := func(candidate openRedirectCandidate) {
+		candidate.ParamName = strings.TrimSpace(candidate.ParamName)
+		candidate.URL = strings.TrimSpace(candidate.URL)
+		if candidate.ParamName == "" && candidate.URL == "" {
+			return
+		}
+		key := strings.ToLower(candidate.ParamName) + "\x00" + candidate.URL
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		if candidate.Confidence <= 0 {
+			candidate.Confidence = 60
+		}
+		out = append(out, candidate)
+	}
+
+	for _, observation := range parameterObservations {
+		if !isCRLFHeaderRelevantParam(observation.ParamName) {
+			continue
+		}
+		reason := strings.TrimSpace(observation.Summary)
+		if reason == "" {
+			reason = "Parameter inventory indicates a redirect/header-influencing candidate for controlled CRLF/header validation."
+		}
+		add(openRedirectCandidate{
+			ParamName:  observation.ParamName,
+			URL:        observation.URL,
+			Source:     "parameter_inventory_observation",
+			Reason:     reason,
+			Confidence: observation.Confidence,
+		})
+	}
+
+	for _, foundURL := range foundURLs {
+		value := strings.TrimSpace(foundURL.Value)
+		if value == "" || !strings.Contains(value, "?") {
+			continue
+		}
+		parsed, err := url.Parse(value)
+		if err != nil {
+			continue
+		}
+		for paramName := range parsed.Query() {
+			if !isCRLFHeaderRelevantParam(paramName) {
+				continue
+			}
+			add(openRedirectCandidate{
+				ParamName:  paramName,
+				URL:        value,
+				Source:     "found_url_query_parameter",
+				Reason:     "URL inventory contains a redirect/header-like parameter. Runtime v1 uses encoded marker probing only and does not inject raw CRLF payloads.",
+				Confidence: 65,
+			})
+		}
+		if len(out) >= 50 {
+			break
+		}
+	}
+
+	if len(out) > 50 {
+		out = out[:50]
+	}
+	return out
+}
+
+func markerInHeaders(headers map[string]string, marker string) bool {
+	if strings.TrimSpace(marker) == "" {
+		return false
+	}
+	for _, value := range headers {
+		if strings.Contains(value, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func executeCRLFHeaderInjectionSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
+	if target == nil || len(selectedSkillRunIDs) == 0 {
+		return nil, nil
+	}
+
+	runs := make([]models.OperatorSkillRun, 0)
+	if err := db.
+		Where("id IN ? AND target_id = ? AND user_id = ? AND owner_key = ? AND skill_slug = ?", selectedSkillRunIDs, target.ID, uid, ownerKey, crlfHeaderInjectionSkillSlug).
+		Order("id ASC").
+		Find(&runs).Error; err != nil {
+		return nil, err
+	}
+	if len(runs) == 0 {
+		return nil, nil
+	}
+
+	foundURLs := make([]models.FoundURL, 0)
+	if err := db.Where("target_id = ?", target.ID).
+		Order("last_seen DESC NULLS LAST, id DESC").
+		Limit(1000).
+		Find(&foundURLs).Error; err != nil {
+		return nil, err
+	}
+
+	parameterObservations := make([]models.OperatorSkillObservation, 0)
+	_ = db.Where("target_id = ? AND user_id = ? AND owner_key = ? AND skill_slug = ? AND observation_type = ?",
+		target.ID, uid, ownerKey, parameterInventorySkillSlug, models.OperatorSkillObservationTypeCandidate).
+		Order("created_at DESC, id DESC").
+		Limit(200).
+		Find(&parameterObservations).Error
+
+	candidates := buildCRLFHeaderCandidates(foundURLs, parameterObservations)
+	if len(candidates) > 10 {
+		candidates = candidates[:10]
+	}
+
+	now := time.Now().UTC()
+	runSummaries := make([]map[string]interface{}, 0, len(runs))
+
+	for _, run := range runs {
+		startedAt := now
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":     models.OperatorSkillRunStatusRunning,
+				"started_at": &startedAt,
+				"updated_at": now,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		marker := controlledValidationMarker("hunt_crlf_header", run.ID)
+		createdObservationIDs := make([]uint, 0)
+		probeResults := make([]map[string]interface{}, 0)
+		headerMarkerCount := 0
+		bodyMarkerCount := 0
+		blockedCount := 0
+		inconclusiveCount := 0
+
+		if len(candidates) == 0 {
+			observation := models.OperatorSkillObservation{
+				UserID:          uid,
+				OwnerKey:        ownerKey,
+				TargetID:        target.ID,
+				SkillRunID:      run.ID,
+				SkillSlug:       crlfHeaderInjectionSkillSlug,
+				ObservationType: models.OperatorSkillObservationTypeLearning,
+				Title:           "CRLF/header validation needs candidates",
+				Summary:         "No redirect/header-like candidates were available for controlled header marker probing.",
+				Content:         "Learning: improve parameter inventory, redirect/header route mapping, or baseline header evidence before CRLF/header validation.",
+				BugClass:        "crlf_header_injection",
+				Confidence:      60,
+				Severity:        models.FindingSeverityInfo,
+				Status:          models.OperatorSkillRunStatusCompleted,
+				EvidenceJSON: chatJSON(map[string]interface{}{
+					"sampled_url_count":           len(foundURLs),
+					"parameter_observation_count": len(parameterObservations),
+					"candidate_count":             0,
+					"runtime_scope":               "controlled_header_marker_probe_no_raw_crlf_payload",
+				}),
+				Metadata: chatJSON(map[string]interface{}{
+					"created_by":          "crlf-header-injection-runtime-v1",
+					"operator_skill_run":  run.ID,
+					"target_id":           target.ID,
+					"observation_version": "crlf-header-learning-v1",
+				}),
+			}
+			if err := db.Create(&observation).Error; err != nil {
+				return nil, err
+			}
+			createdObservationIDs = append(createdObservationIDs, observation.ID)
+		} else {
+			for _, candidate := range candidates {
+				probeURL, ok := buildProbeURLWithParam(candidate.URL, candidate.ParamName, marker)
+				if !ok {
+					continue
+				}
+
+				probe := controlledGETProbe(probeURL, 8*time.Second)
+				headerMarker := markerInHeaders(probe.HeaderSample, marker)
+				bodyMarker := strings.Contains(probe.BodySample, marker)
+
+				if headerMarker {
+					headerMarkerCount++
+				}
+				if bodyMarker {
+					bodyMarkerCount++
+				}
+				if probe.Blocked {
+					blockedCount++
+				}
+				if probe.Inconclusive {
+					inconclusiveCount++
+				}
+
+				status := "candidate"
+				observationType := models.OperatorSkillObservationTypeCandidate
+				severity := models.FindingSeverityInfo
+				confidence := candidate.Confidence
+				if confidence <= 0 {
+					confidence = 65
+				}
+
+				if headerMarker && !probe.Inconclusive {
+					status = "evidence"
+					observationType = models.OperatorSkillObservationTypeEvidence
+					severity = models.FindingSeverityLow
+					confidence += 10
+					if confidence > 85 {
+						confidence = 85
+					}
+				} else if bodyMarker && !probe.Inconclusive {
+					status = "candidate"
+					confidence += 5
+					if confidence > 80 {
+						confidence = 80
+					}
+				}
+
+				if probe.Inconclusive {
+					status = "inconclusive"
+					observationType = models.OperatorSkillObservationTypeLearning
+					if confidence > 65 {
+						confidence = 65
+					}
+				}
+
+				summary := fmt.Sprintf("Controlled header marker probe checked parameter %q; status=%d.", candidate.ParamName, probe.StatusCode)
+				if headerMarker {
+					summary = fmt.Sprintf("Controlled marker appeared in response headers for parameter %q.", candidate.ParamName)
+				}
+				if probe.Inconclusive {
+					summary = fmt.Sprintf("Controlled header marker probe for parameter %q was inconclusive or blocked.", candidate.ParamName)
+				}
+
+				observation := models.OperatorSkillObservation{
+					UserID:          uid,
+					OwnerKey:        ownerKey,
+					TargetID:        target.ID,
+					SkillRunID:      run.ID,
+					SkillSlug:       crlfHeaderInjectionSkillSlug,
+					ObservationType: observationType,
+					Title:           fmt.Sprintf("CRLF/header marker probe: %s", candidate.ParamName),
+					Summary:         summary,
+					Content:         "Runtime scope: controlled_header_marker_probe_no_raw_crlf_payload. This uses an inert marker value and does not inject raw CRLF sequences.",
+					URL:             probeURL,
+					ParamName:       candidate.ParamName,
+					BugClass:        "crlf_header_injection",
+					Confidence:      confidence,
+					Severity:        severity,
+					Status:          status,
+					EvidenceJSON: chatJSON(map[string]interface{}{
+						"original_url":        candidate.URL,
+						"probe_url":           probeURL,
+						"parameter":           candidate.ParamName,
+						"marker":              marker,
+						"status_code":         probe.StatusCode,
+						"header_marker":       headerMarker,
+						"body_marker":         bodyMarker,
+						"blocked":             probe.Blocked,
+						"inconclusive":        probe.Inconclusive,
+						"header_sample":       probe.HeaderSample,
+						"error":               probe.Error,
+						"runtime_scope":       "controlled_header_marker_probe_no_raw_crlf_payload",
+						"execution_level":     2,
+						"destructive":         false,
+						"state_changing":      false,
+						"raw_crlf_payload":    false,
+						"header_payload_used": false,
+					}),
+					Metadata: chatJSON(map[string]interface{}{
+						"created_by":          "crlf-header-injection-runtime-v1",
+						"operator_skill_run":  run.ID,
+						"target_id":           target.ID,
+						"observation_version": "crlf-header-probe-v1",
+					}),
+				}
+				if err := db.Create(&observation).Error; err != nil {
+					return nil, err
+				}
+				createdObservationIDs = append(createdObservationIDs, observation.ID)
+
+				probeResults = append(probeResults, map[string]interface{}{
+					"param_name":    candidate.ParamName,
+					"original_url":  candidate.URL,
+					"probe_url":     probeURL,
+					"status_code":   probe.StatusCode,
+					"header_marker": headerMarker,
+					"body_marker":   bodyMarker,
+					"blocked":       probe.Blocked,
+					"inconclusive":  probe.Inconclusive,
+				})
+			}
+		}
+
+		status := models.OperatorSkillRunStatusCompleted
+		resultSummary := fmt.Sprintf("CRLF/header validation probed %d candidate(s), found %d header marker signal(s), %d body marker signal(s), and %d blocked/inconclusive result(s).", len(probeResults), headerMarkerCount, bodyMarkerCount, blockedCount+inconclusiveCount)
+		nextStep := "If marker appears in response headers, escalate to approved CRLF/header validation with stricter payload controls."
+
+		output := map[string]interface{}{
+			"status":                      status,
+			"skill":                       crlfHeaderInjectionSkillSlug,
+			"runtime_version":             "crlf-header-injection-runtime-v1",
+			"runtime_scope":               "controlled_header_marker_probe_no_raw_crlf_payload",
+			"execution_level":             2,
+			"sampled_url_count":           len(foundURLs),
+			"parameter_observation_count": len(parameterObservations),
+			"candidate_count":             len(candidates),
+			"probe_count":                 len(probeResults),
+			"header_marker_count":         headerMarkerCount,
+			"body_marker_count":           bodyMarkerCount,
+			"blocked_count":               blockedCount,
+			"inconclusive_count":          inconclusiveCount,
+			"observation_count":           len(createdObservationIDs),
+			"observation_ids":             createdObservationIDs,
+			"probe_results":               probeResults,
+			"memory_ingested":             false,
+			"memory_scope":                "operator_skill_observations_only",
+		}
+
+		completedAt := time.Now().UTC()
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":         status,
+				"output_json":    chatJSON(output),
+				"result_summary": resultSummary,
+				"next_step":      nextStep,
+				"completed_at":   &completedAt,
+				"updated_at":     completedAt,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		runSummaries = append(runSummaries, map[string]interface{}{
+			"skill_run_id":        run.ID,
+			"status":              status,
+			"candidate_count":     len(candidates),
+			"probe_count":         len(probeResults),
+			"header_marker_count": headerMarkerCount,
+			"body_marker_count":   bodyMarkerCount,
+			"blocked_count":       blockedCount,
+			"inconclusive_count":  inconclusiveCount,
+			"observation_count":   len(createdObservationIDs),
+			"observation_ids":     createdObservationIDs,
+			"runtime_scope":       "controlled_header_marker_probe_no_raw_crlf_payload",
+		})
+	}
+
+	return map[string]interface{}{
+		"status":           models.OperatorSkillRunStatusCompleted,
+		"runs":             runSummaries,
+		"run_count":        len(runSummaries),
+		"runtime_scope":    "controlled_header_marker_probe_no_raw_crlf_payload",
+		"execution_level":  2,
+		"validation_class": "crlf_header_injection",
+	}, nil
 }
 
 func executePathTraversalFileReadBaselineSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
