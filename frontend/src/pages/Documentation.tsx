@@ -896,6 +896,295 @@ const featureDocs: DocsFeature[] = [
     screenshot: '/docs/screenshots/fa/findings-evidence-json.png',
   },
 
+  {
+    id: 'settings-users-panel',
+    group: 'settings',
+    icon: 'user',
+    title: { fa: 'Users Panel', en: 'Users Panel' },
+    route: '/settings → Users',
+    purpose: {
+      fa: 'مدیریت کاربران توسط admin: ساخت، ویرایش، حذف، role و محدودیت concurrent scan.',
+      en: 'Admin user management: create, edit, delete, role assignment, and concurrent scan limits.',
+    },
+    features: {
+      fa: ['user list', 'create user', 'edit user', 'delete user', 'role', 'password', 'max concurrent scans', 'scrollable user modal'],
+      en: ['user list', 'create user', 'edit user', 'delete user', 'role', 'password', 'max concurrent scans', 'scrollable user modal'],
+    },
+    howToUse: {
+      fa: ['با admin وارد شوید.', 'System Config را باز کنید.', 'Users panel را انتخاب کنید.', 'کاربر جدید بسازید یا کاربر موجود را ویرایش کنید.', 'role و scan slots را با دقت تنظیم کنید.'],
+      en: ['Log in as admin.', 'Open System Config.', 'Select Users panel.', 'Create or edit a user.', 'Set role and scan slots carefully.'],
+    },
+    outputs: {
+      fa: ['user record', 'role update', 'scan slot limit', 'deleted user state'],
+      en: ['user record', 'role update', 'scan slot limit', 'deleted user state'],
+    },
+    errors: {
+      fa: ['duplicate username', 'password خالی یا ضعیف', 'permission denied', 'role نامعتبر', 'modal overflow'],
+      en: ['duplicate username', 'empty or weak password', 'permission denied', 'invalid role', 'modal overflow'],
+    },
+    security: {
+      fa: ['رمزها و اطلاعات واقعی کاربران را در screenshot نشان ندهید. فقط admin باید به این panel دسترسی داشته باشد.'],
+      en: ['Do not expose passwords or real user data in screenshots. Only admins should access this panel.'],
+    },
+    screenshot: '/docs/screenshots/fa/settings-users.png',
+  },
+  {
+    id: 'settings-queue-manager',
+    group: 'settings',
+    icon: 'terminal',
+    title: { fa: 'Queue Manager', en: 'Queue Manager' },
+    route: '/settings → Queue Manager',
+    purpose: {
+      fa: 'مدیریت jobهای در صف: مشاهده، حذف، clear و تغییر اولویت queue.',
+      en: 'Manage queued jobs: inspect, remove, clear, and reorder queue items.',
+    },
+    features: {
+      fa: ['queue items', 'position/index', 'payload', 'module', 'target id', 'target name', 'owner', 'remove item', 'clear queue', 'move top/bottom'],
+      en: ['queue items', 'position/index', 'payload', 'module', 'target id', 'target name', 'owner', 'remove item', 'clear queue', 'move top/bottom'],
+    },
+    howToUse: {
+      fa: ['Queue Manager را باز کنید.', 'jobهای pending را بررسی کنید.', 'برای job اشتباه remove بزنید.', 'برای پاکسازی کامل clear queue را فقط با اطمینان بزنید.', 'برای اولویت‌دهی move top/bottom استفاده کنید.'],
+      en: ['Open Queue Manager.', 'Review pending jobs.', 'Remove unwanted jobs.', 'Use clear queue only when certain.', 'Use move top/bottom to prioritize.'],
+    },
+    outputs: {
+      fa: ['queue state جدید', 'حذف یا جابه‌جایی job', 'اولویت اجرای جدید'],
+      en: ['updated queue state', 'removed or reordered job', 'new execution priority'],
+    },
+    errors: {
+      fa: ['item قبلاً اجرا شده', 'index اشتباه', 'clear queue تصادفی', 'توقع توقف process فعال در حالی که queue فقط pending را تغییر می‌دهد'],
+      en: ['item already processed', 'wrong index', 'accidental clear queue', 'expecting active process stop while queue only changes pending items'],
+    },
+    security: {
+      fa: ['Queue ممکن است jobهای کاربران دیگر را داشته باشد؛ قبل از تغییر owner و target را بررسی کنید.'],
+      en: ['Queue may contain other users jobs; verify owner and target before changes.'],
+    },
+    screenshot: '/docs/screenshots/fa/settings-queue-manager.png',
+  },
+  {
+    id: 'settings-concurrency',
+    group: 'settings',
+    icon: 'settings',
+    title: { fa: 'Concurrency Config', en: 'Concurrency Config' },
+    route: '/settings → Concurrency Config',
+    purpose: {
+      fa: 'تنظیم ظرفیت اجرای همزمان scanها و کنترل فشار روی سرور و targetها.',
+      en: 'Configure scan concurrency to control server and target load.',
+    },
+    features: {
+      fa: ['global concurrency', 'user scan slots', 'worker limits', 'resource capacity', 'scan scheduling impact'],
+      en: ['global concurrency', 'user scan slots', 'worker limits', 'resource capacity', 'scan scheduling impact'],
+    },
+    howToUse: {
+      fa: ['Concurrency panel را باز کنید.', 'ظرفیت فعلی را بررسی کنید.', 'عددها را با توان سرور و مجوز target تنظیم کنید.', 'بعد از تغییر monitoring و queue را بررسی کنید.'],
+      en: ['Open Concurrency panel.', 'Review current capacity.', 'Tune values based on server capacity and target authorization.', 'Monitor queue and system after changes.'],
+    },
+    outputs: {
+      fa: ['concurrency config جدید', 'رفتار متفاوت queue و workerها', 'اثر روی سرعت و فشار scan'],
+      en: ['updated concurrency config', 'changed queue/worker behavior', 'impact on scan speed and load'],
+    },
+    errors: {
+      fa: ['concurrency خیلی بالا و overload', 'concurrency خیلی پایین و کندی scan', 'تداخل با user scan slots'],
+      en: ['too high concurrency causing overload', 'too low concurrency causing slow scans', 'conflict with user scan slots'],
+    },
+    security: {
+      fa: ['افزایش concurrency حجم ترافیک را زیاد می‌کند؛ باید با rate limit و authorization هماهنگ باشد.'],
+      en: ['Increasing concurrency raises traffic volume and must match rate limits and authorization.'],
+    },
+    screenshot: '/docs/screenshots/fa/settings-concurrency.png',
+  },
+  {
+    id: 'settings-wordlists',
+    group: 'settings',
+    icon: 'database',
+    title: { fa: 'Wordlists Config', en: 'Wordlists Config' },
+    route: '/settings → Wordlists Config',
+    purpose: {
+      fa: 'مدیریت wordlistهای discovery و brute-force، شامل upload و import از URL به‌صورت async.',
+      en: 'Manage discovery/brute-force wordlists, including upload and async URL imports.',
+    },
+    features: {
+      fa: ['upload wordlist', 'URL import', 'async import job', 'file-backed storage', 'line count', 'file size', 'source type', 'import status', 'PureDNS wordlist selection'],
+      en: ['upload wordlist', 'URL import', 'async import job', 'file-backed storage', 'line count', 'file size', 'source type', 'import status', 'PureDNS wordlist selection'],
+    },
+    howToUse: {
+      fa: ['Wordlists panel را باز کنید.', 'فایل را upload کنید یا URL بدهید.', 'برای URL import منتظر job progress بمانید.', 'بعد از import، wordlist را در Create/Edit Target برای PureDNS انتخاب کنید.'],
+      en: ['Open Wordlists panel.', 'Upload a file or provide a URL.', 'Wait for URL import job progress.', 'Select the wordlist in Create/Edit Target for PureDNS.'],
+    },
+    outputs: {
+      fa: ['wordlist ذخیره‌شده', 'metadata', 'line count', 'import job status', 'wordlist قابل انتخاب برای target'],
+      en: ['stored wordlist', 'metadata', 'line count', 'import job status', 'selectable target wordlist'],
+    },
+    errors: {
+      fa: ['upload limit', 'URL download failed', 'import job failed', 'wordlist خالی', 'metadata mismatch', 'wordlist خیلی بزرگ برای resolver pool'],
+      en: ['upload limit', 'URL download failed', 'import job failed', 'empty wordlist', 'metadata mismatch', 'wordlist too large for resolver pool'],
+    },
+    security: {
+      fa: ['wordlist بزرگ حجم scan را زیاد می‌کند؛ با scope، rate و resolver capacity هماهنگ کنید.'],
+      en: ['Large wordlists increase scan volume; align with scope, rate, and resolver capacity.'],
+    },
+    screenshot: '/docs/screenshots/fa/settings-wordlists.png',
+  },
+  {
+    id: 'settings-puredns-resolvers',
+    group: 'settings',
+    icon: 'terminal',
+    title: { fa: 'PureDNS Resolver Config', en: 'PureDNS Resolver Config' },
+    route: '/settings → PureDNS Resolver Config',
+    purpose: {
+      fa: 'مدیریت resolverهای account-scoped برای PureDNS و بهبود سرعت/کیفیت brute-force discovery.',
+      en: 'Manage account-scoped PureDNS resolvers to improve brute-force discovery speed and quality.',
+    },
+    features: {
+      fa: ['resolver list', 'resolver count', 'account-scoped config', 'PureDNS throughput', 'progress telemetry', 'ETA', 'wildcard impact'],
+      en: ['resolver list', 'resolver count', 'account-scoped config', 'PureDNS throughput', 'progress telemetry', 'ETA', 'wildcard impact'],
+    },
+    howToUse: {
+      fa: ['Resolver Config را باز کنید.', 'resolverهای سالم و کافی اضافه کنید.', 'ذخیره کنید.', 'PureDNS scan را با wordlist مناسب اجرا کنید.', 'rate و ETA را بررسی کنید.'],
+      en: ['Open Resolver Config.', 'Add enough healthy resolvers.', 'Save config.', 'Run PureDNS with an appropriate wordlist.', 'Review rate and ETA.'],
+    },
+    outputs: {
+      fa: ['resolver config ذخیره‌شده', 'PureDNS progress', 'throughput بهتر', 'نتایج brute-force validated'],
+      en: ['saved resolver config', 'PureDNS progress', 'better throughput', 'validated brute-force results'],
+    },
+    errors: {
+      fa: ['resolver pool کوچک', 'resolver throttling', 'resolver خراب', 'PureDNS کند', 'wordlist بسیار بزرگ', 'wildcard DNS noise'],
+      en: ['small resolver pool', 'resolver throttling', 'bad resolver', 'slow PureDNS', 'oversized wordlist', 'wildcard DNS noise'],
+    },
+    security: {
+      fa: ['PureDNS brute-force باید مجاز، rate-aware و scope-bound باشد. خروجی PureDNS را پیش‌فرض دوباره DNSX نکنید مگر debug/optional.'],
+      en: ['PureDNS brute-force must be authorized, rate-aware, and scope-bound. Do not DNSX revalidate PureDNS output by default unless debug/optional.'],
+    },
+    screenshot: '/docs/screenshots/fa/settings-puredns-resolvers.png',
+  },
+  {
+    id: 'settings-llm-provider',
+    group: 'settings',
+    icon: 'brain',
+    title: { fa: 'LLM Provider Config', en: 'LLM Provider Config' },
+    route: '/settings یا /account → LLM Provider Config',
+    purpose: {
+      fa: 'تنظیم provider/model/API برای قابلیت‌های AI Analysis و AI Operator.',
+      en: 'Configure provider/model/API settings for AI Analysis and AI Operator features.',
+    },
+    features: {
+      fa: ['provider', 'display name', 'api_key_saved', 'base_url', 'default_model', 'enabled', 'is_default', 'scope/owner'],
+      en: ['provider', 'display name', 'api_key_saved', 'base_url', 'default_model', 'enabled', 'is_default', 'scope/owner'],
+    },
+    howToUse: {
+      fa: ['LLM panel را باز کنید.', 'provider و base URL را تنظیم کنید.', 'API key را وارد کنید.', 'model پیش‌فرض را مشخص کنید.', 'enabled/default را تنظیم کنید.'],
+      en: ['Open LLM panel.', 'Set provider and base URL.', 'Enter API key.', 'Set default model.', 'Configure enabled/default state.'],
+    },
+    outputs: {
+      fa: ['LLM provider ذخیره‌شده', 'فعال شدن AI features', 'اثر روی Operator و Analysis'],
+      en: ['saved LLM provider', 'enabled AI features', 'impact on Operator and Analysis'],
+    },
+    errors: {
+      fa: ['API key نامعتبر', 'base URL اشتباه', 'model unsupported', 'provider disabled', 'feature flag غیرفعال'],
+      en: ['invalid API key', 'wrong base URL', 'unsupported model', 'provider disabled', 'feature flag disabled'],
+    },
+    security: {
+      fa: ['API key را هرگز در screenshot/docs نشان ندهید. توجه کنید چه داده‌ای به LLM provider ارسال می‌شود.'],
+      en: ['Never expose API keys in screenshots/docs. Be aware of what data is sent to the LLM provider.'],
+    },
+    screenshot: '/docs/screenshots/fa/settings-llm-provider-sanitized.png',
+  },
+  {
+    id: 'settings-notifications-integrations',
+    group: 'settings',
+    icon: 'settings',
+    title: { fa: 'Telegram و VirusTotal Config', en: 'Telegram and VirusTotal Config' },
+    route: '/settings یا /account → Telegram / VirusTotal',
+    purpose: {
+      fa: 'تنظیم notificationها و enrichmentهای خارجی مثل Telegram و VirusTotal.',
+      en: 'Configure notifications and external enrichment integrations such as Telegram and VirusTotal.',
+    },
+    features: {
+      fa: ['Telegram enabled', 'bot token saved state', 'chat_id', 'notification events', 'fresh asset screenshot', 'VirusTotal API key', 'source attribution', 'rate limit'],
+      en: ['Telegram enabled', 'bot token saved state', 'chat_id', 'notification events', 'fresh asset screenshot', 'VirusTotal API key', 'source attribution', 'rate limit'],
+    },
+    howToUse: {
+      fa: ['Telegram را با bot token و chat id تنظیم کنید.', 'eventها را انتخاب کنید.', 'VirusTotal API key را تنظیم کنید.', 'در Target module مربوطه را فعال کنید.'],
+      en: ['Configure Telegram with bot token and chat id.', 'Select events.', 'Configure VirusTotal API key.', 'Enable the related target module.'],
+    },
+    outputs: {
+      fa: ['notification config', 'ارسال eventها', 'VirusTotal-derived URLs/assets', 'source attribution'],
+      en: ['notification config', 'event delivery', 'VirusTotal-derived URLs/assets', 'source attribution'],
+    },
+    errors: {
+      fa: ['bot token نامعتبر', 'chat id اشتباه', 'bot دسترسی ندارد', 'VirusTotal API invalid', 'rate limit'],
+      en: ['invalid bot token', 'wrong chat id', 'bot lacks access', 'invalid VirusTotal API', 'rate limit'],
+    },
+    security: {
+      fa: ['bot token، chat id و API key را sanitize کنید. notificationها ممکن است target data حساس داشته باشند.'],
+      en: ['Sanitize bot token, chat id, and API key. Notifications may contain sensitive target data.'],
+    },
+    screenshot: '/docs/screenshots/fa/settings-telegram-sanitized.png',
+  },
+  {
+    id: 'settings-monitoring-logs',
+    group: 'settings',
+    icon: 'terminal',
+    title: { fa: 'Monitoring Server و System Logs', en: 'Monitoring Server and System Logs' },
+    route: '/settings → Monitoring Server / System Logs',
+    purpose: {
+      fa: 'بررسی وضعیت سیستم، processهای فعال، resource usage و logها برای debug.',
+      en: 'Inspect system health, active processes, resource usage, and logs for debugging.',
+    },
+    features: {
+      fa: ['CPU usage', 'memory usage', 'goroutines', 'active processes', 'PID', 'duration', 'command', 'logs', 'runtime errors'],
+      en: ['CPU usage', 'memory usage', 'goroutines', 'active processes', 'PID', 'duration', 'command', 'logs', 'runtime errors'],
+    },
+    howToUse: {
+      fa: ['Monitoring را برای وضعیت سیستم باز کنید.', 'processهای طولانی را بررسی کنید.', 'برای خطا System Logs را بخوانید.', 'خطا را با queue/target/job تطبیق دهید.'],
+      en: ['Open Monitoring for system state.', 'Inspect long-running processes.', 'Read System Logs for errors.', 'Correlate error with queue/target/job.'],
+    },
+    outputs: {
+      fa: ['system stats', 'process list', 'log lines', 'error context'],
+      en: ['system stats', 'process list', 'log lines', 'error context'],
+    },
+    errors: {
+      fa: ['process stale', 'logs noisy', 'sensitive data in logs', 'monitoring API unavailable'],
+      en: ['stale process', 'noisy logs', 'sensitive data in logs', 'monitoring API unavailable'],
+    },
+    security: {
+      fa: ['command/log ممکن است target، path یا secret داشته باشد؛ قبل از share کردن sanitize کنید.'],
+      en: ['Commands/logs may contain targets, paths, or secrets; sanitize before sharing.'],
+    },
+    screenshot: '/docs/screenshots/fa/settings-monitoring.png',
+  },
+  {
+    id: 'settings-feature-flags',
+    group: 'settings',
+    icon: 'settings',
+    title: { fa: 'Feature Flags', en: 'Feature Flags' },
+    route: '/settings یا /account → Feature Flags',
+    purpose: {
+      fa: 'کنترل فعال/غیرفعال بودن قابلیت‌ها در سطح global یا account با حالت inherit/enabled/disabled.',
+      en: 'Control feature availability globally or per account using inherit/enabled/disabled states.',
+    },
+    features: {
+      fa: ['feature.target_policy', 'feature.target_pdf_report', 'feature.ai_analysis', 'feature.llm_assisted_analysis', 'feature.ai_recommendations', 'feature.ai_nuclei_template_drafts', 'feature.agent_runs', 'feature.agent_actions', 'feature.agent_chat', 'feature.safe_bug_testing', 'feature.ai_triage_agent', 'feature.ai_summary_agent', 'feature.ai_report_agent'],
+      en: ['feature.target_policy', 'feature.target_pdf_report', 'feature.ai_analysis', 'feature.llm_assisted_analysis', 'feature.ai_recommendations', 'feature.ai_nuclei_template_drafts', 'feature.agent_runs', 'feature.agent_actions', 'feature.agent_chat', 'feature.safe_bug_testing', 'feature.ai_triage_agent', 'feature.ai_summary_agent', 'feature.ai_report_agent'],
+    },
+    howToUse: {
+      fa: ['Feature Flags را باز کنید.', 'effective state را بررسی کنید.', 'در صورت نیاز inherit/enabled/disabled را تغییر دهید.', 'اثر تغییر را در UI و backend workflow تست کنید.'],
+      en: ['Open Feature Flags.', 'Review effective state.', 'Change inherit/enabled/disabled if needed.', 'Test the effect in UI and backend workflow.'],
+    },
+    outputs: {
+      fa: ['effective feature state', 'نمایش/عدم نمایش tabها', 'فعال/غیرفعال شدن workflowها'],
+      en: ['effective feature state', 'visible/hidden tabs', 'enabled/disabled workflows'],
+    },
+    errors: {
+      fa: ['feature hidden', 'global flag با account override conflict دارد', 'کاربر انتظار tab دارد ولی flag disabled است'],
+      en: ['feature hidden', 'global flag conflicts with account override', 'user expects a tab but flag is disabled'],
+    },
+    security: {
+      fa: ['feature flags می‌توانند workflowهای حساس را فعال کنند؛ برای Operator/security features حتماً policy و authorization را بررسی کنید.'],
+      en: ['Feature flags can enable sensitive workflows; review policy and authorization for Operator/security features.'],
+    },
+    screenshot: '/docs/screenshots/fa/settings-feature-flags.png',
+  },
+
 ];
 
 const groupLabels: Record<string, { fa: string; en: string }> = {
