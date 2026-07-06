@@ -940,6 +940,24 @@ The next release should connect approved Operator actions to controlled real tes
 
 ## Releases
 
+### v3.15.2 - Documentation Portal Foundation
+
+v3.15.2 adds the public `/documentation` route, HUNTOS-themed bilingual documentation portal, local Vazirmatn Persian font support, feature-by-feature product documentation foundation, screenshot conventions, documentation inventory files, a documentation Definition of Done, release notes, and a documentation route smoke script.
+
+From v3.15.2 onward, every user-visible feature added, changed, removed, renamed, moved, or behaviorally modified must update the Documentation Portal, feature inventory, screenshots when UI changes, release notes, and smoke coverage where applicable.
+
+Key files:
+
+- `frontend/src/pages/Documentation.tsx`
+- `scripts/smoke_documentation_route_v3152.sh`
+- `docs/documentation/feature-inventory.md`
+- `docs/documentation/ui-map.md`
+- `docs/documentation/page-template.md`
+- `docs/documentation/screenshot-checklist.md`
+- `docs/documentation/documentation-definition-of-done.md`
+- `docs/release-notes/v3.15.2.md`
+
+
 ### v3.15.1 - Bug-Class Validation Runtimes
 
 v3.15.1 adds controlled, evidence-producing Level 2 validation runtimes for the v3.15 bug-class validation skills: XSS reflection context, DOM XSS source/sink evidence, CRLF/header marker checks, cache behavior evidence, open redirect chain behavior, safe path traversal baseline checks, and CORS/clickjacking/CSRF baseline header review.

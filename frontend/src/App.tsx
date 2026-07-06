@@ -7,6 +7,7 @@ import { ProtectedRoute } from './components/ProtectedRoute'; // 👈
 import { AdminRoute } from './components/AdminRoute';
 import Login from './pages/Login';
 import Landing from './pages/Landing'; // 👈
+import Documentation from './pages/Documentation';
 import TargetsPage from './pages/TargetsPages';
 import TargetAssets from './pages/TargetAssets';
 import Settings from './pages/Settings';
@@ -64,6 +65,7 @@ function App() {
           <Routes>
             <Route path="/" element={<Landing />} />
             <Route path="/login" element={<Login />} />
+            <Route path="/documentation" element={<Documentation />} />
 
             <Route element={<ProtectedRoute />}>
               <Route element={<MainLayout />}>
