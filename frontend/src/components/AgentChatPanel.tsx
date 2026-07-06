@@ -104,6 +104,65 @@ const buildAppliedMethodologyRows = (selectedSkills: any[]) => {
   return rows;
 };
 
+const buildCustomSkillQueueRows = (selectedSkills: any[], skillExecution: any) => {
+  const notImplemented = asArray(skillExecution?.not_implemented);
+  const notImplementedBySlug = new Map<string, any>();
+
+  notImplemented.forEach((item) => {
+    const slug = String(item?.skill_slug || "").trim();
+    if (slug) notImplementedBySlug.set(slug, item);
+  });
+
+  const rows: Array<{
+    key: string;
+    name: string;
+    slug: string;
+    bugClass: string;
+    category: string;
+    skillType: string;
+    runtimeBackend: string;
+    permissionMode: string;
+    reason: string;
+    runtimeNote: string;
+    status: string;
+    runIds: number[];
+  }> = [];
+
+  selectedSkills.forEach((skill, index) => {
+    const slug = String(skill?.slug || "").trim();
+    if (!slug) return;
+
+    const isUserDefined =
+      String(skill?.origin || "").toLowerCase() === "user" ||
+      skill?.is_builtin === false ||
+      skill?.is_builtin === "false";
+
+    if (!isUserDefined) return;
+
+    const queued = notImplementedBySlug.get(slug) || {};
+    const runIds = asArray(queued?.run_ids)
+      .map((item) => Number(item))
+      .filter((item) => Number.isFinite(item) && item > 0);
+
+    rows.push({
+      key: `${slug}-${index}`,
+      name: String(skill?.name || slug).trim(),
+      slug,
+      bugClass: String(skill?.bug_class || "").trim(),
+      category: String(skill?.category || "").trim(),
+      skillType: String(skill?.skill_type || "").trim(),
+      runtimeBackend: String(skill?.runtime_backend || "").trim(),
+      permissionMode: String(skill?.permission_mode || "").trim(),
+      reason: String(skill?.reason || queued?.reason || "").trim(),
+      runtimeNote: String(skill?.runtime_note || queued?.reason || "").trim(),
+      status: String(queued?.status || skill?.status || "planned").trim(),
+      runIds,
+    });
+  });
+
+  return rows;
+};
+
 const MessageBubble = ({
   message,
   onJumpToActions,
@@ -136,6 +195,8 @@ const MessageBubble = ({
   const selectedMethodologies = asArray(output?.selected_methodologies);
   const methodologyContextUsed = Boolean(output?.operator_methodology_context_used);
   const appliedMethodologyRows = buildAppliedMethodologyRows(selectedSkills);
+  const skillExecution = output?.skill_execution || {};
+  const customSkillQueueRows = buildCustomSkillQueueRows(selectedSkills, skillExecution);
 
   const numericActionIds = actionIds
     .map((item: any) => Number(item))
@@ -339,6 +400,83 @@ const MessageBubble = ({
                 Methodology context was passed to the operator planner, but no per-skill methodology attachment was reported for this message.
               </div>
             )}
+          </div>
+        )}
+
+        {!isUser && customSkillQueueRows.length > 0 && (
+          <div className="mt-3 border border-cyan-400/40 bg-cyan-500/10 p-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="font-mono text-[10px] uppercase tracking-wider text-cyan-300">
+                User-defined Skill Queue
+              </div>
+              <div className="flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-wider">
+                <span className="border border-cyan-400/50 bg-black/30 px-2 py-1 text-cyan-300">
+                  queued: {customSkillQueueRows.length}
+                </span>
+                <span className="border border-hack-warning/50 bg-black/30 px-2 py-1 text-hack-warning">
+                  runtime: dispatcher-gated
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              {customSkillQueueRows.slice(0, 6).map((row) => (
+                <div key={`${message.id}-custom-skill-${row.key}`} className="border border-cyan-400/30 bg-black/30 p-2">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <div className="font-mono text-xs font-bold text-white">
+                        {row.name}
+                      </div>
+                      <div className="mt-1 font-mono text-[10px] text-hack-dim">
+                        {row.slug}
+                        {row.runIds.length > 0 ? ` · run #${row.runIds.join(", #")}` : ""}
+                      </div>
+                    </div>
+                    <span className="border border-hack-warning/50 bg-hack-warning/10 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-hack-warning">
+                      {row.status || "planned"}
+                    </span>
+                  </div>
+
+                  <div className="mt-2 flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-wider">
+                    {row.bugClass && (
+                      <span className="rounded border border-blue-400/40 bg-blue-500/10 px-1.5 py-0.5 text-blue-300">
+                        bug: {row.bugClass}
+                      </span>
+                    )}
+                    {row.category && (
+                      <span className="rounded border border-cyan-400/40 bg-cyan-500/10 px-1.5 py-0.5 text-cyan-300">
+                        {row.category}
+                      </span>
+                    )}
+                    {row.skillType && (
+                      <span className="rounded border border-hack-border bg-black/30 px-1.5 py-0.5 text-hack-dim">
+                        type: {row.skillType}
+                      </span>
+                    )}
+                    {row.runtimeBackend && (
+                      <span className="rounded border border-hack-border bg-black/30 px-1.5 py-0.5 text-hack-dim">
+                        backend: {row.runtimeBackend}
+                      </span>
+                    )}
+                    {row.permissionMode && (
+                      <span className="rounded border border-hack-warning/40 bg-hack-warning/10 px-1.5 py-0.5 text-hack-warning">
+                        permission: {row.permissionMode}
+                      </span>
+                    )}
+                  </div>
+
+                  {row.reason && (
+                    <div className="mt-2 text-xs text-hack-dim">
+                      {truncateText(row.reason, 360)}
+                    </div>
+                  )}
+
+                  <div className="mt-2 border border-hack-warning/40 bg-hack-warning/10 p-2 text-xs text-hack-warning">
+                    {row.runtimeNote || "User-defined skill was selected and queued as a planned run. Custom runtime execution is not wired in this patch."}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
