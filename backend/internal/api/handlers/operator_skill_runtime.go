@@ -27,6 +27,7 @@ const (
 	crlfHeaderInjectionSkillSlug      = "crlf_header_injection"
 	cachePoisoningDeceptionSkillSlug  = "cache_poisoning_deception"
 	corsClickjackingCSRFSkillSlug     = "cors_clickjacking_csrf"
+	domXSSSkillSlug                   = "dom_xss"
 )
 
 type parameterInventoryCandidate struct {
@@ -2843,6 +2844,17 @@ func executeSelectedOperatorSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey st
 		}
 	}
 
+	if runIDs := selectedBySlug[domXSSSkillSlug]; len(runIDs) > 0 {
+		domOutput, err := executeDOMXSSSkillRunsFromChat(db, uid, ownerKey, target, runIDs)
+		if err != nil {
+			output["dom_xss_error"] = err.Error()
+			blockedCount += len(runIDs)
+		} else if domOutput != nil {
+			output["dom_xss"] = domOutput
+			executedCount += len(runIDs)
+		}
+	}
+
 	if runIDs := selectedBySlug[pathTraversalFileReadBaselineSlug]; len(runIDs) > 0 {
 		pathFileReadOutput, err := executePathTraversalFileReadBaselineSkillRunsFromChat(db, uid, ownerKey, target, runIDs)
 		if err != nil {
@@ -2856,7 +2868,7 @@ func executeSelectedOperatorSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey st
 
 	notImplemented := make([]map[string]interface{}, 0)
 	for slug, runIDs := range selectedBySlug {
-		if slug == parameterInventorySkillSlug || slug == httpEvidenceAnalysisSkillSlug || slug == authContextNeededSkillSlug || slug == jsAuditSkillSlug || slug == xssReflectionSkillSlug || slug == openRedirectSkillSlug || slug == pathTraversalBaselineSkillSlug || slug == xssReflectionContextSkillSlug || slug == openRedirectChainSkillSlug || slug == pathTraversalFileReadBaselineSlug || slug == crlfHeaderInjectionSkillSlug || slug == cachePoisoningDeceptionSkillSlug || slug == corsClickjackingCSRFSkillSlug {
+		if slug == parameterInventorySkillSlug || slug == httpEvidenceAnalysisSkillSlug || slug == authContextNeededSkillSlug || slug == jsAuditSkillSlug || slug == xssReflectionSkillSlug || slug == openRedirectSkillSlug || slug == pathTraversalBaselineSkillSlug || slug == xssReflectionContextSkillSlug || slug == openRedirectChainSkillSlug || slug == pathTraversalFileReadBaselineSlug || slug == crlfHeaderInjectionSkillSlug || slug == cachePoisoningDeceptionSkillSlug || slug == corsClickjackingCSRFSkillSlug || slug == domXSSSkillSlug {
 			continue
 		}
 
@@ -4729,35 +4741,762 @@ func executeCORSClickjackingCSRFSkillRunsFromChat(db *gorm.DB, uid uint, ownerKe
 	}, nil
 }
 
-func executePathTraversalFileReadBaselineSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
-	return executeCandidateClassificationAliasSkillRunsFromChat(
-		db,
-		uid,
-		ownerKey,
-		target,
-		selectedSkillRunIDs,
-		pathTraversalFileReadBaselineSlug,
-		"path_traversal_file_read",
-		"path-traversal-file-read-baseline-runtime-v1",
-		"candidate_classification_no_file_read_payload_execution",
-		"Path traversal/file-read baseline",
-		"Parameter is a candidate for controlled file-read/path traversal baseline validation planning. No file-read payload is executed in this runtime.",
-		"Use controlled file-read/path traversal validation only when scope and policy allow.",
-		func(foundURLs []models.FoundURL, parameterObservations []models.OperatorSkillObservation) []map[string]interface{} {
-			candidates := buildPathTraversalCandidates(foundURLs, parameterObservations)
-			out := make([]map[string]interface{}, 0, len(candidates))
+type domXSSSignal struct {
+	Name string
+	Kind string
+}
+
+func domXSSSources(body string) []domXSSSignal {
+	checks := []domXSSSignal{
+		{Name: "location.hash", Kind: "source"},
+		{Name: "location.search", Kind: "source"},
+		{Name: "location.href", Kind: "source"},
+		{Name: "document.URL", Kind: "source"},
+		{Name: "document.documentURI", Kind: "source"},
+		{Name: "document.referrer", Kind: "source"},
+		{Name: "window.name", Kind: "source"},
+		{Name: "postMessage", Kind: "source"},
+		{Name: "message.data", Kind: "source"},
+		{Name: "localStorage", Kind: "source"},
+		{Name: "sessionStorage", Kind: "source"},
+	}
+	return domXSSFindSignals(body, checks)
+}
+
+func domXSSSinks(body string) []domXSSSignal {
+	checks := []domXSSSignal{
+		{Name: "innerHTML", Kind: "sink"},
+		{Name: "outerHTML", Kind: "sink"},
+		{Name: "insertAdjacentHTML", Kind: "sink"},
+		{Name: "document.write", Kind: "sink"},
+		{Name: "document.writeln", Kind: "sink"},
+		{Name: "eval", Kind: "sink"},
+		{Name: "setTimeout", Kind: "sink"},
+		{Name: "setInterval", Kind: "sink"},
+		{Name: "Function", Kind: "sink"},
+		{Name: ".html(", Kind: "sink"},
+		{Name: "dangerouslySetInnerHTML", Kind: "sink"},
+	}
+	return domXSSFindSignals(body, checks)
+}
+
+func domXSSFindSignals(body string, checks []domXSSSignal) []domXSSSignal {
+	lower := strings.ToLower(body)
+	out := make([]domXSSSignal, 0)
+	seen := map[string]bool{}
+
+	for _, check := range checks {
+		if strings.Contains(lower, strings.ToLower(check.Name)) && !seen[strings.ToLower(check.Name)] {
+			seen[strings.ToLower(check.Name)] = true
+			out = append(out, check)
+		}
+	}
+	return out
+}
+
+func signalNames(signals []domXSSSignal) []string {
+	out := make([]string, 0, len(signals))
+	for _, signal := range signals {
+		out = append(out, signal.Name)
+	}
+	return out
+}
+
+func buildDOMXSSURLCandidates(foundURLs []models.FoundURL) []openRedirectCandidate {
+	seen := map[string]bool{}
+	out := make([]openRedirectCandidate, 0)
+
+	add := func(rawURL, source, reason string, confidence int) {
+		rawURL = strings.TrimSpace(rawURL)
+		if rawURL == "" {
+			return
+		}
+		if seen[rawURL] {
+			return
+		}
+		seen[rawURL] = true
+		if confidence <= 0 {
+			confidence = 55
+		}
+		out = append(out, openRedirectCandidate{
+			ParamName:  "javascript_asset",
+			URL:        rawURL,
+			Source:     source,
+			Reason:     reason,
+			Confidence: confidence,
+		})
+	}
+
+	for _, foundURL := range foundURLs {
+		value := strings.TrimSpace(foundURL.Value)
+		if value == "" {
+			continue
+		}
+		lower := strings.ToLower(value)
+
+		switch {
+		case strings.Contains(lower, ".js"):
+			add(value, "found_url_javascript_asset", "JavaScript asset candidate for DOM source/sink evidence extraction.", 65)
+		case strings.Contains(value, "#"):
+			add(value, "found_url_fragment_route", "Fragment/hash route may be relevant to DOM XSS routing analysis.", 58)
+		case strings.Contains(value, "?"):
+			if parsed, err := url.Parse(value); err == nil && parsed != nil {
+				for paramName := range parsed.Query() {
+					if isDOMXSSRelevantParamName(paramName) {
+						add(value, "found_url_dom_relevant_parameter", "URL has DOM/source-relevant query parameter.", 58)
+						break
+					}
+				}
+			}
+		}
+
+		if len(out) >= 25 {
+			break
+		}
+	}
+
+	return out
+}
+
+func isDOMXSSRelevantParamName(name string) bool {
+	p := strings.ToLower(strings.TrimSpace(name))
+	if p == "" {
+		return false
+	}
+	return p == "q" ||
+		p == "query" ||
+		p == "search" ||
+		p == "s" ||
+		p == "callback" ||
+		p == "return" ||
+		p == "next" ||
+		p == "url" ||
+		p == "redirect" ||
+		p == "hash" ||
+		p == "fragment" ||
+		strings.Contains(p, "callback") ||
+		strings.Contains(p, "redirect") ||
+		strings.Contains(p, "url") ||
+		strings.Contains(p, "search")
+}
+
+func executeDOMXSSSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
+	if target == nil || len(selectedSkillRunIDs) == 0 {
+		return nil, nil
+	}
+
+	runs := make([]models.OperatorSkillRun, 0)
+	if err := db.
+		Where("id IN ? AND target_id = ? AND user_id = ? AND owner_key = ? AND skill_slug = ?", selectedSkillRunIDs, target.ID, uid, ownerKey, domXSSSkillSlug).
+		Order("id ASC").
+		Find(&runs).Error; err != nil {
+		return nil, err
+	}
+	if len(runs) == 0 {
+		return nil, nil
+	}
+
+	foundURLs := make([]models.FoundURL, 0)
+	if err := db.Where("target_id = ?", target.ID).
+		Order("last_seen DESC NULLS LAST, id DESC").
+		Limit(1000).
+		Find(&foundURLs).Error; err != nil {
+		return nil, err
+	}
+
+	candidates := buildDOMXSSURLCandidates(foundURLs)
+	if len(candidates) > 10 {
+		candidates = candidates[:10]
+	}
+
+	now := time.Now().UTC()
+	runSummaries := make([]map[string]interface{}, 0, len(runs))
+
+	for _, run := range runs {
+		startedAt := now
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":     models.OperatorSkillRunStatusRunning,
+				"started_at": &startedAt,
+				"updated_at": now,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		createdObservationIDs := make([]uint, 0)
+		probeResults := make([]map[string]interface{}, 0)
+		sourceSignalCount := 0
+		sinkSignalCount := 0
+		sourceSinkCandidateCount := 0
+		blockedCount := 0
+		inconclusiveCount := 0
+
+		if len(candidates) == 0 {
+			observation := models.OperatorSkillObservation{
+				UserID:          uid,
+				OwnerKey:        ownerKey,
+				TargetID:        target.ID,
+				SkillRunID:      run.ID,
+				SkillSlug:       domXSSSkillSlug,
+				ObservationType: models.OperatorSkillObservationTypeLearning,
+				Title:           "DOM XSS validation needs JS/DOM candidates",
+				Summary:         "No JavaScript assets, fragment routes, or DOM-relevant parameters were available for source/sink evidence extraction.",
+				Content:         "Learning: improve JavaScript discovery, route crawling, sourcemap/API mining, and parameter inventory before DOM XSS validation.",
+				BugClass:        "dom_xss",
+				Confidence:      60,
+				Severity:        models.FindingSeverityInfo,
+				Status:          models.OperatorSkillRunStatusCompleted,
+				EvidenceJSON: chatJSON(map[string]interface{}{
+					"sampled_url_count": len(foundURLs),
+					"candidate_count":   0,
+					"runtime_scope":     "js_source_sink_evidence_no_browser_execution",
+				}),
+				Metadata: chatJSON(map[string]interface{}{
+					"created_by":          "dom-xss-runtime-v1",
+					"operator_skill_run":  run.ID,
+					"target_id":           target.ID,
+					"observation_version": "dom-xss-learning-v1",
+				}),
+			}
+			if err := db.Create(&observation).Error; err != nil {
+				return nil, err
+			}
+			createdObservationIDs = append(createdObservationIDs, observation.ID)
+		} else {
 			for _, candidate := range candidates {
-				out = append(out, map[string]interface{}{
-					"param_name": candidate.ParamName,
-					"url":        candidate.URL,
-					"source":     candidate.Source,
-					"reason":     candidate.Reason,
-					"confidence": candidate.Confidence,
+				probe := controlledGETProbe(candidate.URL, 8*time.Second)
+				sources := domXSSSources(probe.BodySample)
+				sinks := domXSSSinks(probe.BodySample)
+				hasSources := len(sources) > 0
+				hasSinks := len(sinks) > 0
+				hasSourceSink := hasSources && hasSinks
+
+				if hasSources {
+					sourceSignalCount++
+				}
+				if hasSinks {
+					sinkSignalCount++
+				}
+				if hasSourceSink {
+					sourceSinkCandidateCount++
+				}
+				if probe.Blocked {
+					blockedCount++
+				}
+				if probe.Inconclusive {
+					inconclusiveCount++
+				}
+
+				status := "candidate"
+				observationType := models.OperatorSkillObservationTypeCandidate
+				severity := models.FindingSeverityInfo
+				confidence := candidate.Confidence
+				if confidence <= 0 {
+					confidence = 60
+				}
+
+				if hasSourceSink && !probe.Inconclusive {
+					status = "evidence"
+					observationType = models.OperatorSkillObservationTypeEvidence
+					severity = models.FindingSeverityLow
+					confidence += 15
+					if confidence > 85 {
+						confidence = 85
+					}
+				} else if (hasSources || hasSinks) && !probe.Inconclusive {
+					status = "candidate"
+					confidence += 5
+					if confidence > 75 {
+						confidence = 75
+					}
+				}
+
+				if probe.Inconclusive {
+					status = "inconclusive"
+					observationType = models.OperatorSkillObservationTypeLearning
+					if confidence > 65 {
+						confidence = 65
+					}
+				}
+
+				summary := fmt.Sprintf("DOM XSS source/sink evidence extraction checked URL; sources=%d sinks=%d.", len(sources), len(sinks))
+				if hasSourceSink {
+					summary = fmt.Sprintf("DOM XSS evidence candidate: source and sink signals exist in sampled JavaScript/DOM content; sources=%v sinks=%v.", signalNames(sources), signalNames(sinks))
+				}
+				if probe.Inconclusive {
+					summary = "DOM XSS source/sink evidence extraction was inconclusive or blocked."
+				}
+
+				observation := models.OperatorSkillObservation{
+					UserID:          uid,
+					OwnerKey:        ownerKey,
+					TargetID:        target.ID,
+					SkillRunID:      run.ID,
+					SkillSlug:       domXSSSkillSlug,
+					ObservationType: observationType,
+					Title:           "DOM XSS source/sink evidence",
+					Summary:         summary,
+					Content:         "Runtime scope: js_source_sink_evidence_no_browser_execution. This performs static/source-sink evidence extraction only and does not execute a browser or payload.",
+					URL:             candidate.URL,
+					ParamName:       candidate.ParamName,
+					BugClass:        "dom_xss",
+					Confidence:      confidence,
+					Severity:        severity,
+					Status:          status,
+					EvidenceJSON: chatJSON(map[string]interface{}{
+						"url":              candidate.URL,
+						"candidate_source": candidate.Source,
+						"status_code":      probe.StatusCode,
+						"content_type":     probe.ContentType,
+						"sources":          signalNames(sources),
+						"sinks":            signalNames(sinks),
+						"has_sources":      hasSources,
+						"has_sinks":        hasSinks,
+						"has_source_sink":  hasSourceSink,
+						"blocked":          probe.Blocked,
+						"inconclusive":     probe.Inconclusive,
+						"header_sample":    probe.HeaderSample,
+						"error":            probe.Error,
+						"runtime_scope":    "js_source_sink_evidence_no_browser_execution",
+						"execution_level":  2,
+						"destructive":      false,
+						"state_changing":   false,
+						"browser_executed": false,
+						"payload_executed": false,
+					}),
+					Metadata: chatJSON(map[string]interface{}{
+						"created_by":          "dom-xss-runtime-v1",
+						"operator_skill_run":  run.ID,
+						"target_id":           target.ID,
+						"observation_version": "dom-xss-source-sink-v1",
+					}),
+				}
+				if err := db.Create(&observation).Error; err != nil {
+					return nil, err
+				}
+				createdObservationIDs = append(createdObservationIDs, observation.ID)
+
+				probeResults = append(probeResults, map[string]interface{}{
+					"url":             candidate.URL,
+					"status_code":     probe.StatusCode,
+					"content_type":    probe.ContentType,
+					"sources":         signalNames(sources),
+					"sinks":           signalNames(sinks),
+					"has_source_sink": hasSourceSink,
+					"blocked":         probe.Blocked,
+					"inconclusive":    probe.Inconclusive,
 				})
 			}
-			return out
-		},
-	)
+		}
+
+		status := models.OperatorSkillRunStatusCompleted
+		resultSummary := fmt.Sprintf("DOM XSS validation checked %d candidate(s), found %d source signal(s), %d sink signal(s), and %d source+sink candidate(s).", len(probeResults), sourceSignalCount, sinkSignalCount, sourceSinkCandidateCount)
+		nextStep := "If source+sink evidence exists, use approved browser-aware DOM validation later; do not promote exploitability without browser/context proof."
+
+		output := map[string]interface{}{
+			"status":                      status,
+			"skill":                       domXSSSkillSlug,
+			"runtime_version":             "dom-xss-runtime-v1",
+			"runtime_scope":               "js_source_sink_evidence_no_browser_execution",
+			"execution_level":             2,
+			"sampled_url_count":           len(foundURLs),
+			"candidate_count":             len(candidates),
+			"probe_count":                 len(probeResults),
+			"source_signal_count":         sourceSignalCount,
+			"sink_signal_count":           sinkSignalCount,
+			"source_sink_candidate_count": sourceSinkCandidateCount,
+			"blocked_count":               blockedCount,
+			"inconclusive_count":          inconclusiveCount,
+			"observation_count":           len(createdObservationIDs),
+			"observation_ids":             createdObservationIDs,
+			"probe_results":               probeResults,
+			"memory_ingested":             false,
+			"memory_scope":                "operator_skill_observations_only",
+		}
+
+		completedAt := time.Now().UTC()
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":         status,
+				"output_json":    chatJSON(output),
+				"result_summary": resultSummary,
+				"next_step":      nextStep,
+				"completed_at":   &completedAt,
+				"updated_at":     completedAt,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		runSummaries = append(runSummaries, map[string]interface{}{
+			"skill_run_id":                run.ID,
+			"status":                      status,
+			"candidate_count":             len(candidates),
+			"probe_count":                 len(probeResults),
+			"source_signal_count":         sourceSignalCount,
+			"sink_signal_count":           sinkSignalCount,
+			"source_sink_candidate_count": sourceSinkCandidateCount,
+			"blocked_count":               blockedCount,
+			"inconclusive_count":          inconclusiveCount,
+			"observation_count":           len(createdObservationIDs),
+			"observation_ids":             createdObservationIDs,
+			"runtime_scope":               "js_source_sink_evidence_no_browser_execution",
+		})
+	}
+
+	return map[string]interface{}{
+		"status":           models.OperatorSkillRunStatusCompleted,
+		"runs":             runSummaries,
+		"run_count":        len(runSummaries),
+		"runtime_scope":    "js_source_sink_evidence_no_browser_execution",
+		"execution_level":  2,
+		"validation_class": "dom_xss",
+	}, nil
+}
+
+func safeTraversalBaselineValues(marker string) []string {
+	cleanMarker := strings.TrimSpace(marker)
+	if cleanMarker == "" {
+		cleanMarker = "hunt_path_baseline"
+	}
+	return []string{
+		cleanMarker,
+		"./" + cleanMarker,
+		"../" + cleanMarker,
+		"..%2f" + cleanMarker,
+		"%2e%2e%2f" + cleanMarker,
+	}
+}
+
+func pathBaselineErrorSignal(body string) bool {
+	lower := strings.ToLower(body)
+	for _, signal := range []string{
+		"no such file",
+		"not found",
+		"cannot find",
+		"failed to open",
+		"open failed",
+		"permission denied",
+		"invalid path",
+		"directory traversal",
+		"path traversal",
+		"file not found",
+	} {
+		if strings.Contains(lower, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+func executePathTraversalFileReadBaselineSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
+	if target == nil || len(selectedSkillRunIDs) == 0 {
+		return nil, nil
+	}
+
+	runs := make([]models.OperatorSkillRun, 0)
+	if err := db.
+		Where("id IN ? AND target_id = ? AND user_id = ? AND owner_key = ? AND skill_slug = ?", selectedSkillRunIDs, target.ID, uid, ownerKey, pathTraversalFileReadBaselineSlug).
+		Order("id ASC").
+		Find(&runs).Error; err != nil {
+		return nil, err
+	}
+	if len(runs) == 0 {
+		return nil, nil
+	}
+
+	foundURLs := make([]models.FoundURL, 0)
+	if err := db.Where("target_id = ?", target.ID).
+		Order("last_seen DESC NULLS LAST, id DESC").
+		Limit(1000).
+		Find(&foundURLs).Error; err != nil {
+		return nil, err
+	}
+
+	parameterObservations := make([]models.OperatorSkillObservation, 0)
+	_ = db.Where("target_id = ? AND user_id = ? AND owner_key = ? AND skill_slug = ? AND observation_type = ?",
+		target.ID, uid, ownerKey, parameterInventorySkillSlug, models.OperatorSkillObservationTypeCandidate).
+		Order("created_at DESC, id DESC").
+		Limit(200).
+		Find(&parameterObservations).Error
+
+	candidates := buildPathTraversalCandidates(foundURLs, parameterObservations)
+	if len(candidates) > 5 {
+		candidates = candidates[:5]
+	}
+
+	now := time.Now().UTC()
+	runSummaries := make([]map[string]interface{}, 0, len(runs))
+
+	for _, run := range runs {
+		startedAt := now
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":     models.OperatorSkillRunStatusRunning,
+				"started_at": &startedAt,
+				"updated_at": now,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		marker := controlledValidationMarker("hunt_path_baseline", run.ID)
+		createdObservationIDs := make([]uint, 0)
+		probeResults := make([]map[string]interface{}, 0)
+		variationSignalCount := 0
+		errorSignalCount := 0
+		blockedCount := 0
+		inconclusiveCount := 0
+
+		if len(candidates) == 0 {
+			observation := models.OperatorSkillObservation{
+				UserID:          uid,
+				OwnerKey:        ownerKey,
+				TargetID:        target.ID,
+				SkillRunID:      run.ID,
+				SkillSlug:       pathTraversalFileReadBaselineSlug,
+				ObservationType: models.OperatorSkillObservationTypeLearning,
+				Title:           "Path traversal baseline validation needs candidates",
+				Summary:         "No file/path-like parameters were available for safe controlled path baseline probing.",
+				Content:         "Learning: improve parameter inventory, download/export route discovery, and file/path parameter mining before path traversal validation.",
+				BugClass:        "path_traversal",
+				Confidence:      60,
+				Severity:        models.FindingSeverityInfo,
+				Status:          models.OperatorSkillRunStatusCompleted,
+				EvidenceJSON: chatJSON(map[string]interface{}{
+					"sampled_url_count":           len(foundURLs),
+					"parameter_observation_count": len(parameterObservations),
+					"candidate_count":             0,
+					"runtime_scope":               "controlled_path_baseline_probe_no_sensitive_file_read",
+				}),
+				Metadata: chatJSON(map[string]interface{}{
+					"created_by":          "path-traversal-file-read-baseline-runtime-v1",
+					"operator_skill_run":  run.ID,
+					"target_id":           target.ID,
+					"observation_version": "path-baseline-learning-v1",
+				}),
+			}
+			if err := db.Create(&observation).Error; err != nil {
+				return nil, err
+			}
+			createdObservationIDs = append(createdObservationIDs, observation.ID)
+		} else {
+			for _, candidate := range candidates {
+				values := safeTraversalBaselineValues(marker)
+				resultSet := make([]map[string]interface{}, 0, len(values))
+				statusCodes := map[int]bool{}
+				bodyLengths := make([]int, 0, len(values))
+				candidateErrorSignals := 0
+				candidateBlocked := false
+				candidateInconclusive := false
+
+				for _, value := range values {
+					probeURL, ok := buildProbeURLWithParam(candidate.URL, candidate.ParamName, value)
+					if !ok {
+						continue
+					}
+
+					probe := controlledGETProbe(probeURL, 8*time.Second)
+					errSignal := pathBaselineErrorSignal(probe.BodySample)
+					if errSignal {
+						candidateErrorSignals++
+					}
+					if probe.Blocked {
+						candidateBlocked = true
+					}
+					if probe.Inconclusive {
+						candidateInconclusive = true
+					}
+					statusCodes[probe.StatusCode] = true
+					bodyLengths = append(bodyLengths, len(probe.BodySample))
+
+					resultSet = append(resultSet, map[string]interface{}{
+						"value":        value,
+						"probe_url":    probeURL,
+						"status_code":  probe.StatusCode,
+						"body_length":  len(probe.BodySample),
+						"error_signal": errSignal,
+						"blocked":      probe.Blocked,
+						"inconclusive": probe.Inconclusive,
+						"headers":      probe.HeaderSample,
+					})
+				}
+
+				variationSignal := len(statusCodes) > 1
+				if !variationSignal && len(bodyLengths) > 1 {
+					minLen := bodyLengths[0]
+					maxLen := bodyLengths[0]
+					for _, l := range bodyLengths {
+						if l < minLen {
+							minLen = l
+						}
+						if l > maxLen {
+							maxLen = l
+						}
+					}
+					variationSignal = maxLen-minLen > 256
+				}
+
+				if variationSignal {
+					variationSignalCount++
+				}
+				if candidateErrorSignals > 0 {
+					errorSignalCount++
+				}
+				if candidateBlocked {
+					blockedCount++
+				}
+				if candidateInconclusive {
+					inconclusiveCount++
+				}
+
+				status := "candidate"
+				observationType := models.OperatorSkillObservationTypeCandidate
+				severity := models.FindingSeverityInfo
+				confidence := candidate.Confidence
+				if confidence <= 0 {
+					confidence = 60
+				}
+
+				if (variationSignal || candidateErrorSignals > 0) && !candidateInconclusive {
+					status = "evidence"
+					observationType = models.OperatorSkillObservationTypeEvidence
+					severity = models.FindingSeverityLow
+					confidence += 10
+					if confidence > 85 {
+						confidence = 85
+					}
+				}
+				if candidateInconclusive {
+					status = "inconclusive"
+					observationType = models.OperatorSkillObservationTypeLearning
+					if confidence > 65 {
+						confidence = 65
+					}
+				}
+
+				summary := fmt.Sprintf("Safe path baseline probe checked parameter %q; variation=%t error_signals=%d.", candidate.ParamName, variationSignal, candidateErrorSignals)
+				if candidateInconclusive {
+					summary = fmt.Sprintf("Safe path baseline probe for parameter %q was inconclusive or blocked.", candidate.ParamName)
+				}
+
+				observation := models.OperatorSkillObservation{
+					UserID:          uid,
+					OwnerKey:        ownerKey,
+					TargetID:        target.ID,
+					SkillRunID:      run.ID,
+					SkillSlug:       pathTraversalFileReadBaselineSlug,
+					ObservationType: observationType,
+					Title:           fmt.Sprintf("Path traversal safe baseline probe: %s", candidate.ParamName),
+					Summary:         summary,
+					Content:         "Runtime scope: controlled_path_baseline_probe_no_sensitive_file_read. This uses inert marker path variants only and does not request sensitive files.",
+					URL:             candidate.URL,
+					ParamName:       candidate.ParamName,
+					BugClass:        "path_traversal",
+					Confidence:      confidence,
+					Severity:        severity,
+					Status:          status,
+					EvidenceJSON: chatJSON(map[string]interface{}{
+						"original_url":             candidate.URL,
+						"parameter":                candidate.ParamName,
+						"marker":                   marker,
+						"result_set":               resultSet,
+						"variation_signal":         variationSignal,
+						"error_signal_count":       candidateErrorSignals,
+						"runtime_scope":            "controlled_path_baseline_probe_no_sensitive_file_read",
+						"execution_level":          2,
+						"destructive":              false,
+						"state_changing":           false,
+						"sensitive_file_requested": false,
+						"file_read_proof":          false,
+					}),
+					Metadata: chatJSON(map[string]interface{}{
+						"created_by":          "path-traversal-file-read-baseline-runtime-v1",
+						"operator_skill_run":  run.ID,
+						"target_id":           target.ID,
+						"observation_version": "path-baseline-probe-v1",
+					}),
+				}
+				if err := db.Create(&observation).Error; err != nil {
+					return nil, err
+				}
+				createdObservationIDs = append(createdObservationIDs, observation.ID)
+
+				probeResults = append(probeResults, map[string]interface{}{
+					"param_name":          candidate.ParamName,
+					"original_url":        candidate.URL,
+					"variation_signal":    variationSignal,
+					"error_signal_count":  candidateErrorSignals,
+					"probe_variant_count": len(resultSet),
+					"blocked":             candidateBlocked,
+					"inconclusive":        candidateInconclusive,
+				})
+			}
+		}
+
+		status := models.OperatorSkillRunStatusCompleted
+		resultSummary := fmt.Sprintf("Path traversal safe baseline validation probed %d candidate(s), found %d variation signal(s) and %d error signal(s).", len(probeResults), variationSignalCount, errorSignalCount)
+		nextStep := "If baseline signals exist, use approved file-read validation later with strict target policy, payload budget, and stop conditions."
+
+		output := map[string]interface{}{
+			"status":                      status,
+			"skill":                       pathTraversalFileReadBaselineSlug,
+			"runtime_version":             "path-traversal-file-read-baseline-runtime-v1",
+			"runtime_scope":               "controlled_path_baseline_probe_no_sensitive_file_read",
+			"execution_level":             2,
+			"sampled_url_count":           len(foundURLs),
+			"parameter_observation_count": len(parameterObservations),
+			"candidate_count":             len(candidates),
+			"probe_count":                 len(probeResults),
+			"variation_signal_count":      variationSignalCount,
+			"error_signal_count":          errorSignalCount,
+			"blocked_count":               blockedCount,
+			"inconclusive_count":          inconclusiveCount,
+			"observation_count":           len(createdObservationIDs),
+			"observation_ids":             createdObservationIDs,
+			"probe_results":               probeResults,
+			"memory_ingested":             false,
+			"memory_scope":                "operator_skill_observations_only",
+		}
+
+		completedAt := time.Now().UTC()
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":         status,
+				"output_json":    chatJSON(output),
+				"result_summary": resultSummary,
+				"next_step":      nextStep,
+				"completed_at":   &completedAt,
+				"updated_at":     completedAt,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		runSummaries = append(runSummaries, map[string]interface{}{
+			"skill_run_id":           run.ID,
+			"status":                 status,
+			"candidate_count":        len(candidates),
+			"probe_count":            len(probeResults),
+			"variation_signal_count": variationSignalCount,
+			"error_signal_count":     errorSignalCount,
+			"blocked_count":          blockedCount,
+			"inconclusive_count":     inconclusiveCount,
+			"observation_count":      len(createdObservationIDs),
+			"observation_ids":        createdObservationIDs,
+			"runtime_scope":          "controlled_path_baseline_probe_no_sensitive_file_read",
+		})
+	}
+
+	return map[string]interface{}{
+		"status":           models.OperatorSkillRunStatusCompleted,
+		"runs":             runSummaries,
+		"run_count":        len(runSummaries),
+		"runtime_scope":    "controlled_path_baseline_probe_no_sensitive_file_read",
+		"execution_level":  2,
+		"validation_class": "path_traversal_file_read_baseline",
+	}, nil
 }
 
 func executeCandidateClassificationAliasSkillRunsFromChat(
