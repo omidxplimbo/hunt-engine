@@ -96,7 +96,17 @@ func main() {
 
 	// Operator Skill Registry Routes
 	api.Get("/operator-skills", handlers.ListOperatorSkills)
+	api.Post("/operator-skills", handlers.CreateOperatorSkill)
+	api.Patch("/operator-skills/:id", handlers.UpdateOperatorSkill)
+	api.Delete("/operator-skills/:id", handlers.DeleteOperatorSkill)
 	api.Get("/operator-skills/:slug", handlers.GetOperatorSkill)
+	api.Get("/targets/:id/operator-skill-profile", handlers.GetTargetOperatorSkillProfile)
+	api.Put("/targets/:id/operator-skill-profile", handlers.UpsertTargetOperatorSkillProfile)
+	api.Get("/operator-learning", handlers.ListOperatorLearningRecords)
+	api.Post("/operator-learning", handlers.CreateOperatorLearningRecord)
+	api.Get("/operator-learning/:id", handlers.GetOperatorLearningRecord)
+	api.Patch("/operator-learning/:id", handlers.UpdateOperatorLearningRecord)
+	api.Delete("/operator-learning/:id", handlers.DeleteOperatorLearningRecord)
 
 	// --- System Configuration & Queue ---
 	api.Get("/config", handlers.GetSystemConfig)

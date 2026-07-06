@@ -46,9 +46,10 @@ import BugTestsPanel from "../components/BugTestsPanel";
 import BugPatternRegistryPanel from "../components/BugPatternRegistryPanel";
 import BugPayloadRegistryPanel from "../components/BugPayloadRegistryPanel";
 import TargetPolicyPanel from "../components/TargetPolicyPanel";
+import OperatorSkillProfilePanel from "../components/OperatorSkillProfilePanel";
 
 type ActiveTab = "assets" | "urls" | "findings" | "analysis" | "policy";
-type AnalysisSection = "overview" | "recommendations" | "agents" | "actions" | "bugtests" | "patterns" | "payloads" | "chat";
+type AnalysisSection = "overview" | "recommendations" | "agents" | "actions" | "bugtests" | "patterns" | "payloads" | "skills" | "chat";
 
 const KNOWN_ASSET_PROVIDERS = [
   { id: "subfinder", label: "Subfinder" },
@@ -932,6 +933,12 @@ const TargetAssets = () => {
                     description: "metadata only",
                     enabled: featureSafeBugTesting,
                   },
+                  {
+                    id: "skills",
+                    label: "Operator Profile",
+                    description: "skills + methodology",
+                    enabled: featureAgentChat,
+                  },
                 {
                   id: "chat",
                   label: "Attack Surface Chat",
@@ -1015,6 +1022,10 @@ const TargetAssets = () => {
 
           {activeAnalysisSection === "payloads" && (
             <BugPayloadRegistryPanel enabled={featureSafeBugTesting} />
+          )}
+
+          {activeAnalysisSection === "skills" && (
+            <OperatorSkillProfilePanel targetId={targetId} />
           )}
 
           {activeAnalysisSection === "chat" && (

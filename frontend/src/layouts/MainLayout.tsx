@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
-import { Target, Settings, LayoutDashboard, LogOut, Menu, X, User2, FileCode2 } from 'lucide-react';
+import { Target, Settings, LayoutDashboard, LogOut, Menu, X, User2, FileCode2, BrainCircuit } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../context/AuthContext';
 import MustacheLogo from '../components/MustacheLogo';
@@ -58,7 +58,7 @@ export const MainLayout = () => {
              <MustacheLogo />
           </div>
           <h1 className="hack-title text-2xl !tracking-widest">
-            HUNT<span className="text-white">OS</span> v3.13.0
+            HUNT<span className="text-white">OS</span> v3.15.0
           </h1>
           <div className="mt-2 flex items-center gap-2 text-[10px] text-hack-dim uppercase tracking-[0.2em]">
             <div className="w-2 h-2 rounded-full bg-hack-primary animate-pulse" />
@@ -76,6 +76,8 @@ export const MainLayout = () => {
           </div>
           <div onClick={handleNavClick}>
             <NavItem to="/targets" icon={Target}>Targets</NavItem>
+            <NavItem to="/operator-learning" icon={BrainCircuit}>Operator Learning</NavItem>
+            <NavItem to="/operator-skills" icon={BrainCircuit}>Executable Skills</NavItem>
           </div>
           {role === 'admin' && (
           <div onClick={handleNavClick}>

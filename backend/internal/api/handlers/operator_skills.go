@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -47,19 +48,336 @@ func parseOperatorSkillTargetID(c *fiber.Ctx) (uint, error) {
 	return uint(id), nil
 }
 
+type updateOperatorTargetSkillProfileRequest struct {
+	IsEnabled                  *bool           `json:"is_enabled"`
+	PermissionMode             string          `json:"permission_mode"`
+	EnabledSkillSlugs          json.RawMessage `json:"enabled_skill_slugs"`
+	DisabledSkillSlugs         json.RawMessage `json:"disabled_skill_slugs"`
+	PreferredLearningRecordIDs json.RawMessage `json:"preferred_learning_record_ids"`
+	AllowedRuntimeBackends     json.RawMessage `json:"allowed_runtime_backends"`
+	BudgetDefaults             json.RawMessage `json:"budget_defaults"`
+	StopConditions             json.RawMessage `json:"stop_conditions"`
+	Metadata                   json.RawMessage `json:"metadata"`
+}
+
+type upsertOperatorSkillRequest struct {
+	Name                      string          `json:"name"`
+	Title                     string          `json:"title"`
+	Slug                      string          `json:"slug"`
+	Description               string          `json:"description"`
+	Scope                     string          `json:"scope"`
+	SkillType                 string          `json:"skill_type"`
+	RuntimeBackend            string          `json:"runtime_backend"`
+	ProjectKey                string          `json:"project_key"`
+	TargetID                  *uint           `json:"target_id"`
+	Category                  string          `json:"category"`
+	BugClass                  string          `json:"bug_class"`
+	DefaultRiskLevel          string          `json:"default_risk_level"`
+	DefaultSafetyLevel        *int            `json:"default_safety_level"`
+	DefaultTestLevel          *int            `json:"default_test_level"`
+	DefaultAutonomyLevel      *int            `json:"default_autonomy_level"`
+	PermissionMode            string          `json:"permission_mode"`
+	RequiredContext           json.RawMessage `json:"required_context"`
+	TriggerSignals            json.RawMessage `json:"trigger_signals"`
+	SupportedActions          json.RawMessage `json:"supported_actions"`
+	SuccessCriteria           json.RawMessage `json:"success_criteria"`
+	FailureCriteria           json.RawMessage `json:"failure_criteria"`
+	MemoryPolicy              json.RawMessage `json:"memory_policy"`
+	ExecutionProfile          json.RawMessage `json:"execution_profile"`
+	AuthorizationRequirements json.RawMessage `json:"authorization_requirements"`
+	BudgetDefaults            json.RawMessage `json:"budget_defaults"`
+	StopConditions            json.RawMessage `json:"stop_conditions"`
+	UserLearningPolicy        json.RawMessage `json:"user_learning_policy"`
+	CustomDefinition          json.RawMessage `json:"custom_definition"`
+	Metadata                  json.RawMessage `json:"metadata"`
+	IsEnabled                 *bool           `json:"is_enabled"`
+}
+
+func operatorSkillJSONOrDefault(raw json.RawMessage, fallback string) []byte {
+	if len(raw) == 0 {
+		return []byte(fallback)
+	}
+	if json.Valid(raw) {
+		return raw
+	}
+	return []byte(fallback)
+}
+
+func normalizeCustomOperatorSkillScope(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case models.OperatorSkillScopeProject:
+		return models.OperatorSkillScopeProject
+	case models.OperatorSkillScopeTarget:
+		return models.OperatorSkillScopeTarget
+	case models.OperatorSkillScopeUser, "":
+		return models.OperatorSkillScopeUser
+	default:
+		return models.OperatorSkillScopeUser
+	}
+}
+
+func normalizeOperatorSkillType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case models.OperatorSkillTypeAdvisory:
+		return models.OperatorSkillTypeAdvisory
+	case models.OperatorSkillTypeAnalysis:
+		return models.OperatorSkillTypeAnalysis
+	case models.OperatorSkillTypeActiveValidation:
+		return models.OperatorSkillTypeActiveValidation
+	case models.OperatorSkillTypeExploitRuntime:
+		return models.OperatorSkillTypeExploitRuntime
+	case models.OperatorSkillTypeChain:
+		return models.OperatorSkillTypeChain
+	case models.OperatorSkillTypePlanning, "":
+		return models.OperatorSkillTypePlanning
+	default:
+		return models.OperatorSkillTypePlanning
+	}
+}
+
+func normalizeOperatorSkillRuntimeBackend(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case models.OperatorSkillRuntimeBackendInternalHTTP:
+		return models.OperatorSkillRuntimeBackendInternalHTTP
+	case models.OperatorSkillRuntimeBackendBrowser:
+		return models.OperatorSkillRuntimeBackendBrowser
+	case models.OperatorSkillRuntimeBackendShellRunner:
+		return models.OperatorSkillRuntimeBackendShellRunner
+	case models.OperatorSkillRuntimeBackendToolRunner:
+		return models.OperatorSkillRuntimeBackendToolRunner
+	case models.OperatorSkillRuntimeBackendCustomScript:
+		return models.OperatorSkillRuntimeBackendCustomScript
+	case models.OperatorSkillRuntimeBackendPayloadGenerator:
+		return models.OperatorSkillRuntimeBackendPayloadGenerator
+	case models.OperatorSkillRuntimeBackendBruteForce:
+		return models.OperatorSkillRuntimeBackendBruteForce
+	case models.OperatorSkillRuntimeBackendNone, "":
+		return models.OperatorSkillRuntimeBackendNone
+	default:
+		return models.OperatorSkillRuntimeBackendNone
+	}
+}
+
+func normalizeOperatorSkillRiskLevel(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "info", "informational":
+		return "info"
+	case "medium":
+		return "medium"
+	case "high":
+		return "high"
+	case "critical":
+		return "critical"
+	case "low", "":
+		return "low"
+	default:
+		return "low"
+	}
+}
+
+func normalizeOperatorSkillCategory(value string) string {
+	category := strings.ToLower(strings.TrimSpace(value))
+	if category == "" {
+		return models.OperatorSkillCategoryExploitValidation
+	}
+	return category
+}
+
+func sanitizeOperatorSkillSlug(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range value {
+		isAllowed := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if isAllowed {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if r == '_' || r == '-' || r == ' ' || r == '.' || r == '/' {
+			if !lastDash && b.Len() > 0 {
+				b.WriteRune('_')
+				lastDash = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "_")
+	if out == "" {
+		out = "custom_skill"
+	}
+	return out
+}
+
+func userOperatorSkillSlug(uid uint, raw string) string {
+	slug := sanitizeOperatorSkillSlug(raw)
+	prefix := fmt.Sprintf("user_%d_", uid)
+	if strings.HasPrefix(slug, prefix) {
+		return slug
+	}
+	return prefix + slug
+}
+
+func parseOperatorSkillID(c *fiber.Ctx) (uint, error) {
+	raw := strings.TrimSpace(c.Params("id"))
+	if raw == "" {
+		return 0, fiber.NewError(fiber.StatusBadRequest, "operator skill id is required")
+	}
+
+	id, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || id == 0 {
+		return 0, fiber.NewError(fiber.StatusBadRequest, "invalid operator skill id")
+	}
+
+	return uint(id), nil
+}
+
+func operatorProfileJSONOrDefault(raw json.RawMessage, fallback string) []byte {
+	if len(raw) == 0 {
+		return []byte(fallback)
+	}
+	if json.Valid(raw) {
+		return raw
+	}
+	return []byte(fallback)
+}
+
+func normalizeOperatorSkillPermissionMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case models.OperatorSkillPermissionScopeAwareAuthorized:
+		return models.OperatorSkillPermissionScopeAwareAuthorized
+	case models.OperatorSkillPermissionManualApproval:
+		return models.OperatorSkillPermissionManualApproval
+	case models.OperatorSkillPermissionAssistedAutopilot:
+		return models.OperatorSkillPermissionAssistedAutopilot
+	case models.OperatorSkillPermissionAuthorizedAutonomous:
+		return models.OperatorSkillPermissionAuthorizedAutonomous
+	default:
+		return models.OperatorSkillPermissionScopeAwareAuthorized
+	}
+}
+
+func defaultOperatorTargetSkillProfile(uid uint, ownerKey string, targetID uint) models.OperatorTargetSkillProfile {
+	return models.OperatorTargetSkillProfile{
+		UserID:                     uid,
+		OwnerKey:                   ownerKey,
+		TargetID:                   targetID,
+		IsEnabled:                  true,
+		PermissionMode:             models.OperatorSkillPermissionScopeAwareAuthorized,
+		EnabledSkillSlugs:          []byte("[]"),
+		DisabledSkillSlugs:         []byte("[]"),
+		PreferredLearningRecordIDs: []byte("[]"),
+		AllowedRuntimeBackends:     []byte("[]"),
+		BudgetDefaults:             []byte("{}"),
+		StopConditions:             []byte("{}"),
+		Metadata:                   []byte("{}"),
+	}
+}
+
+// GetTargetOperatorSkillProfile returns the authenticated user's skill usage
+// profile for one accessible target. If no profile exists yet, default values
+// are returned without creating a row.
+func GetTargetOperatorSkillProfile(c *fiber.Ctx) error {
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+
+	targetID, err := parseOperatorSkillTargetID(c)
+	if err != nil {
+		return err
+	}
+
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	ownerKey := fmt.Sprintf("user:%d", uid)
+	profile := defaultOperatorTargetSkillProfile(uid, ownerKey, target.ID)
+
+	if err := database.DB.
+		Where("target_id = ? AND user_id = ? AND owner_key = ?", target.ID, uid, ownerKey).
+		FirstOrInit(&profile).Error; err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to load operator skill profile")
+	}
+
+	return c.JSON(fiber.Map{
+		"status":  "success",
+		"profile": profile,
+	})
+}
+
+// UpsertTargetOperatorSkillProfile creates or updates the authenticated user's
+// skill usage profile for one accessible target.
+func UpsertTargetOperatorSkillProfile(c *fiber.Ctx) error {
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+
+	targetID, err := parseOperatorSkillTargetID(c)
+	if err != nil {
+		return err
+	}
+
+	target, err := getAccessibleTarget(c, targetID)
+	if err != nil {
+		return err
+	}
+
+	var req updateOperatorTargetSkillProfileRequest
+	if err := json.Unmarshal(c.Body(), &req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid operator skill profile payload")
+	}
+
+	ownerKey := fmt.Sprintf("user:%d", uid)
+	profile := defaultOperatorTargetSkillProfile(uid, ownerKey, target.ID)
+
+	if err := database.DB.
+		Where("target_id = ? AND user_id = ? AND owner_key = ?", target.ID, uid, ownerKey).
+		FirstOrCreate(&profile).Error; err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to initialize operator skill profile")
+	}
+
+	if req.IsEnabled != nil {
+		profile.IsEnabled = *req.IsEnabled
+	}
+
+	profile.PermissionMode = normalizeOperatorSkillPermissionMode(req.PermissionMode)
+	profile.EnabledSkillSlugs = operatorProfileJSONOrDefault(req.EnabledSkillSlugs, "[]")
+	profile.DisabledSkillSlugs = operatorProfileJSONOrDefault(req.DisabledSkillSlugs, "[]")
+	profile.PreferredLearningRecordIDs = operatorProfileJSONOrDefault(req.PreferredLearningRecordIDs, "[]")
+	profile.AllowedRuntimeBackends = operatorProfileJSONOrDefault(req.AllowedRuntimeBackends, "[]")
+	profile.BudgetDefaults = operatorProfileJSONOrDefault(req.BudgetDefaults, "{}")
+	profile.StopConditions = operatorProfileJSONOrDefault(req.StopConditions, "{}")
+	profile.Metadata = operatorProfileJSONOrDefault(req.Metadata, "{}")
+
+	if err := database.DB.Save(&profile).Error; err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to save operator skill profile")
+	}
+
+	return c.JSON(fiber.Map{
+		"status":  "success",
+		"profile": profile,
+	})
+}
+
 // ListOperatorSkills lists enabled built-in and future owner-scoped pentest skills.
 // By default disabled skills are hidden. Use ?include_disabled=true to include them.
 func ListOperatorSkills(c *fiber.Ctx) error {
-	if _, err := currentUserID(c); err != nil {
+	uid, err := currentUserID(c)
+	if err != nil {
 		return err
 	}
+	ownerKey := fmt.Sprintf("user:%d", uid)
 
 	includeDisabled := strings.EqualFold(strings.TrimSpace(c.Query("include_disabled")), "true")
 	category := strings.ToLower(strings.TrimSpace(c.Query("category")))
 	bugClass := strings.ToLower(strings.TrimSpace(c.Query("bug_class")))
 
 	q := database.DB.Model(&models.OperatorSkill{}).
-		Where("deleted_at IS NULL")
+		Where("deleted_at IS NULL").
+		Where("(is_built_in = true OR origin = ? AND created_by_user_id = ? OR owner_key = ?)", models.OperatorSkillOriginUser, uid, ownerKey)
 
 	if !includeDisabled {
 		q = q.Where("is_enabled = true")
@@ -90,9 +408,11 @@ func ListOperatorSkills(c *fiber.Ctx) error {
 
 // GetOperatorSkill returns one skill by slug.
 func GetOperatorSkill(c *fiber.Ctx) error {
-	if _, err := currentUserID(c); err != nil {
+	uid, err := currentUserID(c)
+	if err != nil {
 		return err
 	}
+	ownerKey := fmt.Sprintf("user:%d", uid)
 
 	slug := strings.ToLower(strings.TrimSpace(c.Params("slug")))
 	if slug == "" {
@@ -102,7 +422,8 @@ func GetOperatorSkill(c *fiber.Ctx) error {
 	includeDisabled := strings.EqualFold(strings.TrimSpace(c.Query("include_disabled")), "true")
 
 	q := database.DB.Model(&models.OperatorSkill{}).
-		Where("deleted_at IS NULL AND slug = ?", slug)
+		Where("deleted_at IS NULL AND slug = ?", slug).
+		Where("(is_built_in = true OR origin = ? AND created_by_user_id = ? OR owner_key = ?)", models.OperatorSkillOriginUser, uid, ownerKey)
 
 	if !includeDisabled {
 		q = q.Where("is_enabled = true")
@@ -116,6 +437,265 @@ func GetOperatorSkill(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"status": "success",
 		"skill":  row,
+	})
+}
+
+// CreateOperatorSkill creates a user-defined executable/plannable operator skill.
+// This stores the definition only; runtime execution is wired in later patches.
+func CreateOperatorSkill(c *fiber.Ctx) error {
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+
+	var req upsertOperatorSkillRequest
+	if err := json.Unmarshal(c.Body(), &req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid operator skill payload")
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = strings.TrimSpace(req.Title)
+	}
+	if name == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "skill name is required")
+	}
+
+	rawSlug := strings.TrimSpace(req.Slug)
+	if rawSlug == "" {
+		rawSlug = name
+	}
+	slug := userOperatorSkillSlug(uid, rawSlug)
+	ownerKey := fmt.Sprintf("user:%d", uid)
+
+	var existing int64
+	if err := database.DB.Model(&models.OperatorSkill{}).
+		Where("deleted_at IS NULL AND slug = ?", slug).
+		Count(&existing).Error; err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to check operator skill slug")
+	}
+	if existing > 0 {
+		return fiber.NewError(fiber.StatusConflict, "operator skill slug already exists")
+	}
+
+	isEnabled := true
+	if req.IsEnabled != nil {
+		isEnabled = *req.IsEnabled
+	}
+
+	defaultSafetyLevel := 1
+	if req.DefaultSafetyLevel != nil {
+		defaultSafetyLevel = *req.DefaultSafetyLevel
+	}
+	defaultTestLevel := 1
+	if req.DefaultTestLevel != nil {
+		defaultTestLevel = *req.DefaultTestLevel
+	}
+	defaultAutonomyLevel := 1
+	if req.DefaultAutonomyLevel != nil {
+		defaultAutonomyLevel = *req.DefaultAutonomyLevel
+	}
+
+	row := models.OperatorSkill{
+		OwnerKey:                  ownerKey,
+		CreatedByUserID:           &uid,
+		Scope:                     normalizeCustomOperatorSkillScope(req.Scope),
+		Origin:                    models.OperatorSkillOriginUser,
+		SkillType:                 normalizeOperatorSkillType(req.SkillType),
+		RuntimeBackend:            normalizeOperatorSkillRuntimeBackend(req.RuntimeBackend),
+		ProjectKey:                strings.TrimSpace(req.ProjectKey),
+		TargetID:                  req.TargetID,
+		Name:                      name,
+		Slug:                      slug,
+		Version:                   "v1",
+		Category:                  normalizeOperatorSkillCategory(req.Category),
+		BugClass:                  strings.ToLower(strings.TrimSpace(req.BugClass)),
+		Description:               strings.TrimSpace(req.Description),
+		DefaultRiskLevel:          normalizeOperatorSkillRiskLevel(req.DefaultRiskLevel),
+		DefaultSafetyLevel:        defaultSafetyLevel,
+		DefaultTestLevel:          defaultTestLevel,
+		DefaultAutonomyLevel:      defaultAutonomyLevel,
+		PermissionMode:            normalizeOperatorSkillPermissionMode(req.PermissionMode),
+		RequiredContext:           operatorSkillJSONOrDefault(req.RequiredContext, "[]"),
+		TriggerSignals:            operatorSkillJSONOrDefault(req.TriggerSignals, "[]"),
+		SupportedActions:          operatorSkillJSONOrDefault(req.SupportedActions, "[]"),
+		SuccessCriteria:           operatorSkillJSONOrDefault(req.SuccessCriteria, "[]"),
+		FailureCriteria:           operatorSkillJSONOrDefault(req.FailureCriteria, "[]"),
+		MemoryPolicy:              operatorSkillJSONOrDefault(req.MemoryPolicy, "{}"),
+		ExecutionProfile:          operatorSkillJSONOrDefault(req.ExecutionProfile, "{}"),
+		AuthorizationRequirements: operatorSkillJSONOrDefault(req.AuthorizationRequirements, "{}"),
+		BudgetDefaults:            operatorSkillJSONOrDefault(req.BudgetDefaults, "{}"),
+		StopConditions:            operatorSkillJSONOrDefault(req.StopConditions, "{}"),
+		UserLearningPolicy:        operatorSkillJSONOrDefault(req.UserLearningPolicy, "{}"),
+		CustomDefinition:          operatorSkillJSONOrDefault(req.CustomDefinition, "{}"),
+		Metadata:                  operatorSkillJSONOrDefault(req.Metadata, "{}"),
+		IsBuiltIn:                 false,
+		IsEnabled:                 isEnabled,
+	}
+
+	if err := database.DB.Create(&row).Error; err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to create operator skill")
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"status": "success",
+		"skill":  row,
+	})
+}
+
+// UpdateOperatorSkill updates a user-owned custom operator skill definition.
+// Built-in skills are immutable through this API.
+func UpdateOperatorSkill(c *fiber.Ctx) error {
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+
+	skillID, err := parseOperatorSkillID(c)
+	if err != nil {
+		return err
+	}
+
+	var row models.OperatorSkill
+	if err := database.DB.
+		Where("id = ? AND deleted_at IS NULL AND origin = ? AND created_by_user_id = ?", skillID, models.OperatorSkillOriginUser, uid).
+		First(&row).Error; err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "user-defined operator skill not found")
+	}
+
+	var req upsertOperatorSkillRequest
+	if err := json.Unmarshal(c.Body(), &req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid operator skill payload")
+	}
+
+	if strings.TrimSpace(req.Name) != "" {
+		row.Name = strings.TrimSpace(req.Name)
+	}
+	if strings.TrimSpace(req.Title) != "" && strings.TrimSpace(req.Name) == "" {
+		row.Name = strings.TrimSpace(req.Title)
+	}
+	if strings.TrimSpace(req.Description) != "" {
+		row.Description = strings.TrimSpace(req.Description)
+	}
+	if strings.TrimSpace(req.Scope) != "" {
+		row.Scope = normalizeCustomOperatorSkillScope(req.Scope)
+	}
+	if strings.TrimSpace(req.SkillType) != "" {
+		row.SkillType = normalizeOperatorSkillType(req.SkillType)
+	}
+	if strings.TrimSpace(req.RuntimeBackend) != "" {
+		row.RuntimeBackend = normalizeOperatorSkillRuntimeBackend(req.RuntimeBackend)
+	}
+	if req.ProjectKey != "" {
+		row.ProjectKey = strings.TrimSpace(req.ProjectKey)
+	}
+	if req.TargetID != nil {
+		row.TargetID = req.TargetID
+	}
+	if strings.TrimSpace(req.Category) != "" {
+		row.Category = normalizeOperatorSkillCategory(req.Category)
+	}
+	if strings.TrimSpace(req.BugClass) != "" {
+		row.BugClass = strings.ToLower(strings.TrimSpace(req.BugClass))
+	}
+	if strings.TrimSpace(req.DefaultRiskLevel) != "" {
+		row.DefaultRiskLevel = normalizeOperatorSkillRiskLevel(req.DefaultRiskLevel)
+	}
+	if req.DefaultSafetyLevel != nil {
+		row.DefaultSafetyLevel = *req.DefaultSafetyLevel
+	}
+	if req.DefaultTestLevel != nil {
+		row.DefaultTestLevel = *req.DefaultTestLevel
+	}
+	if req.DefaultAutonomyLevel != nil {
+		row.DefaultAutonomyLevel = *req.DefaultAutonomyLevel
+	}
+	if strings.TrimSpace(req.PermissionMode) != "" {
+		row.PermissionMode = normalizeOperatorSkillPermissionMode(req.PermissionMode)
+	}
+	if len(req.RequiredContext) > 0 {
+		row.RequiredContext = operatorSkillJSONOrDefault(req.RequiredContext, "[]")
+	}
+	if len(req.TriggerSignals) > 0 {
+		row.TriggerSignals = operatorSkillJSONOrDefault(req.TriggerSignals, "[]")
+	}
+	if len(req.SupportedActions) > 0 {
+		row.SupportedActions = operatorSkillJSONOrDefault(req.SupportedActions, "[]")
+	}
+	if len(req.SuccessCriteria) > 0 {
+		row.SuccessCriteria = operatorSkillJSONOrDefault(req.SuccessCriteria, "[]")
+	}
+	if len(req.FailureCriteria) > 0 {
+		row.FailureCriteria = operatorSkillJSONOrDefault(req.FailureCriteria, "[]")
+	}
+	if len(req.MemoryPolicy) > 0 {
+		row.MemoryPolicy = operatorSkillJSONOrDefault(req.MemoryPolicy, "{}")
+	}
+	if len(req.ExecutionProfile) > 0 {
+		row.ExecutionProfile = operatorSkillJSONOrDefault(req.ExecutionProfile, "{}")
+	}
+	if len(req.AuthorizationRequirements) > 0 {
+		row.AuthorizationRequirements = operatorSkillJSONOrDefault(req.AuthorizationRequirements, "{}")
+	}
+	if len(req.BudgetDefaults) > 0 {
+		row.BudgetDefaults = operatorSkillJSONOrDefault(req.BudgetDefaults, "{}")
+	}
+	if len(req.StopConditions) > 0 {
+		row.StopConditions = operatorSkillJSONOrDefault(req.StopConditions, "{}")
+	}
+	if len(req.UserLearningPolicy) > 0 {
+		row.UserLearningPolicy = operatorSkillJSONOrDefault(req.UserLearningPolicy, "{}")
+	}
+	if len(req.CustomDefinition) > 0 {
+		row.CustomDefinition = operatorSkillJSONOrDefault(req.CustomDefinition, "{}")
+	}
+	if len(req.Metadata) > 0 {
+		row.Metadata = operatorSkillJSONOrDefault(req.Metadata, "{}")
+	}
+	if req.IsEnabled != nil {
+		row.IsEnabled = *req.IsEnabled
+	}
+
+	if err := database.DB.Save(&row).Error; err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to update operator skill")
+	}
+
+	return c.JSON(fiber.Map{
+		"status": "success",
+		"skill":  row,
+	})
+}
+
+// DeleteOperatorSkill soft-deletes a user-owned custom operator skill definition.
+func DeleteOperatorSkill(c *fiber.Ctx) error {
+	uid, err := currentUserID(c)
+	if err != nil {
+		return err
+	}
+
+	skillID, err := parseOperatorSkillID(c)
+	if err != nil {
+		return err
+	}
+
+	var row models.OperatorSkill
+	if err := database.DB.
+		Where("id = ? AND deleted_at IS NULL AND origin = ? AND created_by_user_id = ?", skillID, models.OperatorSkillOriginUser, uid).
+		First(&row).Error; err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "user-defined operator skill not found")
+	}
+
+	if row.IsBuiltIn {
+		return fiber.NewError(fiber.StatusForbidden, "built-in operator skills cannot be deleted")
+	}
+
+	if err := database.DB.Delete(&row).Error; err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to delete operator skill")
+	}
+
+	return c.JSON(fiber.Map{
+		"status":     "success",
+		"deleted_id": skillID,
 	})
 }
 

@@ -1,5 +1,15 @@
 <!-- HUNT_V3_12_0_START -->
 
+## v3.15.0 — User-Programmable Operator Skills + Personal Operator Learning
+
+v3.15.0 adds the first user-programmable operator skill and methodology layer for Hunt Engine's AI-driven authorized pentest workflow. The Operator can now use target-selected methodology records as planning guidance, expose applied methodology in chat, manage user-defined executable skills, select matching custom skills from chat trigger signals, create planned OperatorSkillRun records for those custom skills, and show dispatcher-gated custom skill queues directly in Attack Surface Chat.
+
+Custom runtime execution is not wired in v3.15.0. User-defined skills are plannable, auditable, target-profile-aware, and visible in the operator workflow, while runtime execution remains dispatcher-gated until later authorized runtime patches add explicit execution backends, permission modes, budgets, stop conditions, policy enforcement, and audit controls.
+
+See docs/release-notes/v3.15.0.md for details. The official smoke test for this milestone is:
+
+    ./scripts/smoke_operator_user_skills_v315.sh
+
 ## v3.14.0 — Pentest Skill Registry + Operator Skill Runtime Foundation
 
 v3.14.0 adds the first modular Operator Skill foundation for Hunt Engine AI-driven authorized pentest workflow. The Operator can now select skills from evidence signals, create planned skill runs from chat, dispatch implemented skill runtimes, create observations, persist target memory, enrich skill run APIs, and show executed/queued skill status directly in chat.
