@@ -703,6 +703,199 @@ const featureDocs: DocsFeature[] = [
     screenshot: '/docs/screenshots/fa/recon-puredns-progress.png',
   },
 
+  {
+    id: 'ai-analysis-panel',
+    group: 'operator',
+    icon: 'brain',
+    title: { fa: 'AI Analysis Panel', en: 'AI Analysis Panel' },
+    route: '/targets/:id → Analysis → AI Analysis',
+    purpose: {
+      fa: 'خلاصه‌سازی و تفسیر AI از شواهد target، تکنولوژی‌ها، assetها، URLها و سیگنال‌های سطح حمله.',
+      en: 'AI-assisted summary and interpretation of target evidence, technologies, assets, URLs, and attack-surface signals.',
+    },
+    features: {
+      fa: ['target summary', 'technology interpretation', 'risk hints', 'attack-surface observations', 'evidence-aware narrative'],
+      en: ['target summary', 'technology interpretation', 'risk hints', 'attack-surface observations', 'evidence-aware narrative'],
+    },
+    howToUse: {
+      fa: ['Analysis tab را باز کنید.', 'AI Analysis را بررسی کنید.', 'خلاصه را با Assets، URLs و Findings تطبیق دهید.', 'برای تست عملی از Operator Chat استفاده کنید.'],
+      en: ['Open Analysis tab.', 'Review AI Analysis.', 'Cross-check the summary with Assets, URLs, and Findings.', 'Use Operator Chat for actionable testing.'],
+    },
+    outputs: {
+      fa: ['summary', 'risk hints', 'technology notes', 'next-review suggestions'],
+      en: ['summary', 'risk hints', 'technology notes', 'next-review suggestions'],
+    },
+    errors: {
+      fa: ['LLM provider تنظیم نشده', 'evidence کافی نیست', 'feature flag غیرفعال است', 'خروجی generic'],
+      en: ['LLM provider not configured', 'insufficient evidence', 'feature flag disabled', 'generic output'],
+    },
+    security: {
+      fa: ['AI Analysis خودش finding قطعی نیست؛ فقط تفسیر و guidance است.'],
+      en: ['AI Analysis is not a confirmed finding by itself; it is interpretation and guidance.'],
+    },
+    screenshot: '/docs/screenshots/fa/ai-analysis-panel.png',
+  },
+  {
+    id: 'recommendations-panel',
+    group: 'operator',
+    icon: 'brain',
+    title: { fa: 'Recommendations Panel', en: 'Recommendations Panel' },
+    route: '/targets/:id → Analysis → Recommendations',
+    purpose: {
+      fa: 'پیشنهاد next step برای recon، evidence review، controlled validation و اولویت‌بندی سطح حمله.',
+      en: 'Recommend next steps for recon, evidence review, controlled validation, and attack-surface prioritization.',
+    },
+    features: {
+      fa: ['next-step suggestions', 'priority hints', 'evidence gaps', 'manual review guidance'],
+      en: ['next-step suggestions', 'priority hints', 'evidence gaps', 'manual review guidance'],
+    },
+    howToUse: {
+      fa: ['Recommendations را باز کنید.', 'پیشنهادها را با evidence واقعی مقایسه کنید.', 'پیشنهادهای مناسب را در Operator Chat یا workflow مربوطه دنبال کنید.'],
+      en: ['Open Recommendations.', 'Compare suggestions with real evidence.', 'Follow suitable suggestions in Operator Chat or the relevant workflow.'],
+    },
+    outputs: {
+      fa: ['recommended actions', 'rationale', 'missing evidence hints'],
+      en: ['recommended actions', 'rationale', 'missing evidence hints'],
+    },
+    errors: {
+      fa: ['پیشنهاد generic', 'evidence کم', 'feature flag غیرفعال', 'عدم ارتباط با target فعلی'],
+      en: ['generic recommendation', 'low evidence', 'feature flag disabled', 'not relevant to current target'],
+    },
+    security: {
+      fa: ['Recommendation به معنی مجوز اجرا نیست؛ قبل از action، scope و policy را بررسی کنید.'],
+      en: ['A recommendation is not execution authorization; review scope and policy before action.'],
+    },
+    screenshot: '/docs/screenshots/fa/recommendations-panel.png',
+  },
+  {
+    id: 'agent-actions-panel',
+    group: 'operator',
+    icon: 'terminal',
+    title: { fa: 'Agent Actions Panel', en: 'Agent Actions Panel' },
+    route: '/targets/:id → Analysis → Agent Actions',
+    purpose: {
+      fa: 'نمایش actionهای پیشنهادی یا اجراشده توسط agent/operator، وضعیت approval، runtime labels و نتیجه dispatch.',
+      en: 'Display proposed or executed agent/operator actions, approval status, runtime labels, and dispatch results.',
+    },
+    features: {
+      fa: ['proposed action', 'approval required', 'executed by autopilot', 'runtime labels', 'unsupported preview-only action', 'controlled run/result IDs'],
+      en: ['proposed action', 'approval required', 'executed by autopilot', 'runtime labels', 'unsupported preview-only action', 'controlled run/result IDs'],
+    },
+    howToUse: {
+      fa: ['Agent Actions را باز کنید.', 'status هر action را بخوانید.', 'اگر approval required است فقط در صورت مجوز تایید کنید.', 'runtime evidence را با Findings/Operator خروجی تطبیق دهید.'],
+      en: ['Open Agent Actions.', 'Read each action status.', 'Approve only when authorized.', 'Cross-check runtime evidence with Findings/Operator output.'],
+    },
+    outputs: {
+      fa: ['action status', 'controlled run ID', 'controlled result ID', 'policy decision', 'runtime evidence summary'],
+      en: ['action status', 'controlled run ID', 'controlled result ID', 'policy decision', 'runtime evidence summary'],
+    },
+    errors: {
+      fa: ['unsupported action', 'policy blocked', 'approval required', 'runtime failed', 'inconclusive evidence'],
+      en: ['unsupported action', 'policy blocked', 'approval required', 'runtime failed', 'inconclusive evidence'],
+    },
+    security: {
+      fa: ['Unsupported actionها preview هستند. Actionهای واقعی باید policy/scope/approval/rate/budget را رعایت کنند.'],
+      en: ['Unsupported actions are previews. Real actions must respect policy, scope, approval, rate, and budget controls.'],
+    },
+    screenshot: '/docs/screenshots/fa/agent-actions-panel.png',
+  },
+  {
+    id: 'bug-tests-panel',
+    group: 'operator',
+    icon: 'terminal',
+    title: { fa: 'Bug Tests Panel', en: 'Bug Tests Panel' },
+    route: '/targets/:id → Analysis → Bug Tests',
+    purpose: {
+      fa: 'بررسی run/result تست‌های bug، evidence، pattern/payload reference و وضعیت نتیجه.',
+      en: 'Review bug test runs/results, evidence, pattern/payload references, and result state.',
+    },
+    features: {
+      fa: ['test runs', 'test results', 'bug type', 'evidence', 'pattern reference', 'payload reference', 'blocked/inconclusive handling'],
+      en: ['test runs', 'test results', 'bug type', 'evidence', 'pattern reference', 'payload reference', 'blocked/inconclusive handling'],
+    },
+    howToUse: {
+      fa: ['Bug Tests را باز کنید.', 'run و result را بررسی کنید.', 'evidence را بخوانید.', 'blocked یا inconclusive را vulnerability حساب نکنید.'],
+      en: ['Open Bug Tests.', 'Review run and result.', 'Read evidence.', 'Do not treat blocked or inconclusive as confirmed vulnerabilities.'],
+    },
+    outputs: {
+      fa: ['bug test run', 'bug test result', 'evidence JSON', 'status', 'classification'],
+      en: ['bug test run', 'bug test result', 'evidence JSON', 'status', 'classification'],
+    },
+    errors: {
+      fa: ['false positive', 'inconclusive result', 'blocked response', 'missing candidate', 'unsupported test type'],
+      en: ['false positive', 'inconclusive result', 'blocked response', 'missing candidate', 'unsupported test type'],
+    },
+    security: {
+      fa: ['تست‌های فعال باید authorization و policy داشته باشند و evidence باید قابل تکرار باشد.'],
+      en: ['Active tests require authorization and policy support, and evidence must be reproducible.'],
+    },
+    screenshot: '/docs/screenshots/fa/bug-tests-panel.png',
+  },
+  {
+    id: 'pattern-payload-registries',
+    group: 'operator',
+    icon: 'database',
+    title: { fa: 'Pattern و Payload Registry', en: 'Pattern and Payload Registry' },
+    route: '/targets/:id → Analysis → Pattern Registry / Payload Registry',
+    purpose: {
+      fa: 'مدیریت و بررسی patternها و payload metadata برای bug-class reasoning، strategy و validation planning.',
+      en: 'Review pattern and payload metadata for bug-class reasoning, strategy, and validation planning.',
+    },
+    features: {
+      fa: ['pattern packs', 'pattern keys', 'bug class', 'tags', 'payload packs', 'payload key', 'safety class', 'intended context', 'metadata-only payloads'],
+      en: ['pattern packs', 'pattern keys', 'bug class', 'tags', 'payload packs', 'payload key', 'safety class', 'intended context', 'metadata-only payloads'],
+    },
+    howToUse: {
+      fa: ['Registry را باز کنید.', 'pattern یا payload مرتبط با bug class را بررسی کنید.', 'metadata را برای strategy بخوانید.', 'اجرای واقعی payload را فقط با policy و authorization انجام دهید.'],
+      en: ['Open the registry.', 'Review patterns or payloads related to the bug class.', 'Use metadata for strategy.', 'Execute payloads only with policy and authorization.'],
+    },
+    outputs: {
+      fa: ['pattern metadata', 'payload metadata', 'tags', 'safety class', 'strategy signals'],
+      en: ['pattern metadata', 'payload metadata', 'tags', 'safety class', 'strategy signals'],
+    },
+    errors: {
+      fa: ['payload metadata بدون runtime', 'pattern خیلی کلی', 'bug class mismatch', 'اجرای payload بدون authorization'],
+      en: ['payload metadata without runtime', 'overly generic pattern', 'bug class mismatch', 'payload execution without authorization'],
+    },
+    security: {
+      fa: ['Registry خودش اجرای payload نیست. اجرای payload باید policy-gated، audited و scope-aware باشد.'],
+      en: ['The registry is not payload execution. Payload execution must be policy-gated, audited, and scope-aware.'],
+    },
+    screenshot: '/docs/screenshots/fa/pattern-payload-registries.png',
+  },
+  {
+    id: 'findings-evidence-json',
+    group: 'target-detail',
+    icon: 'shield',
+    title: { fa: 'Finding Evidence JSON', en: 'Finding Evidence JSON' },
+    route: '/targets/:id → Findings → evidence_json',
+    purpose: {
+      fa: 'خواندن evidence_json برای فهم دقیق claim، request/response، confidence، source و reproduction context.',
+      en: 'Read evidence_json to understand the claim, request/response, confidence, source, and reproduction context.',
+    },
+    features: {
+      fa: ['evidence_json', 'source_tool', 'severity', 'confidence', 'status', 'triage_note', 'reproduction data'],
+      en: ['evidence_json', 'source_tool', 'severity', 'confidence', 'status', 'triage_note', 'reproduction data'],
+    },
+    howToUse: {
+      fa: ['Finding را باز کنید.', 'evidence_json را بخوانید.', 'status/severity را فقط با evidence کافی تغییر دهید.', 'برای report، sensitive data را sanitize کنید.'],
+      en: ['Open the finding.', 'Read evidence_json.', 'Change status/severity only with enough evidence.', 'Sanitize sensitive data for reports.'],
+    },
+    outputs: {
+      fa: ['evidence fields', 'triage decision', 'exportable finding data'],
+      en: ['evidence fields', 'triage decision', 'exportable finding data'],
+    },
+    errors: {
+      fa: ['evidence ناقص', 'claim بدون reproduction', 'blocked response', 'false positive', 'severity overclaim'],
+      en: ['incomplete evidence', 'claim without reproduction', 'blocked response', 'false positive', 'severity overclaim'],
+    },
+    security: {
+      fa: ['Evidence ممکن است sensitive باشد. بدون مجوز share نکنید و برای screenshot/report آن را sanitize کنید.'],
+      en: ['Evidence may be sensitive. Do not share without authorization and sanitize screenshots/reports.'],
+    },
+    screenshot: '/docs/screenshots/fa/findings-evidence-json.png',
+  },
+
 ];
 
 const groupLabels: Record<string, { fa: string; en: string }> = {
