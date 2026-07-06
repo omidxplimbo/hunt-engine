@@ -542,6 +542,167 @@ const featureDocs: DocsFeature[] = [
     },
     screenshot: '/docs/screenshots/fa/troubleshooting.png',
   },
+  {
+    id: 'create-target-modal',
+    group: 'targets',
+    icon: 'globe',
+    title: { fa: 'Create Target Modal', en: 'Create Target Modal' },
+    route: '/targets → New Target',
+    purpose: {
+      fa: 'ساخت Target جدید و انتخاب ماژول‌های discovery، crawl، PureDNS، Nuclei و sourceهای اطلاعاتی.',
+      en: 'Create a new target and select discovery, crawl, PureDNS, Nuclei, and intelligence source modules.',
+    },
+    features: {
+      fa: ['Name', 'Root Domain', 'Description', 'Frequency', 'AlterX', 'Waymore', 'GAU', 'Katana', 'VirusTotal', 'Port Scan', 'Cero', 'crt.sh', 'PureDNS', 'AbuseDB', 'Amass', 'Nuclei', 'Nuclei Profile', 'PureDNS Wordlists'],
+      en: ['Name', 'Root Domain', 'Description', 'Frequency', 'AlterX', 'Waymore', 'GAU', 'Katana', 'VirusTotal', 'Port Scan', 'Cero', 'crt.sh', 'PureDNS', 'AbuseDB', 'Amass', 'Nuclei', 'Nuclei Profile', 'PureDNS Wordlists'],
+    },
+    howToUse: {
+      fa: ['از صفحه Targets روی New Target بزنید.', 'root domain مجاز را وارد کنید.', 'ماژول‌ها را مطابق scope و مجوز انتخاب کنید.', 'اگر PureDNS فعال است wordlist مناسب را انتخاب کنید.', 'اگر Nuclei فعال است profile مناسب را انتخاب کنید.', 'Target را ذخیره کنید و سپس scan را اجرا کنید.'],
+      en: ['Open Targets and click New Target.', 'Enter the authorized root domain.', 'Select modules according to scope and authorization.', 'Select wordlists when PureDNS is enabled.', 'Select a Nuclei profile when Nuclei is enabled.', 'Save the target and run scan when ready.'],
+    },
+    outputs: {
+      fa: ['Target جدید', 'تنظیمات moduleها', 'آماده شدن target برای scan runtime', 'انتخاب wordlist/profile برای discovery و Nuclei'],
+      en: ['New target', 'module settings', 'target ready for scan runtime', 'selected wordlist/profile for discovery and Nuclei'],
+    },
+    errors: {
+      fa: ['root domain نامعتبر', 'target تکراری', 'PureDNS بدون resolver/wordlist مناسب', 'VirusTotal بدون API key', 'Nuclei بدون template/profile معتبر'],
+      en: ['invalid root domain', 'duplicate target', 'PureDNS without proper resolver/wordlist', 'VirusTotal without API key', 'Nuclei without valid template/profile'],
+    },
+    security: {
+      fa: ['فقط target مجاز بسازید. port scan، active crawl، PureDNS بزرگ و Nuclei باید با scope و مجوز هماهنگ باشند.'],
+      en: ['Create authorized targets only. Port scan, active crawl, large PureDNS, and Nuclei must match scope and authorization.'],
+    },
+    screenshot: '/docs/screenshots/fa/targets-create-target-modal.png',
+  },
+  {
+    id: 'edit-target-modal',
+    group: 'targets',
+    icon: 'globe',
+    title: { fa: 'Edit Target Modal', en: 'Edit Target Modal' },
+    route: '/targets → Edit Target',
+    purpose: {
+      fa: 'ویرایش metadata و تنظیمات moduleهای target برای scanهای بعدی.',
+      en: 'Edit target metadata and module settings for future scans.',
+    },
+    features: {
+      fa: ['ویرایش name/root_domain/description', 'تغییر moduleها', 'تغییر nuclei_profile', 'تغییر puredns_wordlists', 'تغییر in_scope در صورت وجود'],
+      en: ['edit name/root_domain/description', 'change modules', 'change nuclei_profile', 'change puredns_wordlists', 'change in_scope when available'],
+    },
+    howToUse: {
+      fa: ['در Targets روی edit بزنید.', 'فیلدهای لازم را تغییر دهید.', 'تفاوت تغییر config با حذف evidence قبلی را در نظر بگیرید.', 'ذخیره کنید.'],
+      en: ['Click edit in Targets.', 'Change required fields.', 'Understand that config changes do not necessarily delete previous evidence.', 'Save changes.'],
+    },
+    outputs: {
+      fa: ['Target config جدید', 'اثر روی scanهای آینده', 'حفظ evidence قبلی مگر implementation خلافش را انجام دهد'],
+      en: ['updated target config', 'effect on future scans', 'previous evidence remains unless implementation explicitly removes it'],
+    },
+    errors: {
+      fa: ['root domain نامعتبر', 'تغییر حین scan فعال', 'انتظار اشتباه از پاک شدن داده‌های قبلی'],
+      en: ['invalid root domain', 'change during active scan', 'wrong expectation that old data is removed'],
+    },
+    security: {
+      fa: ['تغییر scope باید عمدی و مستند باشد. target را بدون مجوز in-scope نکنید.'],
+      en: ['Scope changes must be intentional and documented. Do not mark unauthorized targets in-scope.'],
+    },
+    screenshot: '/docs/screenshots/fa/targets-edit-target-modal.png',
+  },
+  {
+    id: 'target-import-export',
+    group: 'targets',
+    icon: 'database',
+    title: { fa: 'Import / Export Targets', en: 'Import / Export Targets' },
+    route: '/targets → Import / Export',
+    purpose: {
+      fa: 'انتقال، backup یا review آفلاین targetها و داده‌های مرتبط.',
+      en: 'Move, back up, or review targets and related data offline.',
+    },
+    features: {
+      fa: ['Import JSON', 'Export JSON', 'version', 'export_date', 'targets', 'assets', 'urls', 'module settings'],
+      en: ['Import JSON', 'Export JSON', 'version', 'export_date', 'targets', 'assets', 'urls', 'module settings'],
+    },
+    howToUse: {
+      fa: ['برای backup روی Export بزنید.', 'فایل خروجی را امن نگه دارید.', 'برای restore یا migration از Import استفاده کنید.', 'بعد از import target و evidence را review کنید.'],
+      en: ['Click Export for backup.', 'Store the file securely.', 'Use Import for restore or migration.', 'Review target and evidence after import.'],
+    },
+    outputs: {
+      fa: ['فایل export', 'target واردشده', 'asset/urlهای واردشده در صورت پشتیبانی schema'],
+      en: ['export file', 'imported target', 'imported assets/URLs when schema supports them'],
+    },
+    errors: {
+      fa: ['JSON نامعتبر', 'version ناسازگار', 'duplicate target', 'partial import'],
+      en: ['invalid JSON', 'unsupported version', 'duplicate target', 'partial import'],
+    },
+    security: {
+      fa: ['Export شامل داده حساس attack surface است. آن را public commit یا share نکنید.'],
+      en: ['Exports contain sensitive attack-surface data. Do not commit or share them publicly.'],
+    },
+    screenshot: '/docs/screenshots/fa/targets-import-modal.png',
+  },
+  {
+    id: 'recon-discovery-pipeline',
+    group: 'target-detail',
+    icon: 'terminal',
+    title: { fa: 'Recon / Discovery Pipeline', en: 'Recon / Discovery Pipeline' },
+    route: '/targets/:id → scan/discovery modules',
+    purpose: {
+      fa: 'جریان discovery از sourceهای passive، DNS validation، PureDNS brute-force، wildcard filtering، AlterX mutation و URL collection.',
+      en: 'Discovery flow across passive sources, DNS validation, PureDNS brute force, wildcard filtering, AlterX mutation, and URL collection.',
+    },
+    features: {
+      fa: ['Subfinder', 'Assetfinder', 'crt.sh', 'Cero', 'AbuseDB', 'Amass', 'DNSX', 'PureDNS', 'Wildcard Filter', 'AlterX', 'Wayback', 'GAU', 'Katana', 'Waymore', 'VirusTotal'],
+      en: ['Subfinder', 'Assetfinder', 'crt.sh', 'Cero', 'AbuseDB', 'Amass', 'DNSX', 'PureDNS', 'Wildcard Filter', 'AlterX', 'Wayback', 'GAU', 'Katana', 'Waymore', 'VirusTotal'],
+    },
+    howToUse: {
+      fa: ['Target را با moduleهای مناسب بسازید.', 'scan را اجرا کنید.', 'Passive candidates توسط DNSX validate می‌شوند.', 'PureDNS brute-force خروجی خودش را resolve/live-validate می‌کند.', 'AlterX بعد از live validation روی hosts معتبر اجرا می‌شود.', 'نتیجه را در Assets و URLs بررسی کنید.'],
+      en: ['Create target with appropriate modules.', 'Run scan.', 'Passive candidates are validated by DNSX.', 'PureDNS brute-force resolves/live-validates its own output.', 'AlterX runs after live validation on trusted hosts.', 'Review results in Assets and URLs.'],
+    },
+    outputs: {
+      fa: ['subdomain candidates', 'live assets', 'URLs', 'source attribution', 'progress/runtime evidence'],
+      en: ['subdomain candidates', 'live assets', 'URLs', 'source attribution', 'progress/runtime evidence'],
+    },
+    errors: {
+      fa: ['DNS wildcard noise', 'resolver کند', 'PureDNS ETA طولانی', 'URL source بدون نتیجه', 'false live اگر parser اشتباه باشد'],
+      en: ['DNS wildcard noise', 'slow resolvers', 'long PureDNS ETA', 'empty URL sources', 'false live if parser is wrong'],
+    },
+    security: {
+      fa: ['Discovery باید در scope باشد. brute-force بزرگ باید با resolver، rate و مجوز هماهنگ باشد.'],
+      en: ['Discovery must remain in scope. Large brute force requires resolver capacity, rate controls, and authorization.'],
+    },
+    screenshot: '/docs/screenshots/fa/recon-start-controls.png',
+  },
+  {
+    id: 'active-processes-puredns',
+    group: 'settings',
+    icon: 'terminal',
+    title: { fa: 'Active Processes و PureDNS Progress', en: 'Active Processes and PureDNS Progress' },
+    route: 'Dashboard / Target / Settings → Monitoring / Progress',
+    purpose: {
+      fa: 'نمایش وضعیت jobهای فعال، command، duration، progress، rate و ETA برای debug و monitoring.',
+      en: 'Display active jobs, command, duration, progress, rate, and ETA for debugging and monitoring.',
+    },
+    features: {
+      fa: ['Active command', 'PID', 'duration', 'target context', 'PureDNS rate', 'PureDNS ETA', 'progress telemetry', 'monitoring stats'],
+      en: ['active command', 'PID', 'duration', 'target context', 'PureDNS rate', 'PureDNS ETA', 'progress telemetry', 'monitoring stats'],
+    },
+    howToUse: {
+      fa: ['هنگام scan فعال processها را بررسی کنید.', 'برای PureDNS نرخ و ETA را بخوانید.', 'اگر کند است resolver pool و wordlist size را بررسی کنید.', 'برای stuck job logs و queue را بررسی کنید.'],
+      en: ['Review processes during active scan.', 'Read PureDNS rate and ETA.', 'If slow, inspect resolver pool and wordlist size.', 'For stuck jobs, inspect logs and queue.'],
+    },
+    outputs: {
+      fa: ['وضعیت runtime', 'progress قابل فهم', 'تشخیص bottleneck در resolver/wordlist/server'],
+      en: ['runtime status', 'readable progress', 'bottleneck diagnosis for resolver/wordlist/server'],
+    },
+    errors: {
+      fa: ['process stale', 'PID قدیمی', 'resolver throttling', 'wordlist خیلی بزرگ', 'logs ناکافی'],
+      en: ['stale process', 'old PID', 'resolver throttling', 'oversized wordlist', 'insufficient logs'],
+    },
+    security: {
+      fa: ['command/log ممکن است path یا target حساس داشته باشد؛ screenshot را sanitize کنید.'],
+      en: ['commands/logs may include sensitive paths or targets; sanitize screenshots.'],
+    },
+    screenshot: '/docs/screenshots/fa/recon-puredns-progress.png',
+  },
+
 ];
 
 const groupLabels: Record<string, { fa: string; en: string }> = {
@@ -831,9 +992,21 @@ export default function Documentation() {
                     </div>
                     <p className="mt-2 text-xs leading-6 text-hack-dim">
                       {lang === 'fa'
-                        ? 'برای این بخش باید screenshot واقعی، تمیز و بدون اطلاعات حساس اضافه شود.'
-                        : 'This section needs a real, clean screenshot with no sensitive data.'}
+                        ? 'اگر فایل screenshot در مسیر زیر وجود داشته باشد، همین‌جا نمایش داده می‌شود.'
+                        : 'If the screenshot file exists at the path below, it is displayed here.'}
                     </p>
+
+                    <div className="mt-4 overflow-hidden border border-hack-border bg-hack-bg">
+                      <img
+                        src={active.screenshot}
+                        alt={active.title[lang]}
+                        className="max-h-72 w-full object-contain"
+                        onError={(event) => {
+                          event.currentTarget.style.display = 'none';
+                        }}
+                      />
+                    </div>
+
                     <code className="mt-3 block break-all border border-hack-border bg-hack-bg p-3 text-[11px] leading-5 text-hack-primary">
                       {active.screenshot}
                     </code>
