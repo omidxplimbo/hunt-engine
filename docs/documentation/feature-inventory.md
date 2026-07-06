@@ -502,3 +502,469 @@ Documentation requirements:
 - Explain what it does not include.
 
 ---
+
+
+# Target Detail Workspace
+
+## Target Detail Header
+
+UI route: `/targets/:id`
+
+Purpose:
+
+- Main workspace header for a selected target.
+- Shows target identity, root domain, loading state, and available target-level actions.
+
+Features:
+
+- Back to targets.
+- Target name.
+- Root domain.
+- Loading/fetching indicator.
+- PDF Report action.
+- Assets tab.
+- Intel / URLs tab.
+- Policy tab.
+- Findings tab.
+- Analysis tab.
+- Export IPs.
+- Export Assets.
+- Export URLs.
+
+User actions:
+
+- Return to targets list.
+- Switch target workspace tabs.
+- Download report or exports.
+- Start review from Assets or URLs.
+- Open Policy before controlled validation.
+- Open Findings for evidence review.
+- Open Analysis for AI/operator workflows.
+
+Outputs:
+
+- Active target context.
+- Selected tab state.
+- Export/download files.
+- Report download when enabled.
+
+Common errors:
+
+- Target loading fails.
+- Target ID not found.
+- Feature flag disables PDF report, Policy, or Analysis.
+- Export action returns empty file due to filters.
+- Stale frontend bundle after deploy.
+
+Security notes:
+
+- Target context determines scope.
+- Exported data may contain sensitive attack-surface evidence.
+- Report downloads must be handled as sensitive documents.
+
+Documentation requirements:
+
+- Screenshot of target header and tabs.
+- Explain every tab and action.
+- Explain disabled feature-flag behavior.
+
+---
+
+## Assets Tab
+
+UI route: `/targets/:id -> Assets`
+
+Purpose:
+
+- Review discovered assets/subdomains and prioritize live attack surface.
+
+Features:
+
+- Search assets.
+- All filter.
+- Live filter.
+- Dead filter.
+- Web filter.
+- DNS filter.
+- Ports filter.
+- No CDN filter.
+- CDN filter.
+- WAF filter.
+- Cloud filter.
+- Status code filter.
+- Source/provider filters.
+- Sortable Providers / DNS column.
+- Sortable Status column.
+- Pagination.
+- Export IPs.
+- Export Assets.
+
+Displayed asset evidence:
+
+- Asset value.
+- Source/provider.
+- DNS status.
+- HTTP status.
+- Live/dead state.
+- IP addresses.
+- Ports.
+- CDN indicator.
+- WAF indicator.
+- Cloud indicator.
+- Technologies.
+- Created/updated timestamps where shown.
+
+User actions:
+
+- Search by host/domain/IP.
+- Filter to live web assets.
+- Filter DNS-only assets.
+- Filter by source to debug discovery quality.
+- Sort by provider/status/value.
+- Export assets or IPs.
+- Select candidates for AI Operator review.
+
+Outputs:
+
+- Filtered asset table.
+- Asset count and pagination state.
+- Exported assets/IPs.
+- Candidate list for manual or operator-guided testing.
+
+Evidence interpretation:
+
+- Live assets are higher priority for active web review.
+- Dead assets may still matter for takeover, DNS history, or recon coverage.
+- WAF/CDN/cloud indicators affect payload strategy and validation interpretation.
+- Source attribution helps identify whether a host came from passive discovery, brute-force, mutation, or crawl.
+- 403/429/5xx and WAF-blocked responses are not confirmed vulnerabilities.
+
+Common errors:
+
+- Filters hide expected assets.
+- Pagination appears empty after filter changes.
+- DNS-only asset is mistaken for live web asset.
+- WAF/CDN causes blocked or misleading HTTP responses.
+- Asset has no A record and should not be counted live.
+- Source attribution looks missing because older data lacked source metadata.
+
+Security notes:
+
+- Do not actively test out-of-scope assets.
+- Do not overclaim dead/blocked/inconclusive states.
+- Export files should be treated as sensitive.
+
+Documentation requirements:
+
+- Screenshot of asset table.
+- Screenshot of filters.
+- Explain each filter.
+- Explain source/provider interpretation.
+- Explain live/dead and WAF/CDN/cloud evidence.
+
+---
+
+## Intel / URLs Tab
+
+UI route: `/targets/:id -> Intel / URLs`
+
+Purpose:
+
+- Review collected URLs, endpoints, JavaScript resources, and historical/crawler intelligence.
+
+Features:
+
+- Search URLs.
+- Only JS filter.
+- Source filters.
+- Sort by resource locator.
+- Sort by source.
+- Sort by created time.
+- Pagination.
+- Export URLs.
+
+URL sources:
+
+- Wayback.
+- GAU.
+- Katana.
+- Waymore.
+- VirusTotal.
+- Imported or internal sources where available.
+
+Displayed URL evidence:
+
+- Resource locator.
+- Source.
+- Created timestamp.
+- JS/resource type where inferred.
+
+User actions:
+
+- Search for endpoints, parameters, extensions, or keywords.
+- Filter JavaScript files.
+- Filter by source.
+- Export URL inventory.
+- Identify parameterized endpoints for validation.
+- Identify JS resources for JS audit.
+
+Outputs:
+
+- URL inventory.
+- JavaScript candidate list.
+- Parameterized endpoint candidates.
+- Exported URL file.
+
+Evidence interpretation:
+
+- Parameterized URLs are useful for XSS, open redirect, path traversal, SQLi/NoSQLi strategy, SSRF, authz, and business logic review.
+- JavaScript URLs are useful for source/sink, route, secret, API endpoint, and DOM XSS analysis.
+- Historical URLs may be stale but still valuable for endpoint discovery.
+- Source attribution explains where the URL came from and how reliable/current it may be.
+
+Common errors:
+
+- URL list is empty because URL modules were disabled.
+- Only JS filter hides non-JS endpoints.
+- Source filter hides expected URLs.
+- Historical URL no longer resolves.
+- Export output follows active filters and may appear incomplete.
+
+Security notes:
+
+- Do not actively test out-of-scope URLs.
+- Historical URLs should be validated safely before claims.
+- Secret-looking strings from JS require confirmation and responsible handling.
+
+Documentation requirements:
+
+- Screenshot of URLs tab.
+- Screenshot of JS-only filter.
+- Explain every source.
+- Explain endpoint and parameter hunting workflow.
+
+---
+
+## Target Policy Tab
+
+UI route: `/targets/:id -> Policy`
+
+Purpose:
+
+- Define authorized execution boundaries for the target.
+- Control Operator autonomy, approvals, runtime levels, rate/budget boundaries, and scope behavior.
+
+Features:
+
+- Target scope settings.
+- Operator mode.
+- Manual only mode.
+- Assisted autopilot mode.
+- Strict approval mode.
+- Auto-execute level 0.
+- Auto-execute level 1.
+- Require approval level 2.
+- Require approval level 3.
+- Rate limit controls where available.
+- Budget and stop-condition controls where available.
+
+User actions:
+
+- Review target authorization before testing.
+- Set operator mode.
+- Configure auto-execution for low-risk actions.
+- Require approval for higher-risk actions.
+- Save policy.
+- Revisit policy before active validation or exploit proof.
+
+Outputs:
+
+- Stored target policy.
+- Operator behavior changes.
+- Runtime approval decisions.
+- Action status such as executed, proposed, blocked, or approval required.
+
+Evidence interpretation:
+
+- Policy does not make Hunt Engine passive-only.
+- Policy defines controlled, authorized, audited execution.
+- A policy block is a safety/scope decision, not evidence that a bug does or does not exist.
+- Approval-required means the system needs explicit user authorization before proceeding.
+
+Common errors:
+
+- Action blocked by policy.
+- Approval required.
+- Operator did not auto-execute because mode is strict/manual.
+- Feature flag hides Policy tab.
+- User expects high-risk validation to run under low-risk autopilot settings.
+
+Security notes:
+
+- Real validation and exploitation require explicit authorization.
+- Out-of-scope, destructive, DoS-like, credential-theft, uncontrolled brute-force, or unbounded actions must be blocked.
+- Budget, rate limit, stop condition, and audit requirements must be clear.
+
+Documentation requirements:
+
+- Screenshot of policy tab.
+- Explain each operator mode.
+- Explain each approval level.
+- Explain policy blocked vs inconclusive vs vulnerable.
+- Explain authorized exploitation boundaries.
+
+---
+
+## Findings Tab
+
+UI route: `/targets/:id -> Findings`
+
+Purpose:
+
+- Review, triage, update, and export findings with evidence.
+
+Features:
+
+- Findings list.
+- Finding stats.
+- Status filter.
+- Severity filter.
+- Source tool filter.
+- Category filter.
+- Search.
+- Update finding status.
+- Triage note.
+- Export target findings as CSV.
+- Export target findings as JSON.
+
+Displayed finding evidence:
+
+- Title/name.
+- Severity.
+- Confidence.
+- Status.
+- Category.
+- Source tool.
+- Evidence JSON.
+- Triage note.
+- Created/updated timestamps where shown.
+
+User actions:
+
+- Filter by severity/status/category.
+- Search findings.
+- Open or inspect finding evidence.
+- Update triage status.
+- Add triage note.
+- Export findings for report/review.
+
+Outputs:
+
+- Filtered finding list.
+- Finding stats.
+- Updated finding status.
+- Exported CSV/JSON.
+
+Evidence interpretation:
+
+- Severity should follow demonstrated impact and scope.
+- Confidence should follow evidence quality and reproducibility.
+- Inconclusive evidence is not a confirmed vulnerability.
+- Blocked/WAF responses are not confirmation by themselves.
+- Findings should not be promoted without sufficient evidence.
+
+Common errors:
+
+- False positive finding.
+- Missing reproduction.
+- Inconclusive evidence.
+- Export appears empty because filters are active.
+- User changes status without evidence note.
+
+Security notes:
+
+- Findings and exports may contain sensitive vulnerability data.
+- Do not disclose findings without authorization.
+- Evidence must be sanitized for public reports.
+
+Documentation requirements:
+
+- Screenshot of findings list.
+- Screenshot of evidence JSON.
+- Explain severity/confidence/status.
+- Explain export behavior.
+- Explain triage workflow.
+
+---
+
+## Analysis Tab
+
+UI route: `/targets/:id -> Analysis`
+
+Purpose:
+
+- Host AI-assisted analysis, recommendations, agent panels, controlled bug testing, registries, operator profile, and Attack Surface Chat.
+
+Subpanels:
+
+- AI Analysis.
+- Recommendations.
+- Advisory Agents.
+- Agent Actions.
+- Bug Tests.
+- Pattern Registry.
+- Payload Registry.
+- Operator Profile.
+- Attack Surface Chat.
+
+User actions:
+
+- Review AI-generated target analysis.
+- Read recommendations.
+- Inspect advisory agents.
+- Review proposed or executed agent actions.
+- Inspect bug test results.
+- Review pattern/payload registries.
+- Configure Operator Profile.
+- Ask AI Operator to reason over target evidence.
+
+Outputs:
+
+- AI summaries.
+- Recommendations.
+- Agent action proposals/results.
+- Bug test runs/results.
+- Pattern and payload metadata.
+- Operator profile configuration.
+- Chat output and controlled runtime evidence.
+
+Evidence interpretation:
+
+- AI analysis is not automatically a finding.
+- Recommendations are guidance until validated.
+- Agent action results must be classified as confirmed, inconclusive, blocked, or failed based on evidence.
+- Pattern/payload registry entries are metadata and strategy inputs, not vulnerability proof by themselves.
+
+Common errors:
+
+- Analysis tab hidden by feature flag.
+- AI provider not configured.
+- Operator has insufficient target evidence.
+- Skill not implemented.
+- Policy blocks execution.
+- Result is inconclusive.
+
+Security notes:
+
+- Operator actions must remain target-scoped and policy-gated.
+- Payload and exploit-capable workflows require authorization and audit.
+- Registry payload metadata should not imply uncontrolled execution.
+
+Documentation requirements:
+
+- Screenshot of Analysis tab.
+- Screenshot each subpanel.
+- Explain how AI analysis differs from confirmed findings.
+- Explain operator evidence workflow.
+
+---
