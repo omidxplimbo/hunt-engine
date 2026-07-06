@@ -938,3 +938,11 @@ The next release should connect approved Operator actions to controlled real tes
 - RAG memory updates after test results, approvals, rejections, failed hypotheses, and useful findings.
 - Continued separation between chat planning, approval workflow, and controlled runtime execution.
 
+## Releases
+
+### v3.15.1 - Bug-Class Validation Runtimes
+
+v3.15.1 adds controlled, evidence-producing Level 2 validation runtimes for the v3.15 bug-class validation skills: XSS reflection context, DOM XSS source/sink evidence, CRLF/header marker checks, cache behavior evidence, open redirect chain behavior, safe path traversal baseline checks, and CORS/clickjacking/CSRF baseline header review.
+
+The release includes `scripts/smoke_operator_bug_class_validation_v3151.sh` and release notes at `docs/release-notes/v3.15.1.md`.
+
