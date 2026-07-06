@@ -25,6 +25,8 @@ const (
 	openRedirectChainSkillSlug        = "open_redirect_chain"
 	pathTraversalFileReadBaselineSlug = "path_traversal_file_read_baseline"
 	crlfHeaderInjectionSkillSlug      = "crlf_header_injection"
+	cachePoisoningDeceptionSkillSlug  = "cache_poisoning_deception"
+	corsClickjackingCSRFSkillSlug     = "cors_clickjacking_csrf"
 )
 
 type parameterInventoryCandidate struct {
@@ -2819,6 +2821,28 @@ func executeSelectedOperatorSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey st
 		}
 	}
 
+	if runIDs := selectedBySlug[cachePoisoningDeceptionSkillSlug]; len(runIDs) > 0 {
+		cacheOutput, err := executeCachePoisoningDeceptionSkillRunsFromChat(db, uid, ownerKey, target, runIDs)
+		if err != nil {
+			output["cache_poisoning_deception_error"] = err.Error()
+			blockedCount += len(runIDs)
+		} else if cacheOutput != nil {
+			output["cache_poisoning_deception"] = cacheOutput
+			executedCount += len(runIDs)
+		}
+	}
+
+	if runIDs := selectedBySlug[corsClickjackingCSRFSkillSlug]; len(runIDs) > 0 {
+		corsOutput, err := executeCORSClickjackingCSRFSkillRunsFromChat(db, uid, ownerKey, target, runIDs)
+		if err != nil {
+			output["cors_clickjacking_csrf_error"] = err.Error()
+			blockedCount += len(runIDs)
+		} else if corsOutput != nil {
+			output["cors_clickjacking_csrf"] = corsOutput
+			executedCount += len(runIDs)
+		}
+	}
+
 	if runIDs := selectedBySlug[pathTraversalFileReadBaselineSlug]; len(runIDs) > 0 {
 		pathFileReadOutput, err := executePathTraversalFileReadBaselineSkillRunsFromChat(db, uid, ownerKey, target, runIDs)
 		if err != nil {
@@ -2832,7 +2856,7 @@ func executeSelectedOperatorSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey st
 
 	notImplemented := make([]map[string]interface{}, 0)
 	for slug, runIDs := range selectedBySlug {
-		if slug == parameterInventorySkillSlug || slug == httpEvidenceAnalysisSkillSlug || slug == authContextNeededSkillSlug || slug == jsAuditSkillSlug || slug == xssReflectionSkillSlug || slug == openRedirectSkillSlug || slug == pathTraversalBaselineSkillSlug || slug == xssReflectionContextSkillSlug || slug == openRedirectChainSkillSlug || slug == pathTraversalFileReadBaselineSlug || slug == crlfHeaderInjectionSkillSlug {
+		if slug == parameterInventorySkillSlug || slug == httpEvidenceAnalysisSkillSlug || slug == authContextNeededSkillSlug || slug == jsAuditSkillSlug || slug == xssReflectionSkillSlug || slug == openRedirectSkillSlug || slug == pathTraversalBaselineSkillSlug || slug == xssReflectionContextSkillSlug || slug == openRedirectChainSkillSlug || slug == pathTraversalFileReadBaselineSlug || slug == crlfHeaderInjectionSkillSlug || slug == cachePoisoningDeceptionSkillSlug || slug == corsClickjackingCSRFSkillSlug {
 			continue
 		}
 
@@ -3983,6 +4007,725 @@ func executeCRLFHeaderInjectionSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey
 		"runtime_scope":    "controlled_header_marker_probe_no_raw_crlf_payload",
 		"execution_level":  2,
 		"validation_class": "crlf_header_injection",
+	}, nil
+}
+
+func cacheHeaderSignal(headers map[string]string) bool {
+	for _, name := range []string{"Cache-Control", "Age", "ETag", "Vary", "X-Cache", "CF-Cache-Status"} {
+		if strings.TrimSpace(headers[name]) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func buildCacheBehaviorCandidates(foundURLs []models.FoundURL) []openRedirectCandidate {
+	seen := map[string]bool{}
+	out := make([]openRedirectCandidate, 0)
+
+	add := func(rawURL, source, reason string, confidence int) {
+		rawURL = strings.TrimSpace(rawURL)
+		if rawURL == "" {
+			return
+		}
+		if seen[rawURL] {
+			return
+		}
+		seen[rawURL] = true
+		if confidence <= 0 {
+			confidence = 55
+		}
+		out = append(out, openRedirectCandidate{
+			ParamName:  "hunt_cache_buster",
+			URL:        rawURL,
+			Source:     source,
+			Reason:     reason,
+			Confidence: confidence,
+		})
+	}
+
+	for _, foundURL := range foundURLs {
+		value := strings.TrimSpace(foundURL.Value)
+		if value == "" {
+			continue
+		}
+		lower := strings.ToLower(value)
+
+		switch {
+		case strings.Contains(value, "?"):
+			add(value, "found_url_query", "URL has query parameters that may influence cache-key behavior. Runtime uses a controlled cache-buster only and does not poison cache.", 62)
+		case strings.Contains(lower, ".css") || strings.Contains(lower, ".js") || strings.Contains(lower, ".png") || strings.Contains(lower, ".jpg") || strings.Contains(lower, ".jpeg") || strings.Contains(lower, ".svg") || strings.Contains(lower, ".webp"):
+			add(value, "found_url_static_asset", "Static asset path can expose CDN/cache behavior evidence.", 58)
+		case strings.Contains(lower, "/api/") || strings.Contains(lower, "/graphql") || strings.Contains(lower, "/download") || strings.Contains(lower, "/export"):
+			add(value, "found_url_dynamic_path", "Dynamic/API/download-like route may need cacheability review.", 56)
+		}
+
+		if len(out) >= 25 {
+			break
+		}
+	}
+
+	return out
+}
+
+func addCacheBuster(rawURL string, marker string) (string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed == nil {
+		return "", false
+	}
+	q := parsed.Query()
+	q.Set("hunt_cache_buster", marker)
+	parsed.RawQuery = q.Encode()
+	return parsed.String(), true
+}
+
+func executeCachePoisoningDeceptionSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
+	if target == nil || len(selectedSkillRunIDs) == 0 {
+		return nil, nil
+	}
+
+	runs := make([]models.OperatorSkillRun, 0)
+	if err := db.
+		Where("id IN ? AND target_id = ? AND user_id = ? AND owner_key = ? AND skill_slug = ?", selectedSkillRunIDs, target.ID, uid, ownerKey, cachePoisoningDeceptionSkillSlug).
+		Order("id ASC").
+		Find(&runs).Error; err != nil {
+		return nil, err
+	}
+	if len(runs) == 0 {
+		return nil, nil
+	}
+
+	foundURLs := make([]models.FoundURL, 0)
+	if err := db.Where("target_id = ?", target.ID).
+		Order("last_seen DESC NULLS LAST, id DESC").
+		Limit(1000).
+		Find(&foundURLs).Error; err != nil {
+		return nil, err
+	}
+
+	candidates := buildCacheBehaviorCandidates(foundURLs)
+	if len(candidates) > 10 {
+		candidates = candidates[:10]
+	}
+
+	now := time.Now().UTC()
+	runSummaries := make([]map[string]interface{}, 0, len(runs))
+
+	for _, run := range runs {
+		startedAt := now
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":     models.OperatorSkillRunStatusRunning,
+				"started_at": &startedAt,
+				"updated_at": now,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		marker := controlledValidationMarker("hunt_cache", run.ID)
+		createdObservationIDs := make([]uint, 0)
+		probeResults := make([]map[string]interface{}, 0)
+		cacheSignalCount := 0
+		blockedCount := 0
+		inconclusiveCount := 0
+
+		if len(candidates) == 0 {
+			observation := models.OperatorSkillObservation{
+				UserID:          uid,
+				OwnerKey:        ownerKey,
+				TargetID:        target.ID,
+				SkillRunID:      run.ID,
+				SkillSlug:       cachePoisoningDeceptionSkillSlug,
+				ObservationType: models.OperatorSkillObservationTypeLearning,
+				Title:           "Cache validation needs cacheable candidates",
+				Summary:         "No cache-relevant URLs were available for controlled cache behavior probing.",
+				Content:         "Learning: improve crawling, static asset discovery, API route discovery, and baseline HTTP evidence before cache validation.",
+				BugClass:        "cache_poisoning_deception",
+				Confidence:      60,
+				Severity:        models.FindingSeverityInfo,
+				Status:          models.OperatorSkillRunStatusCompleted,
+				EvidenceJSON: chatJSON(map[string]interface{}{
+					"sampled_url_count": len(foundURLs),
+					"candidate_count":   0,
+					"runtime_scope":     "controlled_cache_behavior_probe_no_poisoning_payload",
+				}),
+				Metadata: chatJSON(map[string]interface{}{
+					"created_by":          "cache-poisoning-deception-runtime-v1",
+					"operator_skill_run":  run.ID,
+					"target_id":           target.ID,
+					"observation_version": "cache-behavior-learning-v1",
+				}),
+			}
+			if err := db.Create(&observation).Error; err != nil {
+				return nil, err
+			}
+			createdObservationIDs = append(createdObservationIDs, observation.ID)
+		} else {
+			for _, candidate := range candidates {
+				probeURL, ok := addCacheBuster(candidate.URL, marker)
+				if !ok {
+					continue
+				}
+
+				first := controlledGETProbe(probeURL, 8*time.Second)
+				second := controlledGETProbe(probeURL, 8*time.Second)
+
+				firstSignal := cacheHeaderSignal(first.HeaderSample)
+				secondSignal := cacheHeaderSignal(second.HeaderSample)
+				cacheSignal := firstSignal || secondSignal
+				if cacheSignal {
+					cacheSignalCount++
+				}
+				if first.Blocked || second.Blocked {
+					blockedCount++
+				}
+				if first.Inconclusive || second.Inconclusive {
+					inconclusiveCount++
+				}
+
+				status := "candidate"
+				observationType := models.OperatorSkillObservationTypeCandidate
+				severity := models.FindingSeverityInfo
+				confidence := candidate.Confidence
+				if confidence <= 0 {
+					confidence = 60
+				}
+				if cacheSignal && !first.Inconclusive && !second.Inconclusive {
+					status = "evidence"
+					observationType = models.OperatorSkillObservationTypeEvidence
+					confidence += 10
+					if confidence > 85 {
+						confidence = 85
+					}
+				}
+				if first.Inconclusive || second.Inconclusive {
+					status = "inconclusive"
+					observationType = models.OperatorSkillObservationTypeLearning
+					if confidence > 65 {
+						confidence = 65
+					}
+				}
+
+				summary := fmt.Sprintf("Controlled cache behavior probe checked URL; first=%d second=%d cache_signal=%t.", first.StatusCode, second.StatusCode, cacheSignal)
+
+				observation := models.OperatorSkillObservation{
+					UserID:          uid,
+					OwnerKey:        ownerKey,
+					TargetID:        target.ID,
+					SkillRunID:      run.ID,
+					SkillSlug:       cachePoisoningDeceptionSkillSlug,
+					ObservationType: observationType,
+					Title:           "Cache behavior probe",
+					Summary:         summary,
+					Content:         "Runtime scope: controlled_cache_behavior_probe_no_poisoning_payload. This uses a cache-buster marker and does not attempt cache poisoning.",
+					URL:             probeURL,
+					ParamName:       candidate.ParamName,
+					BugClass:        "cache_poisoning_deception",
+					Confidence:      confidence,
+					Severity:        severity,
+					Status:          status,
+					EvidenceJSON: chatJSON(map[string]interface{}{
+						"original_url":            candidate.URL,
+						"probe_url":               probeURL,
+						"marker":                  marker,
+						"first_status_code":       first.StatusCode,
+						"second_status_code":      second.StatusCode,
+						"first_headers":           first.HeaderSample,
+						"second_headers":          second.HeaderSample,
+						"first_blocked":           first.Blocked,
+						"second_blocked":          second.Blocked,
+						"first_inconclusive":      first.Inconclusive,
+						"second_inconclusive":     second.Inconclusive,
+						"cache_header_signal":     cacheSignal,
+						"runtime_scope":           "controlled_cache_behavior_probe_no_poisoning_payload",
+						"execution_level":         2,
+						"destructive":             false,
+						"state_changing":          false,
+						"cache_poisoning_payload": false,
+					}),
+					Metadata: chatJSON(map[string]interface{}{
+						"created_by":          "cache-poisoning-deception-runtime-v1",
+						"operator_skill_run":  run.ID,
+						"target_id":           target.ID,
+						"observation_version": "cache-behavior-probe-v1",
+					}),
+				}
+				if err := db.Create(&observation).Error; err != nil {
+					return nil, err
+				}
+				createdObservationIDs = append(createdObservationIDs, observation.ID)
+
+				probeResults = append(probeResults, map[string]interface{}{
+					"original_url":        candidate.URL,
+					"probe_url":           probeURL,
+					"first_status_code":   first.StatusCode,
+					"second_status_code":  second.StatusCode,
+					"cache_header_signal": cacheSignal,
+					"first_headers":       first.HeaderSample,
+					"second_headers":      second.HeaderSample,
+					"blocked":             first.Blocked || second.Blocked,
+					"inconclusive":        first.Inconclusive || second.Inconclusive,
+				})
+			}
+		}
+
+		status := models.OperatorSkillRunStatusCompleted
+		resultSummary := fmt.Sprintf("Cache behavior validation probed %d candidate(s), found %d cache header signal(s), and %d blocked/inconclusive result(s).", len(probeResults), cacheSignalCount, blockedCount+inconclusiveCount)
+		nextStep := "If cache behavior is promising, use approved cache-key validation with stricter budgets and stop conditions; do not attempt poisoning without explicit authorization."
+
+		output := map[string]interface{}{
+			"status":             status,
+			"skill":              cachePoisoningDeceptionSkillSlug,
+			"runtime_version":    "cache-poisoning-deception-runtime-v1",
+			"runtime_scope":      "controlled_cache_behavior_probe_no_poisoning_payload",
+			"execution_level":    2,
+			"sampled_url_count":  len(foundURLs),
+			"candidate_count":    len(candidates),
+			"probe_count":        len(probeResults),
+			"cache_signal_count": cacheSignalCount,
+			"blocked_count":      blockedCount,
+			"inconclusive_count": inconclusiveCount,
+			"observation_count":  len(createdObservationIDs),
+			"observation_ids":    createdObservationIDs,
+			"probe_results":      probeResults,
+			"memory_ingested":    false,
+			"memory_scope":       "operator_skill_observations_only",
+		}
+
+		completedAt := time.Now().UTC()
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":         status,
+				"output_json":    chatJSON(output),
+				"result_summary": resultSummary,
+				"next_step":      nextStep,
+				"completed_at":   &completedAt,
+				"updated_at":     completedAt,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		runSummaries = append(runSummaries, map[string]interface{}{
+			"skill_run_id":       run.ID,
+			"status":             status,
+			"candidate_count":    len(candidates),
+			"probe_count":        len(probeResults),
+			"cache_signal_count": cacheSignalCount,
+			"blocked_count":      blockedCount,
+			"inconclusive_count": inconclusiveCount,
+			"observation_count":  len(createdObservationIDs),
+			"observation_ids":    createdObservationIDs,
+			"runtime_scope":      "controlled_cache_behavior_probe_no_poisoning_payload",
+		})
+	}
+
+	return map[string]interface{}{
+		"status":           models.OperatorSkillRunStatusCompleted,
+		"runs":             runSummaries,
+		"run_count":        len(runSummaries),
+		"runtime_scope":    "controlled_cache_behavior_probe_no_poisoning_payload",
+		"execution_level":  2,
+		"validation_class": "cache_poisoning_deception",
+	}, nil
+}
+
+func controlledOPTIONSProbe(rawURL string, timeout time.Duration, origin string) controlledHTTPProbeResult {
+	result := controlledHTTPProbeResult{
+		URL:          rawURL,
+		HeaderSample: map[string]string{},
+	}
+
+	req, err := http.NewRequest(http.MethodOptions, rawURL, nil)
+	if err != nil {
+		result.Error = err.Error()
+		result.Inconclusive = true
+		return result
+	}
+
+	req.Header.Set("User-Agent", "HuntEngine-Authorized-Validation/3.15.1")
+	req.Header.Set("Origin", origin)
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	req.Header.Set("Accept", "*/*")
+
+	client := &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		result.Error = err.Error()
+		result.Inconclusive = true
+		return result
+	}
+	defer resp.Body.Close()
+
+	result.StatusCode = resp.StatusCode
+	result.ContentType = resp.Header.Get("Content-Type")
+	result.CSP = resp.Header.Get("Content-Security-Policy")
+	result.Location = resp.Header.Get("Location")
+
+	for _, name := range []string{
+		"Access-Control-Allow-Origin",
+		"Access-Control-Allow-Credentials",
+		"Access-Control-Allow-Methods",
+		"Access-Control-Allow-Headers",
+		"Vary",
+		"Content-Type",
+		"Content-Security-Policy",
+		"X-Frame-Options",
+		"Set-Cookie",
+		"Server",
+	} {
+		if value := strings.TrimSpace(resp.Header.Get(name)); value != "" {
+			result.HeaderSample[name] = value
+		}
+	}
+
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		result.Blocked = true
+		result.Inconclusive = true
+	}
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+	result.BodySample = string(body)
+
+	return result
+}
+
+func buildCORSClickjackingCSRFCandidates(foundURLs []models.FoundURL) []openRedirectCandidate {
+	seen := map[string]bool{}
+	out := make([]openRedirectCandidate, 0)
+
+	add := func(rawURL, source, reason string, confidence int) {
+		rawURL = strings.TrimSpace(rawURL)
+		if rawURL == "" {
+			return
+		}
+		if seen[rawURL] {
+			return
+		}
+		seen[rawURL] = true
+		if confidence <= 0 {
+			confidence = 55
+		}
+		out = append(out, openRedirectCandidate{
+			ParamName:  "headers",
+			URL:        rawURL,
+			Source:     source,
+			Reason:     reason,
+			Confidence: confidence,
+		})
+	}
+
+	for _, foundURL := range foundURLs {
+		value := strings.TrimSpace(foundURL.Value)
+		if value == "" {
+			continue
+		}
+		lower := strings.ToLower(value)
+
+		switch {
+		case strings.Contains(lower, "/api/") || strings.Contains(lower, "/graphql") || strings.Contains(lower, "/v1/") || strings.Contains(lower, "/v2/"):
+			add(value, "found_url_api_route", "API-like route may need CORS baseline validation.", 62)
+		case strings.Contains(lower, "login") || strings.Contains(lower, "logout") || strings.Contains(lower, "account") || strings.Contains(lower, "profile") || strings.Contains(lower, "settings") || strings.Contains(lower, "admin"):
+			add(value, "found_url_session_route", "Session/account-like route may need frame/cookie/CSRF baseline review.", 60)
+		case strings.HasSuffix(lower, "/") || strings.Contains(lower, "dashboard"):
+			add(value, "found_url_page_route", "Page-like route may need clickjacking/frame-header baseline review.", 55)
+		}
+
+		if len(out) >= 25 {
+			break
+		}
+	}
+
+	return out
+}
+
+func cookieSecuritySummary(setCookie string) map[string]interface{} {
+	lower := strings.ToLower(setCookie)
+	return map[string]interface{}{
+		"set_cookie_present": strings.TrimSpace(setCookie) != "",
+		"httponly":           strings.Contains(lower, "httponly"),
+		"secure":             strings.Contains(lower, "secure"),
+		"samesite":           strings.Contains(lower, "samesite"),
+	}
+}
+
+func executeCORSClickjackingCSRFSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
+	if target == nil || len(selectedSkillRunIDs) == 0 {
+		return nil, nil
+	}
+
+	runs := make([]models.OperatorSkillRun, 0)
+	if err := db.
+		Where("id IN ? AND target_id = ? AND user_id = ? AND owner_key = ? AND skill_slug = ?", selectedSkillRunIDs, target.ID, uid, ownerKey, corsClickjackingCSRFSkillSlug).
+		Order("id ASC").
+		Find(&runs).Error; err != nil {
+		return nil, err
+	}
+	if len(runs) == 0 {
+		return nil, nil
+	}
+
+	foundURLs := make([]models.FoundURL, 0)
+	if err := db.Where("target_id = ?", target.ID).
+		Order("last_seen DESC NULLS LAST, id DESC").
+		Limit(1000).
+		Find(&foundURLs).Error; err != nil {
+		return nil, err
+	}
+
+	candidates := buildCORSClickjackingCSRFCandidates(foundURLs)
+	if len(candidates) > 10 {
+		candidates = candidates[:10]
+	}
+
+	now := time.Now().UTC()
+	runSummaries := make([]map[string]interface{}, 0, len(runs))
+
+	for _, run := range runs {
+		startedAt := now
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":     models.OperatorSkillRunStatusRunning,
+				"started_at": &startedAt,
+				"updated_at": now,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		origin := fmt.Sprintf("https://hunt-v3151-origin-%d.invalid", run.ID)
+		createdObservationIDs := make([]uint, 0)
+		probeResults := make([]map[string]interface{}, 0)
+		corsSignalCount := 0
+		frameSignalCount := 0
+		cookieSignalCount := 0
+		blockedCount := 0
+		inconclusiveCount := 0
+
+		if len(candidates) == 0 {
+			observation := models.OperatorSkillObservation{
+				UserID:          uid,
+				OwnerKey:        ownerKey,
+				TargetID:        target.ID,
+				SkillRunID:      run.ID,
+				SkillSlug:       corsClickjackingCSRFSkillSlug,
+				ObservationType: models.OperatorSkillObservationTypeLearning,
+				Title:           "CORS/clickjacking/CSRF baseline needs candidates",
+				Summary:         "No API/page/session-like URLs were available for baseline header probing.",
+				Content:         "Learning: improve crawling, route discovery, API mining, and authenticated context capture before CORS/clickjacking/CSRF validation.",
+				BugClass:        "cors_clickjacking_csrf",
+				Confidence:      60,
+				Severity:        models.FindingSeverityInfo,
+				Status:          models.OperatorSkillRunStatusCompleted,
+				EvidenceJSON: chatJSON(map[string]interface{}{
+					"sampled_url_count": len(foundURLs),
+					"candidate_count":   0,
+					"runtime_scope":     "controlled_cors_frame_cookie_header_probe_no_state_change",
+				}),
+				Metadata: chatJSON(map[string]interface{}{
+					"created_by":          "cors-clickjacking-csrf-runtime-v1",
+					"operator_skill_run":  run.ID,
+					"target_id":           target.ID,
+					"observation_version": "cors-frame-csrf-learning-v1",
+				}),
+			}
+			if err := db.Create(&observation).Error; err != nil {
+				return nil, err
+			}
+			createdObservationIDs = append(createdObservationIDs, observation.ID)
+		} else {
+			for _, candidate := range candidates {
+				getProbe := controlledGETProbe(candidate.URL, 8*time.Second)
+				optionsProbe := controlledOPTIONSProbe(candidate.URL, 8*time.Second, origin)
+
+				acao := optionsProbe.HeaderSample["Access-Control-Allow-Origin"]
+				acac := optionsProbe.HeaderSample["Access-Control-Allow-Credentials"]
+				vary := optionsProbe.HeaderSample["Vary"]
+				xfo := getProbe.HeaderSample["X-Frame-Options"]
+				csp := getProbe.CSP
+				setCookie := getProbe.HeaderSample["Set-Cookie"]
+
+				corsSignal := strings.TrimSpace(acao) != "" || strings.TrimSpace(acac) != "" || strings.Contains(strings.ToLower(vary), "origin")
+				frameSignal := strings.TrimSpace(xfo) != "" || strings.Contains(strings.ToLower(csp), "frame-ancestors")
+				cookieSignal := strings.TrimSpace(setCookie) != ""
+
+				if corsSignal {
+					corsSignalCount++
+				}
+				if frameSignal {
+					frameSignalCount++
+				}
+				if cookieSignal {
+					cookieSignalCount++
+				}
+				if getProbe.Blocked || optionsProbe.Blocked {
+					blockedCount++
+				}
+				if getProbe.Inconclusive || optionsProbe.Inconclusive {
+					inconclusiveCount++
+				}
+
+				status := "candidate"
+				observationType := models.OperatorSkillObservationTypeCandidate
+				severity := models.FindingSeverityInfo
+				confidence := candidate.Confidence
+				if confidence <= 0 {
+					confidence = 60
+				}
+				if (corsSignal || frameSignal || cookieSignal) && !getProbe.Inconclusive && !optionsProbe.Inconclusive {
+					status = "evidence"
+					observationType = models.OperatorSkillObservationTypeEvidence
+					confidence += 10
+					if confidence > 85 {
+						confidence = 85
+					}
+				}
+				if getProbe.Inconclusive || optionsProbe.Inconclusive {
+					status = "inconclusive"
+					observationType = models.OperatorSkillObservationTypeLearning
+					if confidence > 65 {
+						confidence = 65
+					}
+				}
+
+				summary := fmt.Sprintf("Baseline header probe checked CORS/frame/cookie signals; CORS=%t frame=%t cookie=%t.", corsSignal, frameSignal, cookieSignal)
+
+				observation := models.OperatorSkillObservation{
+					UserID:          uid,
+					OwnerKey:        ownerKey,
+					TargetID:        target.ID,
+					SkillRunID:      run.ID,
+					SkillSlug:       corsClickjackingCSRFSkillSlug,
+					ObservationType: observationType,
+					Title:           "CORS/clickjacking/CSRF baseline probe",
+					Summary:         summary,
+					Content:         "Runtime scope: controlled_cors_frame_cookie_header_probe_no_state_change. This uses GET/OPTIONS only and does not perform state-changing CSRF execution.",
+					URL:             candidate.URL,
+					ParamName:       candidate.ParamName,
+					BugClass:        "cors_clickjacking_csrf",
+					Confidence:      confidence,
+					Severity:        severity,
+					Status:          status,
+					EvidenceJSON: chatJSON(map[string]interface{}{
+						"url":                   candidate.URL,
+						"origin":                origin,
+						"get_status_code":       getProbe.StatusCode,
+						"options_status_code":   optionsProbe.StatusCode,
+						"get_headers":           getProbe.HeaderSample,
+						"options_headers":       optionsProbe.HeaderSample,
+						"acao":                  acao,
+						"acac":                  acac,
+						"vary":                  vary,
+						"x_frame_options":       xfo,
+						"csp":                   csp,
+						"frame_ancestors":       strings.Contains(strings.ToLower(csp), "frame-ancestors"),
+						"cookie_summary":        cookieSecuritySummary(setCookie),
+						"cors_signal":           corsSignal,
+						"frame_signal":          frameSignal,
+						"cookie_signal":         cookieSignal,
+						"blocked":               getProbe.Blocked || optionsProbe.Blocked,
+						"inconclusive":          getProbe.Inconclusive || optionsProbe.Inconclusive,
+						"runtime_scope":         "controlled_cors_frame_cookie_header_probe_no_state_change",
+						"execution_level":       2,
+						"destructive":           false,
+						"state_changing":        false,
+						"csrf_executed":         false,
+						"authenticated_context": false,
+					}),
+					Metadata: chatJSON(map[string]interface{}{
+						"created_by":          "cors-clickjacking-csrf-runtime-v1",
+						"operator_skill_run":  run.ID,
+						"target_id":           target.ID,
+						"observation_version": "cors-frame-csrf-probe-v1",
+					}),
+				}
+				if err := db.Create(&observation).Error; err != nil {
+					return nil, err
+				}
+				createdObservationIDs = append(createdObservationIDs, observation.ID)
+
+				probeResults = append(probeResults, map[string]interface{}{
+					"url":                 candidate.URL,
+					"get_status_code":     getProbe.StatusCode,
+					"options_status_code": optionsProbe.StatusCode,
+					"cors_signal":         corsSignal,
+					"frame_signal":        frameSignal,
+					"cookie_signal":       cookieSignal,
+					"blocked":             getProbe.Blocked || optionsProbe.Blocked,
+					"inconclusive":        getProbe.Inconclusive || optionsProbe.Inconclusive,
+				})
+			}
+		}
+
+		status := models.OperatorSkillRunStatusCompleted
+		resultSummary := fmt.Sprintf("CORS/clickjacking/CSRF baseline validation probed %d candidate(s), found CORS=%d frame=%d cookie=%d signal(s), and %d blocked/inconclusive result(s).", len(probeResults), corsSignalCount, frameSignalCount, cookieSignalCount, blockedCount+inconclusiveCount)
+		nextStep := "Use authenticated/state-changing validation only when scope, authorization, and policy allow it."
+
+		output := map[string]interface{}{
+			"status":              status,
+			"skill":               corsClickjackingCSRFSkillSlug,
+			"runtime_version":     "cors-clickjacking-csrf-runtime-v1",
+			"runtime_scope":       "controlled_cors_frame_cookie_header_probe_no_state_change",
+			"execution_level":     2,
+			"sampled_url_count":   len(foundURLs),
+			"candidate_count":     len(candidates),
+			"probe_count":         len(probeResults),
+			"cors_signal_count":   corsSignalCount,
+			"frame_signal_count":  frameSignalCount,
+			"cookie_signal_count": cookieSignalCount,
+			"blocked_count":       blockedCount,
+			"inconclusive_count":  inconclusiveCount,
+			"observation_count":   len(createdObservationIDs),
+			"observation_ids":     createdObservationIDs,
+			"probe_results":       probeResults,
+			"memory_ingested":     false,
+			"memory_scope":        "operator_skill_observations_only",
+		}
+
+		completedAt := time.Now().UTC()
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":         status,
+				"output_json":    chatJSON(output),
+				"result_summary": resultSummary,
+				"next_step":      nextStep,
+				"completed_at":   &completedAt,
+				"updated_at":     completedAt,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		runSummaries = append(runSummaries, map[string]interface{}{
+			"skill_run_id":        run.ID,
+			"status":              status,
+			"candidate_count":     len(candidates),
+			"probe_count":         len(probeResults),
+			"cors_signal_count":   corsSignalCount,
+			"frame_signal_count":  frameSignalCount,
+			"cookie_signal_count": cookieSignalCount,
+			"blocked_count":       blockedCount,
+			"inconclusive_count":  inconclusiveCount,
+			"observation_count":   len(createdObservationIDs),
+			"observation_ids":     createdObservationIDs,
+			"runtime_scope":       "controlled_cors_frame_cookie_header_probe_no_state_change",
+		})
+	}
+
+	return map[string]interface{}{
+		"status":           models.OperatorSkillRunStatusCompleted,
+		"runs":             runSummaries,
+		"run_count":        len(runSummaries),
+		"runtime_scope":    "controlled_cors_frame_cookie_header_probe_no_state_change",
+		"execution_level":  2,
+		"validation_class": "cors_clickjacking_csrf",
 	}, nil
 }
 
