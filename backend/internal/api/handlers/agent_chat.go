@@ -3818,14 +3818,33 @@ func selectedOperatorSkillsForChat(text string, targetID uint, ownerKey string, 
 
 	if signals.HasXSSSignal || signals.ParameterizedURLCount > 0 {
 		addOperatorSkillSeed(&seeds, seen, "xss_reflection", "Parameterized/reflection signals exist; controlled XSS reflection/context validation may be useful when policy allows.")
+		addOperatorSkillSeed(&seeds, seen, "xss_reflection_context", "Reflection/context validation can classify reflected inputs before controlled payload execution is considered.")
+	}
+
+	if signals.HasJSAuditSignal || signals.HasXSSSignal {
+		addOperatorSkillSeed(&seeds, seen, "dom_xss", "JavaScript/DOM/source-sink signals indicate DOM XSS audit may identify browser-side validation candidates.")
+	}
+
+	if textHasAnySignal(text, "crlf", "header injection", "response splitting", "set-cookie", "location header", "x-forwarded", "هدر") {
+		addOperatorSkillSeed(&seeds, seen, "crlf_header_injection", "Header/CRLF signals indicate response-header injection validation planning may be useful.")
+	}
+
+	if textHasAnySignal(text, "cache poisoning", "cache deception", "cache-control", "x-cache", "vary", "cdn", "cloudflare", "akamai", "کش") {
+		addOperatorSkillSeed(&seeds, seen, "cache_poisoning_deception", "Cache/header/CDN signals indicate cache poisoning/deception validation planning may be useful.")
 	}
 
 	if signals.HasRedirectSignal {
 		addOperatorSkillSeed(&seeds, seen, "open_redirect", "Redirect or URL-like signals exist; open redirect and redirect-chain validation may be useful when policy allows.")
+		addOperatorSkillSeed(&seeds, seen, "open_redirect_chain", "Redirect/OAuth/callback signals can support chain-aware open redirect validation planning.")
 	}
 
 	if signals.HasFilePathSignal {
 		addOperatorSkillSeed(&seeds, seen, "path_traversal_baseline", "File/path/download/template signals exist; non-destructive path traversal/file-read baseline validation may be useful when policy allows.")
+		addOperatorSkillSeed(&seeds, seen, "path_traversal_file_read_baseline", "File/path/download/template signals can support controlled file-read/path traversal baseline validation planning.")
+	}
+
+	if textHasAnySignal(text, "cors", "clickjacking", "csrf", "frame-ancestors", "x-frame-options", "access-control-allow-origin", "samesite", "cookie", "کوکی") {
+		addOperatorSkillSeed(&seeds, seen, "cors_clickjacking_csrf", "CORS/clickjacking/CSRF/cookie-header signals indicate baseline session/header validation planning may be useful.")
 	}
 
 	disabledSkillSlugs := disabledOperatorSkillSlugsForTarget(targetID, ownerKey, uid)
