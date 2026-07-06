@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -2842,35 +2844,438 @@ func executeSelectedOperatorSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey st
 	return output, nil
 }
 
+func controlledValidationMarker(prefix string, runID uint) string {
+	base := strings.TrimSpace(prefix)
+	if base == "" {
+		base = "hunt"
+	}
+	return fmt.Sprintf("%s_v3151_%d", base, runID)
+}
+
+type controlledHTTPProbeResult struct {
+	URL          string
+	StatusCode   int
+	Blocked      bool
+	Inconclusive bool
+	Reflected    bool
+	ContentType  string
+	CSP          string
+	Location     string
+	BodySample   string
+	HeaderSample map[string]string
+	Error        string
+}
+
+func controlledGETProbe(rawURL string, timeout time.Duration) controlledHTTPProbeResult {
+	result := controlledHTTPProbeResult{
+		URL:          rawURL,
+		HeaderSample: map[string]string{},
+	}
+
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		result.Error = err.Error()
+		result.Inconclusive = true
+		return result
+	}
+
+	req.Header.Set("User-Agent", "HuntEngine-Authorized-Validation/3.15.1")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/json,text/plain,*/*;q=0.8")
+
+	client := &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		result.Error = err.Error()
+		result.Inconclusive = true
+		return result
+	}
+	defer resp.Body.Close()
+
+	result.StatusCode = resp.StatusCode
+	result.ContentType = resp.Header.Get("Content-Type")
+	result.CSP = resp.Header.Get("Content-Security-Policy")
+	result.Location = resp.Header.Get("Location")
+
+	for _, name := range []string{
+		"Content-Type",
+		"Content-Security-Policy",
+		"X-Content-Type-Options",
+		"X-Frame-Options",
+		"Location",
+		"Cache-Control",
+		"Vary",
+		"Set-Cookie",
+		"Server",
+		"CF-Cache-Status",
+		"X-Cache",
+	} {
+		if value := strings.TrimSpace(resp.Header.Get(name)); value != "" {
+			result.HeaderSample[name] = value
+		}
+	}
+
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		result.Blocked = true
+		result.Inconclusive = true
+	}
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16384))
+	result.BodySample = string(body)
+
+	return result
+}
+
+func buildProbeURLWithParam(rawURL string, paramName string, marker string) (string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed == nil {
+		return "", false
+	}
+
+	paramName = strings.TrimSpace(paramName)
+	if paramName == "" {
+		return "", false
+	}
+
+	q := parsed.Query()
+	if _, ok := q[paramName]; !ok {
+		return "", false
+	}
+	q.Set(paramName, marker)
+	parsed.RawQuery = q.Encode()
+
+	return parsed.String(), true
+}
+
+func roughReflectionContext(body string, marker string, contentType string) string {
+	if marker == "" || body == "" {
+		return "none"
+	}
+
+	lowerContentType := strings.ToLower(contentType)
+	lowerBody := strings.ToLower(body)
+	idx := strings.Index(body, marker)
+	if idx < 0 {
+		return "none"
+	}
+
+	if strings.Contains(lowerContentType, "application/json") {
+		return "json"
+	}
+	if strings.Contains(lowerContentType, "javascript") {
+		return "javascript"
+	}
+	if strings.Contains(lowerContentType, "text/plain") {
+		return "text"
+	}
+
+	start := idx - 80
+	if start < 0 {
+		start = 0
+	}
+	end := idx + len(marker) + 80
+	if end > len(body) {
+		end = len(body)
+	}
+	window := strings.ToLower(body[start:end])
+
+	switch {
+	case strings.Contains(window, "<script"):
+		return "script"
+	case strings.Contains(window, "href=\"") || strings.Contains(window, "src=\"") || strings.Contains(window, "value=\"") || strings.Contains(window, "='") || strings.Contains(window, "=\""):
+		return "html_attribute"
+	case strings.Contains(lowerBody, "<html") || strings.Contains(lowerBody, "<body") || strings.Contains(lowerBody, "<div") || strings.Contains(lowerBody, "<span"):
+		return "html_text"
+	default:
+		return "unknown_reflection"
+	}
+}
+
 func executeXSSReflectionContextSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
-	return executeCandidateClassificationAliasSkillRunsFromChat(
-		db,
-		uid,
-		ownerKey,
-		target,
-		selectedSkillRunIDs,
-		xssReflectionContextSkillSlug,
-		"xss",
-		"xss-reflection-context-runtime-v1",
-		"context_classification_no_payload_execution",
-		"XSS reflection context",
-		"Parameter is a candidate for reflection context classification before controlled payload execution is considered.",
-		"Use controlled reflection/context probing only when scope and policy allow.",
-		func(foundURLs []models.FoundURL, parameterObservations []models.OperatorSkillObservation) []map[string]interface{} {
-			candidates := buildXSSReflectionCandidates(foundURLs, parameterObservations)
-			out := make([]map[string]interface{}, 0, len(candidates))
+	if target == nil || len(selectedSkillRunIDs) == 0 {
+		return nil, nil
+	}
+
+	runs := make([]models.OperatorSkillRun, 0)
+	if err := db.
+		Where("id IN ? AND target_id = ? AND user_id = ? AND owner_key = ? AND skill_slug = ?", selectedSkillRunIDs, target.ID, uid, ownerKey, xssReflectionContextSkillSlug).
+		Order("id ASC").
+		Find(&runs).Error; err != nil {
+		return nil, err
+	}
+
+	if len(runs) == 0 {
+		return nil, nil
+	}
+
+	foundURLs := make([]models.FoundURL, 0)
+	if err := db.
+		Where("target_id = ?", target.ID).
+		Order("last_seen DESC NULLS LAST, id DESC").
+		Limit(1000).
+		Find(&foundURLs).Error; err != nil {
+		return nil, err
+	}
+
+	parameterObservations := make([]models.OperatorSkillObservation, 0)
+	_ = db.
+		Where("target_id = ? AND user_id = ? AND owner_key = ? AND skill_slug = ? AND observation_type = ?",
+			target.ID,
+			uid,
+			ownerKey,
+			parameterInventorySkillSlug,
+			models.OperatorSkillObservationTypeCandidate,
+		).
+		Order("created_at DESC, id DESC").
+		Limit(200).
+		Find(&parameterObservations).Error
+
+	candidates := buildXSSReflectionCandidates(foundURLs, parameterObservations)
+	if len(candidates) > 10 {
+		candidates = candidates[:10]
+	}
+
+	now := time.Now().UTC()
+	runSummaries := make([]map[string]interface{}, 0, len(runs))
+
+	for _, run := range runs {
+		startedAt := now
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":     models.OperatorSkillRunStatusRunning,
+				"started_at": &startedAt,
+				"updated_at": now,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		marker := controlledValidationMarker("hunt_xss_reflection_context", run.ID)
+		createdObservationIDs := make([]uint, 0)
+		probeResults := make([]map[string]interface{}, 0)
+		reflectionCount := 0
+		blockedCount := 0
+		inconclusiveCount := 0
+
+		if len(candidates) == 0 {
+			observation := models.OperatorSkillObservation{
+				UserID:          uid,
+				OwnerKey:        ownerKey,
+				TargetID:        target.ID,
+				SkillRunID:      run.ID,
+				SkillSlug:       xssReflectionContextSkillSlug,
+				ObservationType: models.OperatorSkillObservationTypeLearning,
+				Title:           "XSS reflection context validation needs candidates",
+				Summary:         "No XSS/reflection candidates were available for controlled marker probing.",
+				Content:         "Learning: improve crawling, parameter inventory, JS/API route mining, or reflection evidence before controlled XSS context validation.",
+				BugClass:        "xss",
+				Confidence:      60,
+				Severity:        models.FindingSeverityInfo,
+				Status:          models.OperatorSkillRunStatusCompleted,
+				EvidenceJSON: chatJSON(map[string]interface{}{
+					"sampled_url_count":           len(foundURLs),
+					"parameter_observation_count": len(parameterObservations),
+					"candidate_count":             0,
+					"skill":                       xssReflectionContextSkillSlug,
+					"runtime_scope":               "controlled_marker_reflection_probe_no_exploit_payload",
+				}),
+				Metadata: chatJSON(map[string]interface{}{
+					"created_by":          "xss-reflection-context-runtime-v1",
+					"operator_skill_run":  run.ID,
+					"target_id":           target.ID,
+					"observation_version": "xss-reflection-context-learning-v1",
+				}),
+			}
+			if err := db.Create(&observation).Error; err != nil {
+				return nil, err
+			}
+			createdObservationIDs = append(createdObservationIDs, observation.ID)
+		} else {
 			for _, candidate := range candidates {
-				out = append(out, map[string]interface{}{
-					"param_name": candidate.ParamName,
-					"url":        candidate.URL,
-					"source":     candidate.Source,
-					"reason":     candidate.Reason,
-					"confidence": candidate.Confidence,
+				probeURL, ok := buildProbeURLWithParam(candidate.URL, candidate.ParamName, marker)
+				if !ok {
+					continue
+				}
+
+				probe := controlledGETProbe(probeURL, 8*time.Second)
+				probe.Reflected = strings.Contains(probe.BodySample, marker)
+
+				contextClass := roughReflectionContext(probe.BodySample, marker, probe.ContentType)
+				if probe.Reflected {
+					reflectionCount++
+				}
+				if probe.Blocked {
+					blockedCount++
+				}
+				if probe.Inconclusive {
+					inconclusiveCount++
+				}
+
+				status := "candidate"
+				observationType := models.OperatorSkillObservationTypeCandidate
+				severity := models.FindingSeverityInfo
+				confidence := candidate.Confidence
+				if confidence <= 0 {
+					confidence = 65
+				}
+
+				if probe.Reflected && !probe.Inconclusive {
+					status = "evidence"
+					observationType = models.OperatorSkillObservationTypeEvidence
+					severity = models.FindingSeverityLow
+					confidence += 10
+					if confidence > 90 {
+						confidence = 90
+					}
+				}
+
+				if probe.Inconclusive {
+					status = "inconclusive"
+					observationType = models.OperatorSkillObservationTypeLearning
+					if confidence > 65 {
+						confidence = 65
+					}
+				}
+
+				title := fmt.Sprintf("XSS reflection context probe: %s", candidate.ParamName)
+				summary := fmt.Sprintf("Controlled marker probe checked parameter %q for reflection context.", candidate.ParamName)
+				if probe.Reflected {
+					summary = fmt.Sprintf("Controlled marker reflected for parameter %q in %s context.", candidate.ParamName, contextClass)
+				}
+				if probe.Inconclusive {
+					summary = fmt.Sprintf("Controlled marker probe for parameter %q was inconclusive or blocked.", candidate.ParamName)
+				}
+
+				observation := models.OperatorSkillObservation{
+					UserID:          uid,
+					OwnerKey:        ownerKey,
+					TargetID:        target.ID,
+					SkillRunID:      run.ID,
+					SkillSlug:       xssReflectionContextSkillSlug,
+					ObservationType: observationType,
+					Title:           title,
+					Summary:         summary,
+					Content:         "Runtime scope: controlled_marker_reflection_probe_no_exploit_payload. This probe uses an inert marker value and does not execute browser or exploit payloads.",
+					URL:             probeURL,
+					ParamName:       candidate.ParamName,
+					BugClass:        "xss",
+					Confidence:      confidence,
+					Severity:        severity,
+					Status:          status,
+					EvidenceJSON: chatJSON(map[string]interface{}{
+						"original_url":     candidate.URL,
+						"probe_url":        probeURL,
+						"parameter":        candidate.ParamName,
+						"marker":           marker,
+						"status_code":      probe.StatusCode,
+						"blocked":          probe.Blocked,
+						"inconclusive":     probe.Inconclusive,
+						"reflected":        probe.Reflected,
+						"context":          contextClass,
+						"content_type":     probe.ContentType,
+						"csp":              probe.CSP,
+						"location":         probe.Location,
+						"header_sample":    probe.HeaderSample,
+						"error":            probe.Error,
+						"runtime_scope":    "controlled_marker_reflection_probe_no_exploit_payload",
+						"execution_level":  2,
+						"destructive":      false,
+						"state_changing":   false,
+						"browser_executed": false,
+					}),
+					Metadata: chatJSON(map[string]interface{}{
+						"created_by":          "xss-reflection-context-runtime-v1",
+						"operator_skill_run":  run.ID,
+						"target_id":           target.ID,
+						"observation_version": "xss-reflection-context-probe-v1",
+					}),
+				}
+
+				if err := db.Create(&observation).Error; err != nil {
+					return nil, err
+				}
+				createdObservationIDs = append(createdObservationIDs, observation.ID)
+
+				probeResults = append(probeResults, map[string]interface{}{
+					"param_name":   candidate.ParamName,
+					"original_url": candidate.URL,
+					"probe_url":    probeURL,
+					"status_code":  probe.StatusCode,
+					"blocked":      probe.Blocked,
+					"inconclusive": probe.Inconclusive,
+					"reflected":    probe.Reflected,
+					"context":      contextClass,
+					"content_type": probe.ContentType,
+					"csp_present":  strings.TrimSpace(probe.CSP) != "",
 				})
 			}
-			return out
-		},
-	)
+		}
+
+		status := models.OperatorSkillRunStatusCompleted
+		resultSummary := fmt.Sprintf("XSS reflection context validation probed %d candidate(s), found %d reflection(s), %d blocked/inconclusive result(s).", len(probeResults), reflectionCount, blockedCount+inconclusiveCount)
+		nextStep := "If marker reflection exists, use approved browser/context-aware validation later; do not promote exploitability without payload/context proof."
+
+		output := map[string]interface{}{
+			"status":                      status,
+			"skill":                       xssReflectionContextSkillSlug,
+			"runtime_version":             "xss-reflection-context-runtime-v1",
+			"runtime_scope":               "controlled_marker_reflection_probe_no_exploit_payload",
+			"execution_level":             2,
+			"sampled_url_count":           len(foundURLs),
+			"parameter_observation_count": len(parameterObservations),
+			"candidate_count":             len(candidates),
+			"probe_count":                 len(probeResults),
+			"reflection_count":            reflectionCount,
+			"blocked_count":               blockedCount,
+			"inconclusive_count":          inconclusiveCount,
+			"observation_count":           len(createdObservationIDs),
+			"observation_ids":             createdObservationIDs,
+			"probe_results":               probeResults,
+			"memory_ingested":             false,
+			"memory_scope":                "operator_skill_observations_only",
+		}
+
+		completedAt := time.Now().UTC()
+		if err := db.Model(&models.OperatorSkillRun{}).
+			Where("id = ?", run.ID).
+			Updates(map[string]interface{}{
+				"status":         status,
+				"output_json":    chatJSON(output),
+				"result_summary": resultSummary,
+				"next_step":      nextStep,
+				"completed_at":   &completedAt,
+				"updated_at":     completedAt,
+			}).Error; err != nil {
+			return nil, err
+		}
+
+		runSummaries = append(runSummaries, map[string]interface{}{
+			"skill_run_id":       run.ID,
+			"status":             status,
+			"candidate_count":    len(candidates),
+			"probe_count":        len(probeResults),
+			"reflection_count":   reflectionCount,
+			"blocked_count":      blockedCount,
+			"inconclusive_count": inconclusiveCount,
+			"observation_count":  len(createdObservationIDs),
+			"observation_ids":    createdObservationIDs,
+			"runtime_scope":      "controlled_marker_reflection_probe_no_exploit_payload",
+		})
+	}
+
+	return map[string]interface{}{
+		"status":           models.OperatorSkillRunStatusCompleted,
+		"runs":             runSummaries,
+		"run_count":        len(runSummaries),
+		"runtime_scope":    "controlled_marker_reflection_probe_no_exploit_payload",
+		"execution_level":  2,
+		"validation_class": "xss_reflection_context",
+	}, nil
 }
 
 func executeOpenRedirectChainSkillRunsFromChat(db *gorm.DB, uid uint, ownerKey string, target *models.Target, selectedSkillRunIDs []uint) (map[string]interface{}, error) {
