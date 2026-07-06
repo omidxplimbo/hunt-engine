@@ -1782,3 +1782,1066 @@ Security notes:
 - State-changing validation requires explicit authorization and auth context.
 
 ---
+
+
+# Nuclei Templates
+
+## Nuclei Templates Page
+
+UI route: `/nuclei-templates`
+
+Purpose:
+
+- Manage Nuclei templates and template placements.
+- Validate custom templates.
+- Support AI-assisted Nuclei draft workflow where enabled.
+- Keep templates organized by execution profile and intended use.
+
+Features:
+
+- Template list.
+- Search templates.
+- Placement filters.
+- Root placement.
+- Shared placement.
+- Safe placement.
+- Fast placement.
+- Exposure placement.
+- Balanced placement.
+- Misconfig placement.
+- CVEs placement.
+- CVEs Light placement.
+- Full placement.
+- Custom placement.
+- Create new template.
+- Edit template.
+- Save template.
+- Validate template.
+- Delete template.
+- AI template draft status.
+- Nuclei template strategy.
+- Generated draft output.
+- Human review workflow.
+
+User actions:
+
+- Browse existing templates.
+- Filter templates by placement.
+- Search by name/path.
+- Create a new template.
+- Edit YAML content.
+- Validate template before saving.
+- Save valid templates.
+- Delete templates.
+- Review AI draft status and strategy.
+- Generate draft when feature/provider allows.
+
+Outputs:
+
+- Template YAML.
+- Template path.
+- Placement.
+- Size.
+- Updated timestamp.
+- Validation result.
+- Validation output/error.
+- AI strategy signals.
+- Draft template content.
+
+Evidence interpretation:
+
+- Template validation means syntax/tool validation, not vulnerability confirmation.
+- AI-generated template drafts require human review.
+- A template placement controls where and how it is organized, not automatic proof of safety.
+- Strategy signals are recommendations, not confirmed findings.
+
+Common errors:
+
+- Invalid YAML.
+- Nuclei validation failed.
+- Template name/path invalid.
+- Placement mismatch.
+- AI draft disabled by feature flag or environment.
+- Provider/model not configured.
+- Human review required.
+
+Security notes:
+
+- Templates must not be destructive or out of scope.
+- New templates should be reviewed before use.
+- Automatic execution requires explicit authorization and policy support.
+- Sensitive payloads must follow target scope and safety boundaries.
+
+Documentation requirements:
+
+- Screenshot of template list.
+- Screenshot of template editor.
+- Screenshot of validation result.
+- Screenshot of AI draft workflow.
+- Explain every placement.
+- Explain validation vs execution.
+- Explain human review requirement.
+
+---
+
+# Account
+
+## Account Page
+
+UI route: `/account`
+
+Purpose:
+
+- Manage personal profile and user-scoped settings.
+- Configure per-user provider keys and notification preferences.
+- Inspect personal scan queue.
+
+Features:
+
+- Username display.
+- Role display.
+- Created timestamp.
+- Concurrent scan slots.
+- Change password.
+- My Scan Queue.
+- Provider keys.
+- Show/hide provider keys.
+- Add provider key.
+- Save provider keys.
+- Delete provider key.
+- Subfinder provider configuration.
+- LLM provider configuration.
+- Telegram notification config.
+- Account-scoped feature flags.
+
+User actions:
+
+- Review account info.
+- Change password.
+- Inspect personal queue.
+- Add/update/delete provider keys.
+- Toggle key visibility.
+- Save provider configuration.
+- Configure Telegram notifications.
+- Configure LLM providers.
+- Override account feature flags where available.
+
+Outputs:
+
+- Updated password status.
+- Stored provider config.
+- Saved key state.
+- Queue state.
+- Effective feature flags.
+- Telegram config status.
+- LLM provider config status.
+
+Common errors:
+
+- Current password incorrect.
+- New password invalid.
+- Provider key missing/invalid.
+- Save keys failed.
+- Telegram bot token invalid.
+- LLM provider base URL/model invalid.
+- Feature flag override conflicts with global setting.
+- User lacks permission for some settings.
+
+Security notes:
+
+- Never expose passwords, provider keys, API keys, bot tokens, chat IDs, or saved secret values in screenshots.
+- Use sanitized screenshots only.
+- Personal provider keys can affect discovery/AI behavior and should be handled carefully.
+
+Documentation requirements:
+
+- Screenshot of profile info.
+- Screenshot of change-password form.
+- Sanitized screenshot of provider key management.
+- Sanitized screenshot of LLM providers.
+- Sanitized screenshot of Telegram settings.
+- Explain account vs global config.
+
+---
+
+# System Config
+
+## System Settings Page
+
+UI route: `/settings`
+
+Purpose:
+
+- Admin-only system configuration page.
+- Manage users, queues, concurrency, wordlists, resolvers, providers, notifications, integrations, monitoring, logs, and feature flags.
+
+Panels:
+
+- Users.
+- Queue Manager.
+- Concurrency Config.
+- Wordlists Config.
+- PureDNS Resolver Config.
+- LLM Provider Config.
+- Telegram Config.
+- VirusTotal Config.
+- Monitoring Server.
+- System Logs.
+- Feature Flags.
+
+Common admin actions:
+
+- Create/update/delete users.
+- Adjust queue.
+- Configure concurrency.
+- Upload or import wordlists.
+- Configure PureDNS resolvers.
+- Configure LLM providers.
+- Configure Telegram.
+- Configure VirusTotal.
+- Review monitoring.
+- Review logs.
+- Toggle feature flags.
+
+Security notes:
+
+- System settings affect all users or large parts of the platform.
+- Secrets must be masked.
+- Admin screenshots must be sanitized.
+- Changes should be auditable and reversible where possible.
+
+Documentation requirements:
+
+- Screenshot for every settings panel.
+- Explain admin-only route behavior.
+- Explain global vs user-scoped config.
+- Explain operational impact of each panel.
+
+---
+
+## Users Panel
+
+UI component: `UserModal` and Users settings panel
+
+Purpose:
+
+- Admin management of user accounts.
+
+Features:
+
+- List users.
+- Create user.
+- Edit user.
+- Delete user.
+- Username.
+- Role.
+- Password setup/update.
+- Max concurrent scan slots.
+- Scrollable modal footer/actions.
+
+User actions:
+
+- Create user.
+- Assign role.
+- Set password.
+- Set concurrency allowance.
+- Update user.
+- Delete user.
+
+Outputs:
+
+- User list.
+- Created/updated/deleted user state.
+
+Common errors:
+
+- Duplicate username.
+- Weak/missing password.
+- Permission denied.
+- Invalid role.
+- Modal overflow on small screens.
+
+Security notes:
+
+- Do not show real user credentials in screenshots.
+- Admin actions should be restricted to admin role.
+
+Documentation requirements:
+
+- Screenshot of user list.
+- Screenshot of create/edit user modal.
+- Explain role behavior.
+- Explain concurrent scan slots.
+
+---
+
+## Queue Manager
+
+Purpose:
+
+- Inspect and manage queued jobs.
+
+Features:
+
+- List queue items.
+- Queue index/position.
+- Payload/module.
+- Target ID.
+- Root domain.
+- Target name.
+- Owner username.
+- Remove item.
+- Clear queue.
+- Move item to top.
+- Move item to bottom.
+
+User actions:
+
+- Review queued jobs.
+- Remove stuck/unwanted job.
+- Clear queue.
+- Reorder job priority.
+
+Outputs:
+
+- Updated queue state.
+
+Common errors:
+
+- Queue item already processed.
+- Wrong item index.
+- Clear queue removes all pending jobs.
+- User expects running process to stop, but queue manager affects queued items only.
+
+Security notes:
+
+- Queue changes can affect other users and running operations.
+- Admin should verify target and owner before modifying queue.
+
+Documentation requirements:
+
+- Screenshot of queue panel.
+- Explain queued vs running jobs.
+- Explain remove/clear/reorder behavior.
+
+---
+
+## Concurrency Config
+
+Purpose:
+
+- Configure scan concurrency and resource allocation.
+
+Features:
+
+- Global concurrency settings.
+- Per-user or account scan slots where available.
+- Worker limits.
+- Runtime capacity guidance.
+
+User actions:
+
+- Review current concurrency.
+- Adjust concurrency values.
+- Save config.
+- Monitor impact after changes.
+
+Outputs:
+
+- Updated concurrency config.
+- Different scan scheduling behavior.
+
+Common errors:
+
+- Too high concurrency overloads server.
+- Too low concurrency slows discovery.
+- User-specific slot limit conflicts with global queue capacity.
+
+Security notes:
+
+- Concurrency can affect target traffic volume.
+- Respect rate limits and authorization.
+
+Documentation requirements:
+
+- Screenshot of panel.
+- Explain operational impact.
+- Explain safe defaults.
+
+---
+
+## Wordlists Config
+
+Purpose:
+
+- Manage wordlists for discovery and brute-force workflows.
+
+Features:
+
+- Upload wordlist.
+- URL-based wordlist import.
+- Async import jobs.
+- Wordlist metadata.
+- File-backed storage.
+- Line count.
+- File size.
+- Source type.
+- Import status/progress.
+- Use wordlists in PureDNS target configuration.
+
+User actions:
+
+- Upload a local wordlist.
+- Import a public URL wordlist.
+- Monitor import status.
+- Select wordlist in target create/edit.
+- Remove or replace wordlists where available.
+
+Outputs:
+
+- Stored wordlist file.
+- Wordlist metadata.
+- Import job progress/status.
+- Available wordlists for target configuration.
+
+Common errors:
+
+- Upload too large.
+- URL download failed.
+- Import job failed.
+- Invalid/empty wordlist.
+- Browser request times out if import is not async.
+- File stored but metadata mismatch.
+
+Security notes:
+
+- Wordlists can greatly increase scan volume.
+- Use authorized scope and configured rate limits.
+- Large wordlists require resolver capacity and operational planning.
+
+Documentation requirements:
+
+- Screenshot of wordlist panel.
+- Screenshot of URL import job.
+- Explain async import.
+- Explain how wordlists affect PureDNS runtime.
+
+---
+
+## PureDNS Resolver Config
+
+Purpose:
+
+- Manage resolver pools for PureDNS brute-force discovery.
+
+Features:
+
+- Account-scoped resolver list.
+- Resolver count.
+- Resolver save/update.
+- Resolver performance effect.
+- PureDNS progress telemetry.
+
+User actions:
+
+- Add resolver pool.
+- Save resolver config.
+- Run PureDNS discovery with selected wordlists.
+- Monitor progress rate and ETA.
+- Tune resolver pool size/quality.
+
+Outputs:
+
+- Stored resolver config.
+- PureDNS CLI progress.
+- Discovery throughput.
+- ETA.
+- Validated brute-force results.
+
+Common errors:
+
+- Resolver pool too small.
+- Resolver throttling.
+- Bad resolver IPs.
+- PureDNS slow progress.
+- Wordlist too large for resolver capacity.
+- Wildcard DNS affecting results.
+
+Security notes:
+
+- Resolver choice affects speed and accuracy.
+- Brute-force discovery must remain authorized and rate-aware.
+- PureDNS output should not be sent through duplicate DNSX re-validation by default unless explicitly debug/optional.
+
+Documentation requirements:
+
+- Screenshot of resolver config.
+- Screenshot of PureDNS progress.
+- Explain resolver pool tuning.
+- Explain PureDNS vs DNSX responsibilities.
+
+---
+
+## LLM Provider Config
+
+Purpose:
+
+- Configure LLM providers used by AI analysis/operator features.
+
+Features:
+
+- Provider name.
+- Display name.
+- API key saved state.
+- Base URL.
+- Default model.
+- Enabled state.
+- Default provider state.
+- Scope/owner information where shown.
+
+User actions:
+
+- Add provider.
+- Save provider config.
+- Set default model.
+- Enable/disable provider.
+- Delete provider.
+
+Outputs:
+
+- Stored LLM provider config.
+- AI features can call configured provider.
+- Disabled/missing provider affects AI/operator outputs.
+
+Common errors:
+
+- Invalid API key.
+- Invalid base URL.
+- Unsupported model.
+- Provider disabled.
+- AI feature flag disabled.
+
+Security notes:
+
+- Never expose API keys.
+- Use sanitized screenshots.
+- Provider configuration may affect data sent to LLM provider.
+
+Documentation requirements:
+
+- Sanitized screenshot.
+- Explain provider fields.
+- Explain AI/operator dependency.
+
+---
+
+## Telegram Config
+
+Purpose:
+
+- Configure Telegram notifications.
+
+Events:
+
+- Fresh asset.
+- Asset live/dead change.
+- Status code change.
+- Title change.
+- Web server change.
+- Technologies change.
+- Host IP change.
+- Fresh crawl URL.
+
+Features:
+
+- Enable/disable notifications.
+- Bot token saved state.
+- Chat ID.
+- Enabled events.
+- Fresh asset screenshot setting.
+
+User actions:
+
+- Add bot token.
+- Add chat ID.
+- Select events.
+- Save config.
+- Test notifications where available.
+
+Outputs:
+
+- Stored Telegram config.
+- Notifications sent for selected events.
+
+Common errors:
+
+- Invalid bot token.
+- Invalid chat ID.
+- Bot cannot message chat.
+- Event disabled.
+- Screenshot notification fails.
+
+Security notes:
+
+- Bot token and chat ID must be sanitized.
+- Notifications may contain sensitive target data.
+
+Documentation requirements:
+
+- Sanitized screenshot.
+- Explain events.
+- Explain privacy/security impact.
+
+---
+
+## VirusTotal Config
+
+Purpose:
+
+- Configure VirusTotal integration.
+
+Features:
+
+- API key config.
+- Enable/disable integration.
+- Source attribution for VirusTotal URLs/assets.
+- Rate-limit considerations.
+
+User actions:
+
+- Add API key.
+- Enable integration.
+- Use VirusTotal in target modules.
+- Review source attribution.
+
+Outputs:
+
+- VirusTotal-derived intelligence.
+- URL/source data.
+- Discovery enrichment.
+
+Common errors:
+
+- Missing API key.
+- Invalid API key.
+- Rate limit reached.
+- No VirusTotal data for target.
+
+Security notes:
+
+- Be aware of third-party API usage and data exposure.
+- Never expose API key.
+
+Documentation requirements:
+
+- Sanitized screenshot.
+- Explain when to enable VirusTotal.
+- Explain source attribution.
+
+---
+
+## Monitoring Server
+
+Purpose:
+
+- Display system/runtime monitoring information.
+
+Features:
+
+- CPU usage.
+- Memory usage.
+- Goroutines.
+- Active processes.
+- Command.
+- Duration.
+- PID.
+- Target context.
+
+User actions:
+
+- Review server load.
+- Identify long-running jobs.
+- Troubleshoot active processes.
+- Correlate process with target/job.
+
+Outputs:
+
+- System stats.
+- Process list.
+
+Common errors:
+
+- Process list empty.
+- PID stale.
+- Command truncated.
+- Monitoring API unavailable.
+
+Security notes:
+
+- Command lines may expose paths or operational details.
+- Screenshots should be sanitized when needed.
+
+Documentation requirements:
+
+- Screenshot of monitoring panel.
+- Explain each metric.
+- Explain active process interpretation.
+
+---
+
+## System Logs
+
+Purpose:
+
+- Inspect logs for debugging backend/runtime/system behavior.
+
+Features:
+
+- Log output panel.
+- Backend/runtime errors.
+- System events.
+
+User actions:
+
+- Open logs.
+- Search visually for errors.
+- Correlate logs with failed jobs/actions.
+- Use logs for support/debugging.
+
+Outputs:
+
+- Log lines.
+- Error messages.
+- Runtime context.
+
+Common errors:
+
+- Logs too noisy.
+- Sensitive data present in logs.
+- Missing logs due to service restart or retention.
+- User confuses frontend error with backend log.
+
+Security notes:
+
+- Logs may contain sensitive target data or operational details.
+- Sanitize logs before sharing.
+
+Documentation requirements:
+
+- Sanitized screenshot.
+- Explain common log patterns.
+- Explain how to share logs safely.
+
+---
+
+## Feature Flags
+
+Purpose:
+
+- Enable, disable, or inherit feature availability.
+
+Known feature flags:
+
+- `feature.target_policy`
+- `feature.target_pdf_report`
+- `feature.ai_analysis`
+- `feature.llm_assisted_analysis`
+- `feature.ai_recommendations`
+- `feature.ai_nuclei_template_drafts`
+- `feature.agent_runs`
+- `feature.agent_actions`
+- `feature.agent_chat`
+- `feature.safe_bug_testing`
+- `feature.ai_triage_agent`
+- `feature.ai_summary_agent`
+- `feature.ai_report_agent`
+
+States:
+
+- Inherit.
+- Enabled.
+- Disabled.
+
+User actions:
+
+- Review effective flag state.
+- Enable/disable feature where permitted.
+- Save flag overrides.
+
+Outputs:
+
+- Effective feature behavior.
+- Hidden or visible UI panels/routes.
+- Enabled or disabled backend workflows.
+
+Common errors:
+
+- Feature hidden because global flag disabled.
+- Account override differs from expected global state.
+- User expects a tab to appear but flag is disabled.
+
+Security notes:
+
+- Feature flags can expose powerful workflows.
+- Operator/security features require appropriate policy and authorization.
+
+Documentation requirements:
+
+- Screenshot of feature flags.
+- Explain inherit/enabled/disabled.
+- Explain effect on UI and backend behavior.
+
+---
+
+# Reports and Exports
+
+## PDF Report
+
+UI path: `/targets/:id -> PDF Report`
+
+Purpose:
+
+- Download a professional PDF report for a target when enabled by feature flag.
+
+User actions:
+
+- Open target detail.
+- Click PDF Report.
+- Download file.
+
+Outputs:
+
+- PDF report file.
+
+Common errors:
+
+- Feature disabled.
+- Report generation failed.
+- Empty/missing findings.
+- Browser download blocked.
+
+Security notes:
+
+- Reports contain sensitive target and vulnerability data.
+- Sanitize before external sharing.
+
+Documentation requirements:
+
+- Screenshot of report action.
+- Explain report contents.
+- Explain feature flag dependency.
+
+---
+
+## Export Actions
+
+Export features:
+
+- Export Targets.
+- Export Assets.
+- Export IPs.
+- Export URLs.
+- Export Findings CSV.
+- Export Findings JSON.
+
+Purpose:
+
+- Provide offline review, migration, backup, reporting, and external workflow support.
+
+User actions:
+
+- Choose export action.
+- Apply filters before export where applicable.
+- Download file.
+- Store securely.
+
+Outputs:
+
+- JSON, CSV, TXT, or report files depending on export type.
+
+Common errors:
+
+- Export empty due to active filters.
+- Browser blocks download.
+- Export file contains sensitive data.
+- Export does not include expected field due to version/schema.
+
+Security notes:
+
+- Exports may include sensitive attack surface and evidence.
+- Do not commit exports to public repositories.
+- Sanitize before sharing.
+
+Documentation requirements:
+
+- Screenshot every export action.
+- Explain file formats.
+- Explain filter interaction.
+
+---
+
+# Troubleshooting
+
+## Frontend Route Troubleshooting
+
+Covers:
+
+- `/documentation`
+- `/login`
+- `/dashboard`
+- `/targets`
+- `/targets/:id`
+- `/operator-learning`
+- `/operator-skills`
+- `/nuclei-templates`
+- `/settings`
+
+Checks:
+
+- HTTP status.
+- React shell returned.
+- JS bundle asset exists.
+- Bundle contains expected route markers.
+- Frontend dist deployed to correct container.
+- Nginx restarted/reloaded.
+- Browser hard refresh.
+
+Common fixes:
+
+- Rebuild frontend.
+- Copy `frontend/dist` into frontend container.
+- Restart nginx.
+- Clear browser cache.
+- Verify route is registered in `App.tsx`.
+
+Documentation requirements:
+
+- Include route smoke examples.
+- Explain SPA shell vs bundle content.
+
+---
+
+## Backend/API Troubleshooting
+
+Checks:
+
+- Backend container running.
+- API route returns expected status.
+- JWT present for protected routes.
+- User role has permission.
+- Logs show handler/runtime error.
+- DB connection healthy.
+- Migration applied.
+
+Common fixes:
+
+- Fast backend reload in dev.
+- Restart backend.
+- Check env variables.
+- Check DB migrations.
+- Verify auth token.
+
+Security notes:
+
+- Do not paste real JWTs or secrets into support docs.
+
+---
+
+## Recon Troubleshooting
+
+Common issues:
+
+- Discovery job stuck.
+- DNSX returns false positives.
+- PureDNS slow.
+- Resolver pool too small.
+- Wildcard DNS creates noise.
+- AlterX produces too many candidates.
+- URL sources return no results.
+- Wordlist import not completed.
+
+Checks:
+
+- Active Processes.
+- Queue Manager.
+- System Logs.
+- PureDNS progress.
+- Resolver config.
+- Wordlist status.
+- Target module config.
+- Source filters.
+
+Documentation requirements:
+
+- Explain normal DNSX vs PureDNS responsibilities.
+- Explain PureDNS resolver performance.
+- Explain wildcard filtering.
+- Explain blocked/inconclusive recon evidence.
+
+---
+
+## Operator Troubleshooting
+
+Common issues:
+
+- Operator gives generic answer.
+- No candidates found.
+- Skill not implemented.
+- Policy blocked.
+- Approval required.
+- Missing auth context.
+- Runtime result inconclusive.
+- LLM provider missing/disabled.
+- Preferred methodology not applied.
+
+Checks:
+
+- Target evidence exists.
+- Target Skill Profile enabled.
+- Skill enabled.
+- Methodology record active and matching.
+- Policy allows requested action.
+- Runtime backend allowed.
+- LLM provider configured.
+- Output JSON and observations.
+
+Documentation requirements:
+
+- Explain selected_skills.
+- Explain skill_execution.
+- Explain not_implemented.
+- Explain policy blocked.
+- Explain inconclusive vs vulnerable.
+- Explain memory learning.
+
+---
+
+## Deployment Troubleshooting
+
+Common issues:
+
+- Stage route uses stale frontend.
+- Production nginx cached old upstream.
+- Direct IP access blocked intentionally.
+- Cloudflare/origin mismatch.
+- SSL/cert issue.
+- Container not recreated.
+- Frontend build warning due to Node version.
+
+Checks:
+
+- Correct repo path.
+- Correct compose project.
+- Frontend build output.
+- Container copy path.
+- Nginx restart.
+- Cloudflare DNS/proxy.
+- Certificate status.
+
+Documentation requirements:
+
+- Document stage vs production paths.
+- Document source-based deployment baseline.
+- Document route smoke after frontend changes.
+
+---
