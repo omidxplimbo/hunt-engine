@@ -45,7 +45,7 @@ fi
 
 curl -skL "$BASE_URL$asset_path" -o /tmp/v3152_documentation_bundle.js
 
-if ! grep -aqE 'Hunt Engine Docs|Official Hunt Engine Documentation|Documentation Portal Foundation|Recon End-to-End|Bug-Class Validation|Operator Skills|مستندات رسمی|شروع سریع' /tmp/v3152_documentation_bundle.js; then
+if ! grep -aqE 'Hunt Engine|Documentation Portal|Feature-by-feature|Create Target Modal|Recon / Discovery Pipeline|PureDNS Resolver Config|Operator Skills|Bug-Class Validation|Nuclei Templates Workflow|Troubleshooting: Deployment|راهنمای نقطه‌به‌نقطه|قابلیت‌ها و کنترل‌ها' /tmp/v3152_documentation_bundle.js; then
   echo "[FAIL] frontend bundle did not include documentation portal markers" >&2
   echo "[INFO] searched asset: $BASE_URL$asset_path" >&2
   exit 1
