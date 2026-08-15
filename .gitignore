@@ -81,3 +81,4 @@ hunt35-wordlists/
 
 # Runtime uploaded PureDNS wordlists
 hunt-wordlists/
+nginx/conf.d/
