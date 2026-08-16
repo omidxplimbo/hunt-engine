@@ -152,6 +152,13 @@ func main() {
 	api.Put("/targets/:id/policy", handlers.PutTargetPolicy)
 	api.Delete("/targets/:id/policy", handlers.DeleteTargetPolicy)
 	api.Get("/targets/:id/report.pdf", handlers.DownloadTargetPDFReport)
+	// Auth Context Routes (v3.16.0 - IDOR/BOLA testing support)
+	api.Get("/targets/:id/auth-contexts", handlers.ListAuthContexts)
+	api.Post("/targets/:id/auth-contexts", handlers.CreateAuthContext)
+	api.Get("/targets/:id/auth-contexts/:contextID", handlers.GetAuthContext)
+	api.Patch("/targets/:id/auth-contexts/:contextID", handlers.UpdateAuthContext)
+	api.Delete("/targets/:id/auth-contexts/:contextID", handlers.DeleteAuthContext)
+	api.Post("/auth-contexts/:contextID/use", handlers.UseAuthContext)
 	// Agent Action Routes
 	api.Get("/targets/:id/agent-actions", handlers.GetTargetAgentActions)
 	api.Post("/targets/:id/agent-actions/propose", handlers.ProposeTargetAgentAction)
