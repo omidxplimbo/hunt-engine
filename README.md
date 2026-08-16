@@ -964,3 +964,10 @@ v3.15.1 adds controlled, evidence-producing Level 2 validation runtimes for the 
 
 The release includes `scripts/smoke_operator_bug_class_validation_v3151.sh` and release notes at `docs/release-notes/v3.15.1.md`.
 
+
+## 📚 Documentation Policy (v3.15.2+)
+According to the official roadmap, **no feature is considered complete without documentation**.
+- Every new feature must have corresponding pages in the `/documentation` portal.
+- Documentation must be bilingual (Persian & English).
+- Screenshots must be kept up-to-date with UI changes.
+- See `scripts/smoke_documentation_portal_v3152.sh` for validation.
