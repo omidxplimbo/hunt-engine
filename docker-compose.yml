@@ -1,79 +1,66 @@
+version: '3.8'
+
 services:
-  # -----------------------------
-  # 1. Backend API (Golang Engine)
-  # -----------------------------
   backend:
-    container_name: hunt-backend
+    container_name: ${CONTAINER_PREFIX:-hunt}-backend
     build:
       context: ./backend
       dockerfile: Dockerfile
-    # Ports removed - only accessible through nginx reverse proxy
     expose:
       - "8080"
+    networks:
+      - hunt-net
+    restart: unless-stopped
     environment:
-      - HUNT_MAX_REQUEST_BODY_MB=${HUNT_MAX_REQUEST_BODY_MB:-5120}
-      - USER_WORDLISTS_DIR=${USER_WORDLISTS_DIR:-/data/wordlists/users}
       - DB_HOST=postgres
       - DB_USER=${DB_USER:-hunter}
       - DB_PASSWORD=${DB_PASSWORD:?DB_PASSWORD is required}
       - DB_NAME=${DB_NAME:-huntdb}
       - REDIS_HOST=redis
       - REDIS_PORT=${REDIS_PORT:-6379}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - DOMAIN_NAME=${DOMAIN_NAME:-localhost}
+      - HUNT_MAX_REQUEST_BODY_MB=${HUNT_MAX_REQUEST_BODY_MB:-5120}
+      - USER_WORDLISTS_DIR=/data/wordlists/users
       - PROBE_BATCH_SIZE=${PROBE_BATCH_SIZE:-1000}
       - DNSX_BATCH_SIZE=${DNSX_BATCH_SIZE:-2000}
       - DNSX_THREADS=${DNSX_THREADS:-30}
       - AMASS_TIMEOUT_SECONDS=${AMASS_TIMEOUT_SECONDS:-900}
-      - TRUSTED_RESOLVERS=${TRUSTED_RESOLVERS:-1.1.1.1,8.8.8.8,1.0.0.1,8.8.4.4}
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required and must be at least 32 characters}
+      - TRUSTED_RESOLVERS=${TRUSTED_RESOLVERS:-1.1.1.1,8.8.8.8}
       - VIRUSTOTAL_API_KEY=${VIRUSTOTAL_API_KEY:-}
       - NUCLEI_ALLOW_AI_TEMPLATES=${NUCLEI_ALLOW_AI_TEMPLATES:-false}
       - NUCLEI_CUSTOM_TEMPLATES_DIR=/data/nuclei/custom
       - HUNT_NUCLEI_TIMEOUT=${HUNT_NUCLEI_TIMEOUT:-10m}
     volumes:
-      # 👇 این خط برای وردلیست‌های سفارشی اضافه شد (برای آینده)
-      - ./custom_wordlists:/wordlists/custom
-      - ${HUNT_WORDLISTS_DIR:-./hunt-wordlists}:/data/wordlists
+      - ./hunt-wordlists:/data/wordlists
       - ./custom_nuclei_templates:/data/nuclei/custom
-      # 👇 persist worker temp workspace for crash-safe resume
       - hunt_workspaces:/tmp/hunt-engine
-      # 👇 Access Docker Socket for System Logs
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - postgres
       - redis
-    networks:
-      - hunt-net
-    restart: unless-stopped
 
-  # -----------------------------
-  # 2. Frontend Dashboard (React/Modern UI)
-  # -----------------------------
   frontend:
-    container_name: hunt-frontend
+    container_name: ${CONTAINER_PREFIX:-hunt}-frontend
     build:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        # Dynamic API URL based on domain
         - VITE_API_URL=/api
-    # Ports removed - only accessible through nginx reverse proxy
     expose:
       - "80"
-    depends_on:
-      - backend
     networks:
       - hunt-net
     restart: unless-stopped
+    depends_on:
+      - backend
 
-  # -----------------------------
-  # 3. Nginx Reverse Proxy with SSL
-  # -----------------------------
   nginx:
-    container_name: hunt-nginx
+    container_name: ${CONTAINER_PREFIX:-hunt}-nginx
     image: nginx:alpine
     ports:
-      - "443:443"
-      - "${NGINX_PORT:-4000}:80"
+      - "${NGINX_HTTP_PORT:-80}:80"
+      - "${NGINX_HTTPS_PORT:-443}:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/templates/default.conf.template:ro
       - ./nginx/nginx-init.conf:/etc/nginx/templates/init.conf.template:ro
@@ -82,34 +69,51 @@ services:
       - nginx_logs:/var/log/nginx
     environment:
       - DOMAIN_NAME=${DOMAIN_NAME:-localhost}
-      - SERVER_IP=${SERVER_IP:-127.0.0.1}
+      - SERVER_IP=${SERVER_IP:-0.0.0.0}
     command: >
       sh -c "
       if [ -z \"$$SERVER_IP\" ]; then
-        export SERVER_IP=127.0.0.1;
+        export SERVER_IP=0.0.0.0;
       fi;
-      if [ -f /etc/letsencrypt/live/$${DOMAIN_NAME:-localhost}/fullchain.pem ]; then
-        envsubst '$$DOMAIN_NAME $$SERVER_IP' < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf && echo 'Using SSL configuration';
+      if [ -f /etc/letsencrypt/live/$${DOMAIN_NAME}/fullchain.pem ]; then
+        envsubst '$$DOMAIN_NAME $$SERVER_IP' < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf && echo 'Using SSL';
       else
-        envsubst '$$DOMAIN_NAME $$SERVER_IP' < /etc/nginx/templates/init.conf.template > /etc/nginx/conf.d/default.conf && echo 'Using initial configuration (SSL not yet set up)';
+        envsubst '$$DOMAIN_NAME $$SERVER_IP' < /etc/nginx/templates/init.conf.template > /etc/nginx/conf.d/default.conf && echo 'Using Initial Config';
       fi && nginx -g 'daemon off;'"
     depends_on:
       - frontend
       - backend
     networks:
       - hunt-net
-      - hunt-shared
     restart: unless-stopped
 
-  # -----------------------------
-  # 4. DNS Server (BIND9) - Your Own DNS Server
-  # -----------------------------
+  postgres:
+    container_name: ${CONTAINER_PREFIX:-hunt}-postgres
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER:-hunter}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      POSTGRES_DB: ${DB_NAME:-huntdb}
+    volumes:
+      - hunt_postgres_data:/var/lib/postgresql/data
+    networks:
+      - hunt-net
+    restart: unless-stopped
+
+  redis:
+    container_name: ${CONTAINER_PREFIX:-hunt}-redis
+    image: redis:7-alpine
+    volumes:
+      - hunt_redis_data:/data
+    networks:
+      - hunt-net
+    restart: unless-stopped
+
   dns:
-    container_name: hunt-dns
+    container_name: ${CONTAINER_PREFIX:-hunt}-dns
     build:
       context: ./dns
       dockerfile: Dockerfile
-    # Use host network mode to avoid port 53 conflict with systemd-resolved
     network_mode: "host"
     volumes:
       - ./dns/zones:/etc/bind/zones
@@ -117,16 +121,11 @@ services:
       - dns_cache:/var/cache/bind
     environment:
       - DOMAIN_NAME=${DOMAIN_NAME:-localhost}
-      - SERVER_IP=${SERVER_IP:-127.0.0.1}
+      - SERVER_IP=${SERVER_IP:-0.0.0.0}
     restart: unless-stopped
-    # Note: When using host network mode, we can't use docker networks
-    # but DNS server will be directly accessible on host IP
 
-  # -----------------------------
-  # 5. Certbot for SSL Certificate Management
-  # -----------------------------
   certbot:
-    container_name: hunt-certbot
+    container_name: ${CONTAINER_PREFIX:-hunt}-certbot
     image: certbot/certbot:latest
     volumes:
       - ./certbot/conf:/etc/letsencrypt
@@ -136,41 +135,13 @@ services:
       - hunt-net
     restart: unless-stopped
 
-  # -----------------------------
-  # 6. Databases & Cache
-  # -----------------------------
-  postgres:
-    container_name: hunt-postgres
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_USER: ${DB_USER:-hunter}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
-      POSTGRES_DB: ${DB_NAME:-huntdb}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - hunt-net
-    restart: unless-stopped
-
-  redis:
-    container_name: hunt-redis
-    image: redis:7-alpine
-    volumes:
-      - redis_data:/data
-    networks:
-      - hunt-net
-    restart: unless-stopped
-
-# Networks & Volumes
 networks:
-  hunt-shared:
-    external: true
   hunt-net:
     driver: bridge
 
 volumes:
-  postgres_data:
-  redis_data:
+  hunt_postgres_data:
+  hunt_redis_data:
   nginx_logs:
-  dns_cache:
   hunt_workspaces:
+  dns_cache:
