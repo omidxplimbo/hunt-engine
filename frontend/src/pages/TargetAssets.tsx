@@ -46,6 +46,7 @@ import BugTestsPanel from "../components/BugTestsPanel";
 import BugPatternRegistryPanel from "../components/BugPatternRegistryPanel";
 import BugPayloadRegistryPanel from "../components/BugPayloadRegistryPanel";
 import TargetPolicyPanel from "../components/TargetPolicyPanel";
+import AuthContextManager from "../components/AuthContextManager";
 import OperatorSkillProfilePanel from "../components/OperatorSkillProfilePanel";
 
 type ActiveTab = "assets" | "urls" | "findings" | "analysis" | "policy";
@@ -881,7 +882,10 @@ const TargetAssets = () => {
       {activeTab === "findings" ? (
         <FindingsPanel targetId={targetId} />
       ) : activeTab === "policy" ? (
-        <TargetPolicyPanel targetId={targetId} enabled={featureTargetPolicy} />
+        <>
+          <TargetPolicyPanel targetId={targetId} enabled={featureTargetPolicy} />
+          <AuthContextManager />
+        </>
       ) : activeTab === "analysis" ? (
         <div className="space-y-4">
           <div className="border border-hack-border bg-black/30 p-4">
