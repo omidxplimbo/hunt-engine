@@ -12,6 +12,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/recover"
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/api/handlers"
+	// دو-account handler will be imported here
 	"github.com/omidxplimbo/hunt-engine/backend/internal/api/middleware"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/bugpatterns" // 👈 ایمپورت جدید
 	"github.com/omidxplimbo/hunt-engine/backend/internal/handler"
@@ -108,6 +109,9 @@ func main() {
 	// Auth Context Routes
 	api.Post("/auth-contexts", authContextHdl.Create)
 	api.Get("/targets/:target_id/auth-contexts", authContextHdl.List)
+        // Two-Account Testing Routes
+        api.Get("/targets/:target_id/two-account-sessions", handlers.GetTwoAccountSessions)
+        api.Post("/targets/:target_id/two-account-sessions", handlers.StartTwoAccountSession)
 	api.Delete("/auth-contexts/:id", authContextHdl.Delete)
 
 	// Operator Skill Registry Routes

@@ -1,0 +1,1029 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hunt Engine - تحلیل جامع پروژه | Project Analysis</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Vazirmatn:wght@300;400;600;700&display=swap');
+        
+        :root {
+            --bg-primary: #050505;
+            --bg-secondary: #0a0a0a;
+            --bg-card: #111111;
+            --border: #222222;
+            --green: #00ff41;
+            --green-dim: #00cc33;
+            --red: #ff003c;
+            --yellow: #fcee0a;
+            --blue: #00d4ff;
+            --purple: #bf00ff;
+            --orange: #ff6600;
+            --text: #e0e0e0;
+            --text-dim: #888888;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Vazirmatn', 'JetBrains Mono', monospace;
+            background: var(--bg-primary);
+            color: var(--text);
+            line-height: 1.8;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        
+        /* Header */
+        .header {
+            text-align: center;
+            padding: 60px 0;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 60px;
+            position: relative;
+        }
+        
+        .header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 200px;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--green), transparent);
+        }
+        
+        .logo {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 48px;
+            font-weight: 700;
+            color: var(--green);
+            text-shadow: 0 0 30px rgba(0, 255, 65, 0.3);
+            margin-bottom: 10px;
+            letter-spacing: 4px;
+        }
+        
+        .subtitle {
+            font-size: 18px;
+            color: var(--text-dim);
+            margin-bottom: 20px;
+        }
+        
+        .version-badge {
+            display: inline-block;
+            background: var(--green);
+            color: var(--bg-primary);
+            padding: 6px 20px;
+            border-radius: 20px;
+            font-weight: 700;
+            font-size: 14px;
+        }
+        
+        /* Language Switch */
+        .lang-switch {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            z-index: 1000;
+            display: flex;
+            gap: 10px;
+        }
+        
+        .lang-btn {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 8px 16px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        
+        .lang-btn:hover, .lang-btn.active {
+            background: var(--green);
+            color: var(--bg-primary);
+            border-color: var(--green);
+        }
+        
+        /* Sections */
+        .section {
+            margin-bottom: 60px;
+        }
+        
+        .section-title {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--green);
+            margin-bottom: 30px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .section-title .icon {
+            font-size: 32px;
+        }
+        
+        /* Cards */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 20px;
+            transition: all 0.3s;
+        }
+        
+        .card:hover {
+            border-color: var(--green);
+            box-shadow: 0 0 20px rgba(0, 255, 65, 0.1);
+        }
+        
+        .card-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--green);
+            margin-bottom: 15px;
+        }
+        
+        /* Progress Bar */
+        .progress-container {
+            margin: 30px 0;
+        }
+        
+        .progress-bar {
+            height: 12px;
+            background: var(--bg-secondary);
+            border-radius: 6px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--green), var(--blue));
+            border-radius: 6px;
+            transition: width 1s ease;
+        }
+        
+        .progress-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 14px;
+            color: var(--text-dim);
+        }
+        
+        /* Grid */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        
+        .grid-2 {
+            grid-template-columns: repeat(2, 1fr);
+        }
+        
+        .grid-3 {
+            grid-template-columns: repeat(3, 1fr);
+        }
+        
+        /* Status Badges */
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .badge-success {
+            background: rgba(0, 255, 65, 0.2);
+            color: var(--green);
+            border: 1px solid var(--green);
+        }
+        
+        .badge-warning {
+            background: rgba(252, 238, 10, 0.2);
+            color: var(--yellow);
+            border: 1px solid var(--yellow);
+        }
+        
+        .badge-danger {
+            background: rgba(255, 0, 60, 0.2);
+            color: var(--red);
+            border: 1px solid var(--red);
+        }
+        
+        .badge-info {
+            background: rgba(0, 212, 255, 0.2);
+            color: var(--blue);
+            border: 1px solid var(--blue);
+        }
+        
+        .badge-purple {
+            background: rgba(191, 0, 255, 0.2);
+            color: var(--purple);
+            border: 1px solid var(--purple);
+        }
+        
+        /* Tables */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        
+        th, td {
+            padding: 15px;
+            text-align: right;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        th {
+            background: var(--bg-secondary);
+            color: var(--green);
+            font-weight: 600;
+        }
+        
+        tr:hover {
+            background: rgba(0, 255, 65, 0.05);
+        }
+        
+        /* Flow Diagram */
+        .flow {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 30px 0;
+            direction: ltr;
+        }
+        
+        .flow-step {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            padding: 15px 25px;
+            border-radius: 8px;
+            text-align: center;
+            min-width: 120px;
+        }
+        
+        .flow-step.active {
+            border-color: var(--green);
+            box-shadow: 0 0 15px rgba(0, 255, 65, 0.2);
+        }
+        
+        .flow-arrow {
+            color: var(--green);
+            font-size: 24px;
+        }
+        
+        /* Stats */
+        .stat-card {
+            text-align: center;
+            padding: 30px;
+        }
+        
+        .stat-number {
+            font-size: 48px;
+            font-weight: 700;
+            color: var(--green);
+            font-family: 'JetBrains Mono', monospace;
+        }
+        
+        .stat-label {
+            font-size: 14px;
+            color: var(--text-dim);
+            margin-top: 10px;
+        }
+        
+        /* Recommendations */
+        .recommendation {
+            background: linear-gradient(135deg, var(--bg-card), var(--bg-secondary));
+            border-left: 4px solid var(--green);
+            padding: 25px;
+            margin: 15px 0;
+            border-radius: 0 8px 8px 0;
+        }
+        
+        .recommendation.critical {
+            border-left-color: var(--red);
+        }
+        
+        .recommendation.important {
+            border-left-color: var(--yellow);
+        }
+        
+        .recommendation h4 {
+            color: var(--green);
+            margin-bottom: 10px;
+        }
+        
+        .recommendation.critical h4 {
+            color: var(--red);
+        }
+        
+        .recommendation.important h4 {
+            color: var(--yellow);
+        }
+        
+        /* Code Block */
+        .code-block {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            overflow-x: auto;
+            direction: ltr;
+            text-align: left;
+            margin: 15px 0;
+        }
+        
+        /* Architecture Diagram */
+        .architecture {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 40px;
+            margin: 30px 0;
+            text-align: center;
+        }
+        
+        .arch-layer {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            margin: 10px auto;
+            max-width: 800px;
+        }
+        
+        .arch-layer.current {
+            border-color: var(--green);
+            box-shadow: 0 0 20px rgba(0, 255, 65, 0.1);
+        }
+        
+        .arch-layer.proposed {
+            border-color: var(--blue);
+            border-style: dashed;
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .grid-2, .grid-3 {
+                grid-template-columns: 1fr;
+            }
+            
+            .logo {
+                font-size: 32px;
+            }
+            
+            .section-title {
+                font-size: 22px;
+            }
+            
+            .flow {
+                flex-direction: column;
+            }
+            
+            .flow-arrow {
+                transform: rotate(90deg);
+            }
+        }
+        
+        /* Animations */
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+        
+        /* Print Styles */
+        @media print {
+            body {
+                background: white;
+                color: black;
+            }
+            
+            .card {
+                border: 1px solid #ccc;
+            }
+            
+            .lang-switch {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Language Switch -->
+    <div class="lang-switch">
+        <button class="lang-btn active" onclick="switchLang('fa')">فارسی</button>
+        <button class="lang-btn" onclick="switchLang('en')">English</button>
+    </div>
+    
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">HUNT ENGINE</div>
+            <div class="subtitle" data-fa="تحلیل جامع پروژه و نقشه راه" data-en="Comprehensive Project Analysis & Roadmap">
+                تحلیل جامع پروژه و نقشه راه
+            </div>
+            <span class="version-badge">v3.16.0 - Authenticated Context</span>
+        </header>
+        
+        <!-- Executive Summary -->
+        <section class="section">
+            <h2 class="section-title">
+                <span class="icon">📊</span>
+                <span data-fa="خلاصه اجرایی" data-en="Executive Summary">خلاصه اجرایی</span>
+            </h2>
+            
+            <div class="card">
+                <p data-fa="Hunt Engine یک پلتفرم هوشمند تست نفوذ مبتنی بر AI است که هدف آن تبدیل شدن به یک دستیار کامل هک اخلاقی است. این پروژه از مرحله ریکان تا گزارش‌دهی را پوشش می‌دهد و با استفاده از ایجنت‌های هوشمند، مهارت‌های قابل برنامه‌ریزی و حافظه بلندمدت، فرآیند پیدا کردن باگ‌های واقعی را خودکار می‌کند." 
+                   data-en="Hunt Engine is an AI-powered intelligent pentest platform aimed at becoming a complete ethical hacking assistant. It covers the entire workflow from reconnaissance to reporting, using intelligent agents, programmable skills, and long-term memory to automate the process of finding real bugs.">
+                    Hunt Engine یک پلتفرم هوشمند تست نفوذ مبتنی بر AI است که هدف آن تبدیل شدن به یک دستیار کامل هک اخلاقی است. این پروژه از مرحله ریکان تا گزارش‌دهی را پوشش می‌دهد و با استفاده از ایجنت‌های هوشمند، مهارت‌های قابل برنامه‌ریزی و حافظه بلندمدت، فرآیند پیدا کردن باگ‌های واقعی را خودکار می‌کند.
+                </p>
+            </div>
+            
+            <div class="grid grid-3">
+                <div class="card stat-card">
+                    <div class="stat-number">60%</div>
+                    <div class="stat-label" data-fa="پیشرفت کلی نقشه راه" data-en="Overall Roadmap Progress">پیشرفت کلی نقشه راه</div>
+                </div>
+                <div class="card stat-card">
+                    <div class="stat-number">16</div>
+                    <div class="stat-label" data-fa="مهارت داخلی فعال" data-en="Active Built-in Skills">مهارت داخلی فعال</div>
+                </div>
+                <div class="card stat-card">
+                    <div class="stat-number">100+</div>
+                    <div class="stat-label" data-fa="API Endpoint" data-en="API Endpoints">API Endpoint</div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Roadmap Progress -->
+        <section class="section">
+            <h2 class="section-title">
+                <span class="icon">🗺️</span>
+                <span data-fa="پیشرفت نقشه راه" data-en="Roadmap Progress">پیشرفت نقشه راه</span>
+            </h2>
+            
+            <div class="card">
+                <div class="progress-container">
+                    <div class="progress-label">
+                        <span>v3.13.0</span>
+                        <span>v4.0.0</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: 60%"></div>
+                    </div>
+                </div>
+                
+                <table>
+                    <thead>
+                        <tr>
+                            <th data-fa="نسخه" data-en="Version">نسخه</th>
+                            <th data-fa="عنوان" data-en="Title">عنوان</th>
+                            <th data-fa="وضعیت" data-en="Status">وضعیت</th>
+                            <th data-fa="خروجی اصلی" data-en="Key Output">خروجی اصلی</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>v3.13.0</td>
+                            <td data-fa="پایه استدلال نفوذ AI" data-en="AI Pentest Reasoning Foundation">پایه استدلال نفوذ AI</td>
+                            <td><span class="badge badge-success">Released</span></td>
+                            <td data-fa="حلقه شکار، تحلیلگر، حافظه" data-en="Hunting loop, analyzer, memory">حلقه شکار، تحلیلگر، حافظه</td>
+                        </tr>
+                        <tr>
+                            <td>v3.14.0</td>
+                            <td data-fa="رجیستری مهارت‌ها" data-en="Skill Registry">رجیستری مهارت‌ها</td>
+                            <td><span class="badge badge-success">Released</span></td>
+                            <td data-fa="چارچوب مهارت، اجرا، مشاهدات" data-en="Skill framework, execution, observations">چارچوب مهارت، اجرا، مشاهدات</td>
+                        </tr>
+                        <tr>
+                            <td>v3.15.0</td>
+                            <td data-fa="مهارت‌های قابل برنامه‌ریزی" data-en="User-Programmable Skills">مهارت‌های قابل برنامه‌ریزی</td>
+                            <td><span class="badge badge-success">Released</span></td>
+                            <td data-fa="مهارت کاربر، یادگیری، پروفایل" data-en="User skills, learning, profile">مهارت کاربر، یادگیری، پروفایل</td>
+                        </tr>
+                        <tr>
+                            <td>v3.15.1</td>
+                            <td data-fa="اعتبارسنجی باگ" data-en="Bug-Class Validation">اعتبارسنجی باگ</td>
+                            <td><span class="badge badge-success">Released</span></td>
+                            <td data-fa="XSS/DOM/CRLF/cache/redirect/path/CORS" data-en="XSS/DOM/CRLF/cache/redirect/path/CORS">XSS/DOM/CRLF/cache/redirect/path/CORS</td>
+                        </tr>
+                        <tr>
+                            <td>v3.15.2</td>
+                            <td data-fa="پورتال مستندات" data-en="Documentation Portal">پورتال مستندات</td>
+                            <td><span class="badge badge-success">Released</span></td>
+                            <td data-fa="مستندات دوزبانه، راهنمای تصویری" data-en="Bilingual docs, visual guide">مستندات دوزبانه، راهنمای تصویری</td>
+                        </tr>
+                        <tr>
+                            <td>v3.16.0</td>
+                            <td data-fa="کانتکست احراز هویت" data-en="Authenticated Context">کانتکست احراز هویت</td>
+                            <td><span class="badge badge-warning">In Progress</span></td>
+                            <td data-fa="کانتکست، دو حساب، IDOR/BOLA" data-en="Context, two-account, IDOR/BOLA">کانتکست، دو حساب، IDOR/BOLA</td>
+                        </tr>
+                        <tr>
+                            <td>v3.17.0</td>
+                            <td data-fa="تزریق بحرانی" data-en="Critical Injection">تزریق بحرانی</td>
+                            <td><span class="badge badge-info">Planned</span></td>
+                            <td data-fa="SQLi/NoSQLi/SSTI/RCE/XXE" data-en="SQLi/NoSQLi/SSTI/RCE/XXE">SQLi/NoSQLi/SSTI/RCE/XXE</td>
+                        </tr>
+                        <tr>
+                            <td>v3.18.0</td>
+                            <td data-fa="SSRF/OOB و فایل" data-en="SSRF/OOB & File">SSRF/OOB و فایل</td>
+                            <td><span class="badge badge-info">Planned</span></td>
+                            <td data-fa="OOB، فایل، کلود، سیکرت" data-en="OOB, file, cloud, secrets">OOB، فایل، کلود، سیکرت</td>
+                        </tr>
+                        <tr>
+                            <td>v3.19.0</td>
+                            <td data-fa="پوشش باگ و گزارش" data-en="Bug Coverage & Reporting">پوشش باگ و گزارش</td>
+                            <td><span class="badge badge-info">Planned</span></td>
+                            <td data-fa="امتیازدهی، زنجیره، گزارش" data-en="Scoring, chains, reports">امتیازدهی، زنجیره، گزارش</td>
+                        </tr>
+                        <tr>
+                            <td>v4.0.0</td>
+                            <td data-fa="اپراتور واقعی AI" data-en="True AI Operator">اپراتور واقعی AI</td>
+                            <td><span class="badge badge-purple">Vision</span></td>
+                            <td data-fa="جلسات خودمختار، زنجیره، گزارش" data-en="Autonomous sessions, chains, reports">جلسات خودمختار، زنجیره، گزارش</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+        
+        <!-- Current Architecture -->
+        <section class="section">
+            <h2 class="section-title">
+                <span class="icon">🏗️</span>
+                <span data-fa="معماری فعلی" data-en="Current Architecture">معماری فعلی</span>
+            </h2>
+            
+            <div class="architecture">
+                <div class="arch-layer current">
+                    <h3 data-fa="لایه اپراتور AI" data-en="AI Operator Layer">لایه اپراتور AI</h3>
+                    <p>Chat → Agent Actions → Controlled Runtime → Findings</p>
+                </div>
+                <div style="font-size: 32px; color: var(--green);">↕</div>
+                <div class="arch-layer current">
+                    <h3 data-fa="لایه مهارت‌ها" data-en="Skills Layer">لایه مهارت‌ها</h3>
+                    <p>16 Built-in Skills + User Skills + Learning Records</p>
+                </div>
+                <div style="font-size: 32px; color: var(--green);">↕</div>
+                <div class="arch-layer current">
+                    <h3 data-fa="لایه ریکان" data-en="Recon Layer">لایه ریکان</h3>
+                    <p>Subfinder → httpx → Katana → Nuclei → Findings</p>
+                </div>
+                <div style="font-size: 32px; color: var(--green);">↕</div>
+                <div class="arch-layer current">
+                    <h3 data-fa="لایه داده" data-en="Data Layer">لایه داده</h3>
+                    <p>PostgreSQL + Redis + Target Memory (RAG)</p>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Analysis Tab Problem -->
+        <section class="section">
+            <h2 class="section-title">
+                <span class="icon">⚠️</span>
+                <span data-fa="مشکل تب Analysis" data-en="Analysis Tab Problem">مشکل تب Analysis</span>
+            </h2>
+            
+            <div class="card">
+                <h3 class="card-title" data-fa="وضعیت فعلی: شلوغ و گیج‌کننده" data-en="Current State: Crowded & Confusing">وضعیت فعلی: شلوغ و گیج‌کننده</h3>
+                <p data-fa="تب Analysis فعلی شامل 9 بخش مختلف است که کاربر را گیج می‌کند:" data-en="The current Analysis tab has 9 different sections that confuse the user:">
+                    تب Analysis فعلی شامل 9 بخش مختلف است که کاربر را گیج می‌کند:
+                </p>
+                
+                <div class="grid grid-3" style="margin-top: 20px;">
+                    <div class="card" style="background: var(--bg-secondary);">
+                        <span class="badge badge-info">1</span>
+                        <strong> Overview</strong>
+                        <p style="font-size: 14px; color: var(--text-dim);">AI Analysis & Recommendations</p>
+                    </div>
+                    <div class="card" style="background: var(--bg-secondary);">
+                        <span class="badge badge-info">2</span>
+                        <strong> Agents</strong>
+                        <p style="font-size: 14px; color: var(--text-dim);">Triage, Summary, Report Runs</p>
+                    </div>
+                    <div class="card" style="background: var(--bg-secondary);">
+                        <span class="badge badge-info">3</span>
+                        <strong> Actions</strong>
+                        <p style="font-size: 14px; color: var(--text-dim);">Propose, Approve, Dispatch</p>
+                    </div>
+                    <div class="card" style="background: var(--bg-secondary);">
+                        <span class="badge badge-info">4</span>
+                        <strong> Bug Tests</strong>
+                        <p style="font-size: 14px; color: var(--text-dim);">Pattern-based testing</p>
+                    </div>
+                    <div class="card" style="background: var(--bg-secondary);">
+                        <span class="badge badge-info">5</span>
+                        <strong> Patterns</strong>
+                        <p style="font-size: 14px; color: var(--text-dim);">Bug pattern registry</p>
+                    </div>
+                    <div class="card" style="background: var(--bg-secondary);">
+                        <span class="badge badge-info">6</span>
+                        <strong> Payloads</strong>
+                        <p style="font-size: 14px; color: var(--text-dim);">Payload registry</p>
+                    </div>
+                    <div class="card" style="background: var(--bg-secondary);">
+                        <span class="badge badge-info">7</span>
+                        <strong> Skills</strong>
+                        <p style="font-size: 14px; color: var(--text-dim);">Operator skill profile</p>
+                    </div>
+                    <div class="card" style="background: var(--bg-secondary);">
+                        <span class="badge badge-info">8</span>
+                        <strong> Two-Account</strong>
+                        <p style="font-size: 14px; color: var(--text-dim);">IDOR/BOLA testing</p>
+                    </div>
+                    <div class="card" style="background: var(--bg-secondary);">
+                        <span class="badge badge-info">9</span>
+                        <strong> Chat</strong>
+                        <p style="font-size: 14px; color: var(--text-dim);">Agent chat interface</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="recommendation critical">
+                <h4 data-fa="🔴 مشکل اصلی" data-en="🔴 Main Problem">🔴 مشکل اصلی</h4>
+                <p data-fa="کاربر نمی‌داند از کجا شروع کند. 9 بخش مختلف با عملکردهای مرتبط اما مجزا، تجربه کاربری ضعیفی ایجاد کرده است. هدف اصلی یعنی 'پیدا کردن باگ' در بین این بخش‌ها گم شده است." 
+                   data-en="The user doesn't know where to start. 9 different sections with related but separate functions create a poor user experience. The main goal of 'finding bugs' gets lost among these sections.">
+                    کاربر نمی‌داند از کجا شروع کند. 9 بخش مختلف با عملکردهای مرتبط اما مجزا، تجربه کاربری ضعیفی ایجاد کرده است. هدف اصلی یعنی 'پیدا کردن باگ' در بین این بخش‌ها گم شده است.
+                </p>
+            </div>
+        </section>
+        
+        <!-- Proposed Solution -->
+        <section class="section">
+            <h2 class="section-title">
+                <span class="icon">💡</span>
+                <span data-fa="راه‌حل پیشنهادی: سیستم مولتی‌ایجنت ساده" data-en="Proposed Solution: Simple Multi-Agent System">راه‌حل پیشنهادی: سیستم مولتی‌ایجنت ساده</span>
+            </h2>
+            
+            <div class="card">
+                <h3 class="card-title" data-fa="معماری 4 ایجنتی" data-en="4-Agent Architecture">معماری 4 ایجنتی</h3>
+                <p data-fa="به جای 9 بخش مجزا، 4 ایجنت اصلی با مسئولیت‌های مشخص:" data-en="Instead of 9 separate sections, 4 main agents with clear responsibilities:">
+                    به جای 9 بخش مجزا، 4 ایجنت اصلی با مسئولیت‌های مشخص:
+                </p>
+                
+                <div class="flow" style="margin-top: 30px;">
+                    <div class="flow-step active">
+                        <div style="font-size: 32px;">🔍</div>
+                        <div><strong>Recon Agent</strong></div>
+                        <div style="font-size: 12px; color: var(--text-dim);">ریکان و جمع‌آوری</div>
+                    </div>
+                    <div class="flow-arrow">→</div>
+                    <div class="flow-step active">
+                        <div style="font-size: 32px;">🧠</div>
+                        <div><strong>Analysis Agent</strong></div>
+                        <div style="font-size: 12px; color: var(--text-dim);">تحلیل و فرضیه</div>
+                    </div>
+                    <div class="flow-arrow">→</div>
+                    <div class="flow-step active">
+                        <div style="font-size: 32px;">⚔️</div>
+                        <div><strong>Exploit Agent</strong></div>
+                        <div style="font-size: 12px; color: var(--text-dim);">اعتبارسنجی و اکسپلویت</div>
+                    </div>
+                    <div class="flow-arrow">→</div>
+                    <div class="flow-step active">
+                        <div style="font-size: 32px;">📝</div>
+                        <div><strong>Report Agent</strong></div>
+                        <div style="font-size: 12px; color: var(--text-dim);">گزارش‌دهی</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="grid grid-2">
+                <div class="card">
+                    <h3 class="card-title">🔍 Recon Agent</h3>
+                    <ul style="list-style: none; padding: 0;">
+                        <li style="padding: 8px 0; border-bottom: 1px solid var(--border);">✅ Subdomain discovery</li>
+                        <li style="padding: 8px 0; border-bottom: 1px solid var(--border);">✅ HTTP probing</li>
+                        <li style="padding: 8px 0; border-bottom: 1px solid var(--border);">✅ URL crawling</li>
+                        <li style="padding: 8px 0; border-bottom: 1px solid var(--border);">✅ JS intelligence</li>
+                        <li style="padding: 8px 0;">✅ Port scanning</li>
+                    </ul>
+                    <span class="badge badge-success" style="margin-top: 15px;">Complete</span>
+                </div>
+                
+                <div class="card">
+                    <h3 class="card-title">🧠 Analysis Agent</h3>
+                    <ul style="list-style: none; padding: 0;">
+                        <li style="padding: 8px 0; border-bottom: 1px solid var(--border);">✅ Parameter inventory</li>
+                        <li style="padding: 8px 0; border-bottom: 1px solid var(--border);">✅ HTTP evidence analysis</li>
+                        <li style="padding: 8px 0; border-bottom: 1px solid var(--border);">✅ Bug class detection</li>
+                        <li style="padding: 8px 0; border-bottom: 1px solid var(--border);">⚠️ Hypothesis generation</li>
+                        <li style="padding: 8px 0;">❌ Auto-prioritization</li>
+                    </ul>
+                    <span class="badge badge-warning" style="margin-top: 15px;">Partial</span>
+                </div>
+                
+                <div class="card">
+                    <h3 class="card-title">⚔️ Exploit Agent</h3>
+                    <ul style="list-style: none; padding: 0;">
+                        <li style="padding: 8px 0; border-bottom: 1px solid var(--border);">✅ XSS validation</li>
+                        <li style="padding: 8px 0; border-bottom: 1px solid var(--border);">✅ Open redirect</li>
+                        <li style="padding: 8px 0; border-bottom: 1px solid var(--border);">✅ Path traversal</li>
+                        <li style="padding: 8px 0; border-bottom: 1px solid var(--border);">⚠️ IDOR/BOLA (basic)</li>
+                        <li style="padding: 8px 0;">❌ SQLi/SSRF/RCE</li>
+                    </ul>
+                    <span class="badge badge-warning" style="margin-top: 15px;">Partial</span>
+                </div>
+                
+                <div class="card">
+                    <h3 class="card-title">📝 Report Agent</h3>
+                    <ul style="list-style: none; padding: 0;">
+                        <li style="padding: 8px 0; border-bottom: 1px solid var(--border);">✅ Finding creation</li>
+                        <li style="padding: 8px 0; border-bottom: 1px solid var(--border);">✅ PDF reports</li>
+                        <li style="padding: 8px 0; border-bottom: 1px solid var(--border);">⚠️ Evidence scoring</li>
+                        <li style="padding: 8px 0; border-bottom: 1px solid var(--border);">❌ Auto-promotion</li>
+                        <li style="padding: 8px 0;">❌ Bug bounty format</li>
+                    </ul>
+                    <span class="badge badge-warning" style="margin-top: 15px;">Partial</span>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Gap Analysis -->
+        <section class="section">
+            <h2 class="section-title">
+                <span class="icon">🎯</span>
+                <span data-fa="تحلیل شکاف: چه چیزی کم است؟" data-en="Gap Analysis: What's Missing?">تحلیل شکاف: چه چیزی کم است؟</span>
+            </h2>
+            
+            <div class="recommendation critical">
+                <h4 data-fa="🔴 بحرانی: اتصال ریکان به تحلیل" data-en="🔴 Critical: Connecting Recon to Analysis">🔴 بحرانی: اتصال ریکان به تحلیل</h4>
+                <p data-fa="الان ریکان انجام می‌شود اما ایجنت نمی‌تواند خودکار از داده‌ها برای پیدا کردن باگ استفاده کند. نیاز به یک pipeline خودکار داریم که وقتی asset جدید پیدا شد، فوراً شروع به تحلیل و تست کند." 
+                   data-en="Recon is done but the agent can't automatically use the data to find bugs. We need an automated pipeline that starts analyzing and testing as soon as a new asset is discovered.">
+                    الان ریکان انجام می‌شود اما ایجنت نمی‌تواند خودکار از داده‌ها برای پیدا کردن باگ استفاده کند. نیاز به یک pipeline خودکار داریم که وقتی asset جدید پیدا شد، فوراً شروع به تحلیل و تست کند.
+                </p>
+            </div>
+            
+            <div class="recommendation important">
+                <h4 data-fa="🟡 مهم: ساده‌سازی UI" data-en="🟡 Important: UI Simplification">🟡 مهم: ساده‌سازی UI</h4>
+                <p data-fa="تب Analysis باید به یک داشبورد واحد تبدیل شود که وضعیت کلی شکار را نشان دهد، نه 9 بخش مجزا. کاربر باید بتواند با یک نگاه ببیند چه باگ‌هایی پیدا شده و چه کاری باید انجام دهد." 
+                   data-en="The Analysis tab should become a single dashboard showing the overall hunting status, not 9 separate sections. The user should be able to see at a glance what bugs were found and what to do next.">
+                    تب Analysis باید به یک داشبورد واحد تبدیل شود که وضعیت کلی شکار را نشان دهد، نه 9 بخش مجزا. کاربر باید بتواند با یک نگاه ببیند چه باگ‌هایی پیدا شده و چه کاری باید انجام دهد.
+                </p>
+            </div>
+            
+            <div class="recommendation">
+                <h4 data-fa="🟢 پیشنهاد: حلقه بازخورد خودکار" data-en="🟢 Suggestion: Automated Feedback Loop">🟢 پیشنهاد: حلقه بازخورد خودکار</h4>
+                <p data-fa="ایجنت باید بتواند از نتایج تست‌ها یاد بگیرد و استراتژی خود را تغییر دهد. اگر XSS پیدا نشد، باید خودکار به سراغ IDOR یا SQLi برود. این حلقه بازخورد هنوز کامل پیاده‌سازی نشده است." 
+                   data-en="The agent should be able to learn from test results and change its strategy. If XSS isn't found, it should automatically move to IDOR or SQLi. This feedback loop is not yet fully implemented.">
+                    ایجنت باید بتواند از نتایج تست‌ها یاد بگیرد و استراتژی خود را تغییر دهد. اگر XSS پیدا نشد، باید خودکار به سراغ IDOR یا SQLi برود. این حلقه بازخورد هنوز کامل پیاده‌سازی نشده است.
+                </p>
+            </div>
+        </section>
+        
+        <!-- What's Needed for Real Bug Hunting -->
+        <section class="section">
+            <h2 class="section-title">
+                <span class="icon">🐛</span>
+                <span data-fa="چه چیزی برای هک واقعی لازم است؟" data-en="What's Needed for Real Bug Hunting?">چه چیزی برای هک واقعی لازم است؟</span>
+            </h2>
+            
+            <div class="card">
+                <h3 class="card-title" data-fa="جریان کار ایده‌آل" data-en="Ideal Workflow">جریان کار ایده‌آل</h3>
+                
+                <div class="flow">
+                    <div class="flow-step">
+                        <div>1</div>
+                        <div data-fa="هدف جدید" data-en="New Target">هدف جدید</div>
+                    </div>
+                    <div class="flow-arrow">→</div>
+                    <div class="flow-step">
+                        <div>2</div>
+                        <div data-fa="ریکان خودکار" data-en="Auto Recon">ریکان خودکار</div>
+                    </div>
+                    <div class="flow-arrow">→</div>
+                    <div class="flow-step">
+                        <div>3</div>
+                        <div data-fa="تحلیل هوشمند" data-en="Smart Analysis">تحلیل هوشمند</div>
+                    </div>
+                    <div class="flow-arrow">→</div>
+                    <div class="flow-step">
+                        <div>4</div>
+                        <div data-fa="فرضیه‌سازی" data-en="Hypothesize">فرضیه‌سازی</div>
+                    </div>
+                    <div class="flow-arrow">→</div>
+                    <div class="flow-step">
+                        <div>5</div>
+                        <div data-fa="تست خودکار" data-en="Auto Test">تست خودکار</div>
+                    </div>
+                    <div class="flow-arrow">→</div>
+                    <div class="flow-step">
+                        <div>6</div>
+                        <div data-fa="گزارش باگ" data-en="Bug Report">گزارش باگ</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="grid grid-2">
+                <div class="card">
+                    <h3 class="card-title" data-fa="✅ چیزی که الان داریم" data-en="✅ What We Have Now">✅ چیزی که الان داریم</h3>
+                    <ul style="list-style: none; padding: 0;">
+                        <li style="padding: 10px 0; border-bottom: 1px solid var(--border);">✅ ریکان کامل (subfinder, httpx, katana, nuclei)</li>
+                        <li style="padding: 10px 0; border-bottom: 1px solid var(--border);">✅ سیستم یافتن‌ها (Findings)</li>
+                        <li style="padding: 10px 0; border-bottom: 1px solid var(--border);">✅ ایجنت چت با اپراتور</li>
+                        <li style="padding: 10px 0; border-bottom: 1px solid var(--border);">✅ 16 مهارت داخلی</li>
+                        <li style="padding: 10px 0; border-bottom: 1px solid var(--border);">✅ کانتکست احراز هویت</li>
+                        <li style="padding: 10px 0; border-bottom: 1px solid var(--border);">✅ تست دو حسابه (IDOR)</li>
+                        <li style="padding: 10px 0; border-bottom: 1px solid var(--border);">✅ حافظه بلندمدت (RAG)</li>
+                        <li style="padding: 10px 0;">✅ گزارش PDF</li>
+                    </ul>
+                </div>
+                
+                <div class="card">
+                    <h3 class="card-title" data-fa="❌ چیزی که نیاز داریم" data-en="❌ What We Need">❌ چیزی که نیاز داریم</h3>
+                    <ul style="list-style: none; padding: 0;">
+                        <li style="padding: 10px 0; border-bottom: 1px solid var(--border);">❌ حلقه شکار خودکار (Auto-Hunting Loop)</li>
+                        <li style="padding: 10px 0; border-bottom: 1px solid var(--border);">❌ اولویت‌بندی هوشمند فرضیه‌ها</li>
+                        <li style="padding: 10px 0; border-bottom: 1px solid var(--border);">❌ اجرای خودکار تست‌ها</li>
+                        <li style="padding: 10px 0; border-bottom: 1px solid var(--border);">❌ امتیازدهی evidence</li>
+                        <li style="padding: 10px 0; border-bottom: 1px solid var(--border);">❌ زنجیره باگ‌ها (Bug Chains)</li>
+                        <li style="padding: 10px 0; border-bottom: 1px solid var(--border);">❌ فرمت گزارش Bug Bounty</li>
+                        <li style="padding: 10px 0; border-bottom: 1px solid var(--border);">❌ SQLi/SSRF/RCE validation</li>
+                        <li style="padding: 10px 0;">❌ یادگیری مؤثر مهارت‌ها</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Recommendations -->
+        <section class="section">
+            <h2 class="section-title">
+                <span class="icon">🚀</span>
+                <span data-fa="توصیه‌ها و اولویت‌ها" data-en="Recommendations & Priorities">توصیه‌ها و اولویت‌ها</span>
+            </h2>
+            
+            <div class="recommendation critical">
+                <h4 data-fa="🔴 اولویت 1: ساده‌سازی تب Analysis" data-en="🔴 Priority 1: Simplify Analysis Tab">🔴 اولویت 1: ساده‌سازی تب Analysis</h4>
+                <p data-fa="تب Analysis را به یک داشبورد واحد تبدیل کنید با 4 بخش اصلی: وضعیت شکار، باگ‌های پیدا شده، اقدامات پیشنهادی، و چت ایجنت. بقیه بخش‌ها را به صفحات جداگانه یا modal منتقل کنید." 
+                   data-en="Convert the Analysis tab into a single dashboard with 4 main sections: hunting status, found bugs, suggested actions, and agent chat. Move other sections to separate pages or modals.">
+                    تب Analysis را به یک داشبورد واحد تبدیل کنید با 4 بخش اصلی: وضعیت شکار، باگ‌های پیدا شده، اقدامات پیشنهادی، و چت ایجنت. بقیه بخش‌ها را به صفحات جداگانه یا modal منتقل کنید.
+                </p>
+            </div>
+            
+            <div class="recommendation important">
+                <h4 data-fa="🟡 اولویت 2: حلقه شکار خودکار" data-en="🟡 Priority 2: Auto-Hunting Loop">🟡 اولویت 2: حلقه شکار خودکار</h4>
+                <p data-fa="یک background worker بسازید که وقتی asset جدید پیدا شد، خودکار شروع به تحلیل و تست کند. این حلقه باید: 1) پارامترها را استخراج کند 2) کلاس باگ محتمل را شناسایی کند 3) تست مناسب را اجرا کند 4) نتیجه را ذخیره کند." 
+                   data-en="Build a background worker that automatically starts analyzing and testing when a new asset is found. This loop should: 1) Extract parameters 2) Identify likely bug class 3) Run appropriate test 4) Save results.">
+                    یک background worker بسازید که وقتی asset جدید پیدا شد، خودکار شروع به تحلیل و تست کند. این حلقه باید: 1) پارامترها را استخراج کند 2) کلاس باگ محتمل را شناسایی کند 3) تست مناسب را اجرا کند 4) نتیجه را ذخیره کند.
+                </p>
+            </div>
+            
+            <div class="recommendation">
+                <h4 data-fa="🟢 اولویت 3: ادامه نقشه راه" data-en="🟢 Priority 3: Continue Roadmap">🟢 اولویت 3: ادامه نقشه راه</h4>
+                <p data-fa="طبق نقشه راه، v3.17.0 باید SQLi/NoSQLi/SSTI/RCE را اضافه کند. این کلاس‌های باگ بیشترین شانس پیدا شدن در پلتفرم‌های باگ بانتی را دارند. اولویت‌بندی کنید: SQLi → SSRF → RCE → SSTI." 
+                   data-en="According to the roadmap, v3.17.0 should add SQLi/NoSQLi/SSTI/RCE. These bug classes have the highest chance of being found on bug bounty platforms. Prioritize: SQLi → SSRF → RCE → SSTI.">
+                    طبق نقشه راه، v3.17.0 باید SQLi/NoSQLi/SSTI/RCE را اضافه کند. این کلاس‌های باگ بیشترین شانس پیدا شدن در پلتفرم‌های باگ بانتی را دارند. اولویت‌بندی کنید: SQLi → SSRF → RCE → SSTI.
+                </p>
+            </div>
+        </section>
+        
+        <!-- Proposed UI Redesign -->
+        <section class="section">
+            <h2 class="section-title">
+                <span class="icon">🎨</span>
+                <span data-fa="طراحی مجدد UI پیشنهادی" data-en="Proposed UI Redesign">طراحی مجدد UI پیشنهادی</span>
+            </h2>
+            
+            <div class="card">
+                <h3 class="card-title" data-fa="تب Analysis جدید: داشبورد شکار" data-en="New Analysis Tab: Hunting Dashboard">تب Analysis جدید: داشبورد شکار</h3>
+                
+                <div class="code-block">
+┌─────────────────────────────────────────────────────────────┐
+│                    🎯 HUNTING DASHBOARD                     │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
+│  │ Assets: 150  │  │ Findings: 12 │  │ Bugs: 3      │      │
+│  │ Live: 89     │  │ Open: 8      │  │ Reportable: 2│      │
+│  └──────────────┘  └──────────────┘  └──────────────┘      │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  🤖 AGENT STATUS                                    │   │
+│  │  Recon: ✅ Complete    Analysis: 🔄 Running          │   │
+│  │  Exploit: ⏸️ Waiting   Report: ⏸️ Waiting            │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  📋 SUGGESTED ACTIONS                               │   │
+│  │  1. Test IDOR on /api/users/{id}                    │   │
+│  │  2. Check XSS on search parameter                   │   │
+│  │  3. Validate SQLi on login form                     │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  💬 AGENT CHAT                                      │   │
+│  │  [Chat interface for manual interaction]             │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+                </div>
+            </div>
+        </section>
+        
+        <!-- Conclusion -->
+        <section class="section">
+            <h2 class="section-title">
+                <span class="icon">🎯</span>
+                <span data-fa="نتیجه‌گیری" data-en="Conclusion">نتیجه‌گیری</span>
+            </h2>
+            
+            <div class="card" style="background: linear-gradient(135deg, var(--bg-card), var(--bg-secondary)); border-color: var(--green);">
+                <h3 class="card-title" data-fa="وضعیت کلی: 60% آماده" data-en="Overall Status: 60% Ready">وضعیت کلی: 60% آماده</h3>
+                <p data-fa="Hunt Engine زیرساخت قوی برای تست نفوذ هوشمند دارد. ریکان، تحلیل، مهارت‌ها و سیستم گزارش‌دهی همه کار می‌کنند. اما برای تبدیل شدن به یک دستیار هک واقعی که بتواند باگ‌های قابل گزارش پیدا کند، نیاز به:" 
+                   data-en="Hunt Engine has a strong infrastructure for intelligent pentesting. Recon, analysis, skills, and reporting all work. But to become a real hacking assistant that can find reportable bugs, it needs:">
+                    Hunt Engine زیرساخت قوی برای تست نفوذ هوشمند دارد. ریکان، تحلیل، مهارت‌ها و سیستم گزارش‌دهی همه کار می‌کنند. اما برای تبدیل شدن به یک دستیار هک واقعی که بتواند باگ‌های قابل گزارش پیدا کند، نیاز به:
+                </p>
+                
+                <ol style="margin: 20px 0; padding-right: 30px;">
+                    <li style="padding: 10px 0;" data-fa="حلقه شکار خودکار که بدون دخالت کاربر کار کند" data-en="An auto-hunting loop that works without user intervention">حلقه شکار خودکار که بدون دخالت کاربر کار کند</li>
+                    <li style="padding: 10px 0;" data-fa="ساده‌سازی UI برای تمرکز بر هدف اصلی" data-en="UI simplification to focus on the main goal">ساده‌سازی UI برای تمرکز بر هدف اصلی</li>
+                    <li style="padding: 10px 0;" data-fa="اضافه کردن کلاس‌های باگ پرتکرار (SQLi, SSRF, RCE)" data-en="Adding common bug classes (SQLi, SSRF, RCE)">اضافه کردن کلاس‌های باگ پرتکرار (SQLi, SSRF, RCE)</li>
+                    <li style="padding: 10px 0;" data-fa="فرمت گزارش استاندارد Bug Bounty" data-en="Standard Bug Bounty report format">فرمت گزارش استاندارد Bug Bounty</li>
+                </ol>
+                
+                <p style="font-size: 18px; color: var(--green); font-weight: 600; margin-top: 20px;" data-fa="با این تغییرات، Hunt Engine می‌تواند ظرف 2-3 ماه به یک ابزار هک واقعی تبدیل شود." data-en="With these changes, Hunt Engine can become a real hacking tool within 2-3 months.">
+                    با این تغییرات، Hunt Engine می‌تواند ظرف 2-3 ماه به یک ابزار هک واقعی تبدیل شود.
+                </p>
+            </div>
+        </section>
+        
+        <!-- Footer -->
+        <footer style="text-align: center; padding: 40px 0; border-top: 1px solid var(--border); margin-top: 60px;">
+            <p style="color: var(--text-dim); font-size: 14px;">
+                <span data-fa="تهیه شده توسط MiMoCode" data-en="Generated by MiMoCode">تهیه شده توسط MiMoCode</span>
+            </p>
+            <p style="color: var(--text-dim); font-size: 12px; margin-top: 10px;">
+                Hunt Engine v3.16.0 - Mustache Security Team
+            </p>
+        </footer>
+    </div>
+    
+    <script>
+        // Language switching
+        let currentLang = 'fa';
+        
+        function switchLang(lang) {
+            currentLang = lang;
+            document.documentElement.lang = lang;
+            document.documentElement.dir = lang === 'fa' ? 'rtl' : 'ltr';
+            
+            // Update buttons
+            document.querySelectorAll('.lang-btn').forEach(btn => {
+                btn.classList.remove('active');
+                if (btn.textContent.includes(lang === 'fa' ? 'فارسی' : 'English')) {
+                    btn.classList.add('active');
+                }
+            });
+            
+            // Update content
+            document.querySelectorAll('[data-' + lang + ']').forEach(el => {
+                el.textContent = el.getAttribute('data-' + lang);
+            });
+        }
+        
+        // Animate progress bars on scroll
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.querySelectorAll('.progress-fill').forEach(bar => {
+                        bar.style.width = bar.style.width;
+                    });
+                }
+            });
+        });
+        
+        document.querySelectorAll('.progress-container').forEach(el => {
+            observer.observe(el);
+        });
+    </script>
+</body>
+</html>

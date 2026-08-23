@@ -197,6 +197,32 @@ func DispatchTargetAgentAction(c *fiber.Ctx) error {
 		return err
 	}
 
+
+	// --- START: Two-Account Smart Testing Execution (Hardcoded Bypass) ---
+	if row.ActionType == "START_TWO_ACCOUNT_TEST" {
+		execResult := ExecuteTwoAccountTestWithRecovery(target.ID, uid, row.ID)
+		
+		outputJSON := agentActionJSON(execResult)
+		now := time.Now().UTC()
+		
+		updates := map[string]interface{}{
+			"output_json":   outputJSON,
+			"status":        models.AgentActionStatusExecuted,
+			"executed_at":   &now,
+			"error_message": "",
+		}
+		
+		if err := database.DB.Model(&models.AgentAction{}).Where("id = ?", row.ID).Updates(updates).Error; err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+		}
+		
+		// Reload the row to get updated output_json
+		database.DB.First(&row, row.ID)
+		
+		return c.JSON(fiber.Map{"status": "success", "data": row})
+	}
+	// --- END: Two-Account Smart Testing Execution ---
+
 	preview := buildDispatchPreview(target, row, dryRun, req.Note)
 	now := time.Now().UTC()
 

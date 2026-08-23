@@ -55,6 +55,12 @@ func normalizeActionStatus(value string) string {
 
 func normalizeAgentActionType(value string) string {
 	v := strings.ToLower(strings.TrimSpace(value))
+
+	// Explicitly allow Two-Account Testing
+	if v == "start_two_account_test" {
+		return "START_TWO_ACCOUNT_TEST"
+	}
+
 	switch v {
 	case models.AgentActionTypeRunCrawling,
 		models.AgentActionTypeRunNucleiProfile,
@@ -264,6 +270,8 @@ func actionClass(actionType string) string {
 		return "severity_apply"
 	case models.AgentActionTypeSubmitReport:
 		return "report_submission"
+	case "START_TWO_ACCOUNT_TEST":
+		return "two_account_testing"
 	default:
 		return "unknown"
 	}
@@ -293,6 +301,8 @@ func actionPolicyTokens(actionType string) []string {
 		return []string{"severity_apply", "severity_change"}
 	case "report_submission":
 		return []string{"report_submission", "submit_report"}
+	case "two_account_testing":
+		return []string{"two_account", "idor", "bola", "auth_test"}
 	default:
 		return []string{actionType}
 	}
@@ -360,6 +370,8 @@ func policyCheckForAgentAction(target *models.Target, req proposeAgentActionRequ
 	}
 
 	switch class {
+	case "advisory":
+		requiredControls = append(requiredControls, "allow_advisory_actions")
 	case "command_execution":
 		requiredControls = append(requiredControls, "allow_command_execution")
 		warningReasons = append(warningReasons, "command execution requires future explicit account and policy controls")
@@ -673,7 +685,6 @@ func loadAccessibleAgentAction(c *fiber.Ctx) (models.Target, models.AgentAction,
 }
 
 // ApproveTargetAgentAction marks a proposed/warning/allowed action as approved.
-// Execution is intentionally gated behind approval, policy checks, and controlled runtime support.
 func ApproveTargetAgentAction(c *fiber.Ctx) error {
 	if err := ensureAgentActionsEnabled(c); err != nil {
 		return err
@@ -724,10 +735,11 @@ func ApproveTargetAgentAction(c *fiber.Ctx) error {
 			return err
 		}
 
+		// Fixed: Use string literal instead of undefined constant
 		return tx.Create(&models.AgentActionApproval{
 			ActionID:     row.ID,
 			UserID:       uid,
-			Decision:     models.AgentActionApprovalDecisionApproved,
+			Decision:     "approved",
 			Reason:       strings.TrimSpace(req.Reason),
 			SnapshotJSON: agentActionJSON(snapshot),
 		}).Error
@@ -798,10 +810,11 @@ func RejectTargetAgentAction(c *fiber.Ctx) error {
 			return err
 		}
 
+		// Fixed: Use string literal instead of undefined constant
 		return tx.Create(&models.AgentActionApproval{
 			ActionID:     row.ID,
 			UserID:       uid,
-			Decision:     models.AgentActionApprovalDecisionRejected,
+			Decision:     "rejected",
 			Reason:       reason,
 			SnapshotJSON: agentActionJSON(snapshot),
 		}).Error

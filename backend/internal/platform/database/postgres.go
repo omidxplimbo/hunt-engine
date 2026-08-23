@@ -91,6 +91,7 @@ func Connect() {
 		&models.BugPayload{},
 		&models.NucleiTemplate{},
 		&models.AuthContext{},
+		&models.TwoAccountSession{},
 	)
 
 	if err != nil {
