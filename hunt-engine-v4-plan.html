@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hunt Engine v4.0 - طرح بازمهندسی | Reengineering Plan</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Vazirmatn:wght@300;400;600;700&display=swap');
+        :root{--bg:#050505;--card:#0a0a0a;--border:#222;--green:#00ff41;--red:#ff003c;--yellow:#fcee0a;--blue:#00d4ff;--purple:#bf00ff;--orange:#ff6600;--text:#e0e0e0;--dim:#888}
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:'Vazirmatn','JetBrains Mono',monospace;background:var(--bg);color:var(--text);line-height:1.8}
+        .container{max-width:1400px;margin:0 auto;padding:40px 20px}
+        .header{text-align:center;padding:60px 0;border-bottom:1px solid var(--border);margin-bottom:60px}
+        .logo{font-family:'JetBrains Mono';font-size:48px;font-weight:700;color:var(--green);text-shadow:0 0 30px rgba(0,255,65,.3);letter-spacing:4px}
+        .subtitle{font-size:18px;color:var(--dim);margin-top:10px}
+        .badge{display:inline-block;padding:4px 12px;border-radius:12px;font-size:12px;font-weight:600}
+        .badge-green{background:rgba(0,255,65,.2);color:var(--green);border:1px solid var(--green)}
+        .badge-red{background:rgba(255,0,60,.2);color:var(--red);border:1px solid var(--red)}
+        .badge-yellow{background:rgba(252,238,10,.2);color:var(--yellow);border:1px solid var(--yellow)}
+        .badge-blue{background:rgba(0,212,255,.2);color:var(--blue);border:1px solid var(--blue)}
+        .badge-purple{background:rgba(191,0,255,.2);color:var(--purple);border:1px solid var(--purple)}
+        .section{margin-bottom:60px}
+        .section-title{font-size:28px;font-weight:700;color:var(--green);margin-bottom:30px;padding-bottom:15px;border-bottom:2px solid var(--border)}
+        .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:30px;margin-bottom:20px}
+        .card:hover{border-color:var(--green);box-shadow:0 0 20px rgba(0,255,65,.1)}
+        .card-title{font-size:20px;font-weight:600;color:var(--green);margin-bottom:15px}
+        table{width:100%;border-collapse:collapse;margin:20px 0}
+        th,td{padding:12px 15px;text-align:right;border-bottom:1px solid var(--border)}
+        th{background:var(--card);color:var(--green);font-weight:600}
+        tr:hover{background:rgba(0,255,65,.05)}
+        .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px}
+        .grid-2{grid-template-columns:repeat(2,1fr)}
+        .grid-3{grid-template-columns:repeat(3,1fr)}
+        .verdict-keep{color:var(--green)}.verdict-remove{color:var(--red)}.verdict-refactor{color:var(--yellow)}
+        .flow{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:10px;margin:30px 0;direction:ltr}
+        .flow-step{background:var(--card);border:1px solid var(--border);padding:15px 25px;border-radius:8px;text-align:center;min-width:120px}
+        .flow-step.active{border-color:var(--green);box-shadow:0 0 15px rgba(0,255,65,.2)}
+        .flow-arrow{color:var(--green);font-size:24px}
+        .recommendation{background:linear-gradient(135deg,var(--card),#111);border-left:4px solid var(--green);padding:25px;margin:15px 0;border-radius:0 8px 8px 0}
+        .recommendation.critical{border-left-color:var(--red)}.recommendation.important{border-left-color:var(--yellow)}
+        .recommendation h4{color:var(--green);margin-bottom:10px}
+        .recommendation.critical h4{color:var(--red)}.recommendation.important h4{color:var(--yellow)}
+        .code-block{background:#111;border:1px solid var(--border);border-radius:8px;padding:20px;font-family:'JetBrains Mono';font-size:14px;overflow-x:auto;direction:ltr;text-align:left;margin:15px 0}
+        .lang-switch{position:fixed;top:20px;left:20px;z-index:1000;display:flex;gap:10px}
+        .lang-btn{background:var(--card);border:1px solid var(--border);color:var(--text);padding:8px 16px;cursor:pointer;font-family:inherit;font-size:14px;transition:.3s}
+        .lang-btn:hover,.lang-btn.active{background:var(--green);color:var(--bg);border-color:var(--green)}
+        .stat-number{font-size:48px;font-weight:700;color:var(--green);font-family:'JetBrains Mono'}
+        .stat-label{font-size:14px;color:var(--dim);margin-top:10px}
+        .comparison{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin:20px 0}
+        .comparison .card{margin:0}
+        @media(max-width:768px){.grid-2,.grid-3,.comparison{grid-template-columns:1fr}.logo{font-size:32px}.flow{flex-direction:column}.flow-arrow{transform:rotate(90deg)}}
+    </style>
+</head>
+<body>
+    <div class="lang-switch">
+        <button class="lang-btn active" onclick="switchLang('fa')">فارسی</button>
+        <button class="lang-btn" onclick="switchLang('en')">English</button>
+    </div>
+    <div class="container">
+        <header class="header">
+            <div class="logo">HUNT ENGINE v4.0</div>
+            <div class="subtitle" data-fa="طرح بازمهندسی: از ریکان‌اتومیشن به AI Hacker واقعی" data-en="Reengineering Plan: From Recon Automation to Real AI Hacker">طرح بازمهندسی: از ریکان‌اتومیشن به AI Hacker واقعی</div>
+            <div style="margin-top:20px"><span class="badge badge-red">تحلیل صادقانه</span> <span class="badge badge-blue">الهام از Strix</span> <span class="badge badge-purple">معماری جدید</span></div>
+        </header>
+
+        <!-- بخش ۱: تحلیل صادقانه وضعیت فعلی -->
+        <section class="section">
+            <h2 class="section-title"><span data-fa="بخش ۱: تحلیل صادقانه - چی واقعاً کار می‌کنه؟" data-en="Section 1: Honest Analysis - What Actually Works?">بخش ۱: تحلیل صادقانه</span></h2>
+            
+            <div class="recommendation critical">
+                <h4 data-fa="🔴 حقیقت تلخ" data-en="🔴 The Hard Truth">🔴 حقیقت تلخ</h4>
+                <p data-fa="Hunt Engine الان یک پلتفرم ریکان‌اتومیشن عالی با UI پیچیده‌ست، نه یک ابزار هک واقعی. بیشتر فیچرهای «تست باگ» فقط candidate تولید می‌کنن و هیچ payload واقعی نمی‌فرستن. فاصله بین چیزی که UI نشون میده و چیزی که واقعاً اتفاق میفته، بزرگترین ضعف پروژه‌ست." data-en="Hunt Engine is currently an excellent recon automation platform with a sophisticated UI, not a real hacking tool. Most 'bug testing' features only generate candidates without sending real payloads. The gap between what the UI implies and what actually happens is the project's biggest weakness.">
+                    Hunt Engine الان یک پلتفرم ریکان‌اتومیشن عالی با UI پیچیده‌ست، نه یک ابزار هک واقعی. بیشتر فیچرهای «تست باگ» فقط candidate تولید می‌کنن و هیچ payload واقعی نمی‌فرستن.
+                </p>
+            </div>
+
+            <h3 style="color:var(--green);margin:30px 0 15px" data-fa="✅ چیزایی که واقعاً کار می‌کنه و ارزشمنده" data-en="✅ What Actually Works and Has Value">✅ چیزایی که واقعاً کار می‌کنه</h3>
+            <table>
+                <thead><tr><th data-fa="فیچر" data-en="Feature">فیچر</th><th data-fa="وضعیت" data-en="Status">وضعیت</th><th data-fa="ارزش واقعی" data-en="Real Value">ارزش واقعی</th></tr></thead>
+                <tbody>
+                    <tr><td data-fa="پایپ‌لاین ریکان (subfinder, httpx, nuclei, katana, nmap)" data-en="Recon Pipeline (subfinder, httpx, nuclei, katana, nmap)">پایپ‌لاین ریکان</td><td><span class="badge badge-green">واقعی</span></td><td data-fa="核心 ارزش پروژه. ابزارهای استاندارد Bug Bounty" data-en="Core value. Standard Bug Bounty tools">核心 ارزش پروژه</td></tr>
+                    <tr><td data-fa="سیستم یافتن‌ها (Findings)" data-en="Findings System">سیستم یافتن‌ها</td><td><span class="badge badge-green">واقعی</span></td><td data-fa="CRUD کامل، triage، export" data-en="Full CRUD, triage, export">CRUD کامل</td></tr>
+                    <tr><td data-fa="تحلیل AI (ریسک اسکور + LLM narrative)" data-en="AI Analysis (risk score + LLM narrative)">تحلیل AI</td><td><span class="badge badge-green">واقعی</span></td><td data-fa="امتیازدهی ریسک واقعی + توصیه‌ها" data-en="Real risk scoring + recommendations">امتیازدهی ریسک</td></tr>
+                    <tr><td data-fa="چت ایجنت با LLM اپراتور" data-en="Agent Chat with LLM Operator">چت ایجنت</td><td><span class="badge badge-green">واقعی</span></td><td data-fa="برنامه‌ریزی تست نفوذ با AI" data-en="AI-powered pentest planning">برنامه‌ریزی با AI</td></tr>
+                    <tr><td data-fa="HTTP Probe کنترل‌شده" data-en="Controlled HTTP Probe">HTTP Probe</td><td><span class="badge badge-green">واقعی</span></td><td data-fa="درخواست HTTP واقعی + ذخیره evidence" data-en="Real HTTP requests + evidence capture">درخواست واقعی</td></tr>
+                    <tr><td data-fa="چک هدرهای امنیتی" data-en="Security Header Check">چک هدرها</td><td><span class="badge badge-green">واقعی</span></td><td data-fa="تنها تست فعال واقعی" data-en="Only real active test">تنها تست فعال</td></tr>
+                </tbody>
+            </table>
+
+            <h3 style="color:var(--red);margin:30px 0 15px" data-fa="❌ چیزایی که فقط ظاهرسازی هستن" data-en="❌ What's Just Pretend">❌ چیزایی که فقط ظاهرسازی هستن</h3>
+            <table>
+                <thead><tr><th data-fa="فیچر" data-en="Feature">فیچر</th><th data-fa="وضعیت" data-en="Status">وضعیت</th><th data-fa="مشکل" data-en="Problem">مشکل</th></tr></thead>
+                <tbody>
+                    <tr><td data-fa="تست XSS/CORS/Redirect" data-en="XSS/CORS/Redirect Testing">تست XSS/CORS/Redirect</td><td><span class="badge badge-red">ظاهرسازی</span></td><td data-fa="فقط pattern matching، هیچ payload ارسال نمیشه" data-en="Only pattern matching, no payloads sent">فقط pattern matching</td></tr>
+                    <tr><td data-fa="14 مهارت اپراتور" data-en="14 Operator Skills">مهارت‌های اپراتور</td><td><span class="badge badge-red">فقط تحلیل</span></td><td data-fa="همه analysis/planning هستن، هیچکدام تست نمی‌کنن" data-en="All are analysis/planning, none actually test">فقط تحلیل، تست نداره</td></tr>
+                    <tr><td data-fa="Controlled Runtime (غیر از HTTP Probe)" data-en="Controlled Runtime (except HTTP Probe)">Controlled Runtime</td><td><span class="badge badge-red">پیاده‌سازی نشده</span></td><td data-fa="OWASP, brute force, exploit validation: 'not implemented yet'" data-en="OWASP, brute force, exploit validation: 'not implemented yet'">پیاده‌سازی نشده</td></tr>
+                    <tr><td data-fa="رجیستری Payload" data-en="Payload Registry">رجیستری Payload</td><td><span class="badge badge-red">غیرفعال</span></td><td data-fa="Payload‌ها وجود دارن ولی اجرا صریحاً غیرفعاله" data-en="Payloads exist but execution is explicitly disabled">اجرا غیرفعال</td></tr>
+                    <tr><td data-fa="سه AI Agent (Triage/Summary/Report)" data-en="Three AI Agents (Triage/Summary/Report)">سه AI Agent</td><td><span class="badge badge-yellow">واقعی ولی گمراه‌کننده</span></td><td data-fa="فقط if/else scoring هستن، LLM ندارن" data-en="Just if/else scoring, no LLM involved">بدون LLM</td></tr>
+                    <tr><td data-fa="Autopilot" data-en="Autopilot">Autopilot</td><td><span class="badge badge-yellow">محدود</span></td><td data-fa="auto-approve می‌کنه ولی action‌ها واقعی نیستن" data-en="Auto-approves but actions aren't real tests">action‌ها واقعی نیستن</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- بخش ۲: Strix چطور کار می‌کنه -->
+        <section class="section">
+            <h2 class="section-title"><span data-fa="بخش ۲: Strix چطور کار می‌کنه؟" data-en="Section 2: How Does Strix Work?">بخش ۲: Strix چطور کار می‌کنه؟</span></h2>
+            
+            <div class="card">
+                <p data-fa="Strix (57K+ GitHub stars) یک ابزار AI pentesting متن‌باز هست که واقعاً مثل یک هکر عمل می‌کنه:" data-en="Strix (57K+ GitHub stars) is an open-source AI pentesting tool that actually acts like a real hacker:">
+                    Strix (57K+ GitHub stars) یک ابزار AI pentesting متن‌باز هست که واقعاً مثل یک هکر عمل می‌کنه:
+                </p>
+            </div>
+
+            <div class="grid grid-3">
+                <div class="card">
+                    <h4 class="card-title" data-fa="🔧 ابزارهای واقعی" data-en="🔧 Real Tools">🔧 ابزارهای واقعی</h4>
+                    <ul style="list-style:none;padding:0">
+                        <li>• Browser Automation (Playwright)</li>
+                        <li>• HTTP Proxy (Caido)</li>
+                        <li>• Terminal (Bash)</li>
+                        <li>• Python Runtime (exploit dev)</li>
+                        <li>• Nuclei, ffuf, sqlmap, nmap</li>
+                        <li>• Web Search (OSINT)</li>
+                    </ul>
+                </div>
+                <div class="card">
+                    <h4 class="card-title" data-fa="🤖 معماری Multi-Agent" data-en="🤖 Multi-Agent Architecture">🤖 معماری Multi-Agent</h4>
+                    <ul style="list-style:none;padding:0">
+                        <li>• Graph of Agents (تیمی کار می‌کنن)</li>
+                        <li>• هر agent متخصص یک حمله‌ست</li>
+                        <li>• اشتراک‌گذاری کشفیات بین agent‌ها</li>
+                        <li>• اجرای موازی</li>
+                        <li>• زنجیره‌سازی آسیب‌پذیری‌ها</li>
+                    </ul>
+                </div>
+                <div class="card">
+                    <h4 class="card-title" data-fa="📚 Skills System" data-en="📚 Skills System">📚 Skills System</h4>
+                    <ul style="list-style:none;padding:0">
+                        <li>• 30+ skill تخصصی (Markdown)</li>
+                        <li>• JWT, IDOR, SQLi, XSS, SSRF, RCE...</li>
+                        <li>• هر skill = دانش عمیق حمله</li>
+                        <li>• Payload‌های واقعی</li>
+                        <li>• روش‌های bypass</li>
+                        <li>• validation برای جلوگیری از FP</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="comparison">
+                <div class="card" style="border-color:var(--red)">
+                    <h4 class="card-title" style="color:var(--red)" data-fa="Hunt Engine الان" data-en="Hunt Engine Now">Hunt Engine الان</h4>
+                    <p data-fa="«این URL پارامتر search داره، ممکنه XSS داشته باشه» → ذخیره در دیتابیس → تمام" data-en="'This URL has a search parameter, might have XSS' → Save to database → Done">
+                        «این URL پارامتر search داره، ممکنه XSS داشته باشه» → ذخیره در دیتابیس → تمام
+                    </p>
+                </div>
+                <div class="card" style="border-color:var(--green)">
+                    <h4 class="card-title" style="color:var(--green)" data-fa="Strix / هکر واقعی" data-en="Strix / Real Hacker">Strix / هکر واقعی</h4>
+                    <p data-fa="«این URL پارامتر search داره» → ارسال payload XSS → بررسی response → اگر reflection بود → تأیید با PoC → گزارش" data-en="'This URL has a search parameter' → Send XSS payload → Check response → If reflected → Confirm with PoC → Report">
+                        «این URL پارامتر search داره» → ارسال payload → بررسی response → تأیید با PoC → گزارش
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <!-- بخش ۳: معماری پیشنهادی جدید -->
+        <section class="section">
+            <h2 class="section-title"><span data-fa="بخش ۳: معماری پیشنهادی - Hunt Engine v4.0" data-en="Section 3: Proposed Architecture - Hunt Engine v4.0">بخش ۳: معماری پیشنهادی v4.0</span></h2>
+
+            <div class="card">
+                <h3 class="card-title" data-fa="فلسفه طراحی" data-en="Design Philosophy">فلسفه طراحی</h3>
+                <p data-fa="به جای ۹ بخش مجزا در تب Analysis، یک سیستم Multi-Agent واقعی بسازیم که:" data-en="Instead of 9 separate sections in Analysis tab, build a real Multi-Agent system that:">
+                    به جای ۹ بخش مجزا، یک سیستم Multi-Agent واقعی:
+                </p>
+                <ol style="padding-right:30px;margin-top:15px">
+                    <li data-fa="ابزارهای واقعی داشته باشه (نه فقط pattern matching)" data-en="Has real tools (not just pattern matching)">ابزارهای واقعی داشته باشه</li>
+                    <li data-fa="خودش فکر کنه و استراتژی بسازه" data-en="Thinks for itself and builds strategies">خودش فکر کنه</li>
+                    <li data-fa="یاد بگیره از نتایج قبلی" data-en="Learns from previous results">یاد بگیره</li>
+                    <li data-fa="خلاقیت به خرج بده (اگر XSS دنبال می‌کنه، SQLi هم ببینه بره سراغش)" data-en="Be creative (if looking for XSS, notice SQLi and go after it)">خلاقیت به خرج بده</li>
+                    <li data-fa="با تأیید کاربر اجرا کنه" data-en="Executes with user approval">با تأیید کاربر اجرا کنه</li>
+                </ol>
+            </div>
+
+            <h3 style="color:var(--green);margin:30px 0 15px" data-fa="معماری ۴ لایه‌ای" data-en="4-Layer Architecture">معماری ۴ لایه‌ای</h3>
+
+            <div class="flow">
+                <div class="flow-step active">
+                    <div style="font-size:32px">🔍</div>
+                    <div><strong>Recon Layer</strong></div>
+                    <div style="font-size:11px;color:var(--dim)">subfinder, httpx, nuclei, katana</div>
+                    <div style="font-size:11px;color:var(--green)">✅ Already works</div>
+                </div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-step active">
+                    <div style="font-size:32px">🧠</div>
+                    <div><strong>Brain Layer</strong></div>
+                    <div style="font-size:11px;color:var(--dim)">LLM + Skills + Memory</div>
+                    <div style="font-size:11px;color:var(--yellow)">⚠️ Needs rebuild</div>
+                </div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-step active">
+                    <div style="font-size:32px">⚔️</div>
+                    <div><strong>Execute Layer</strong></div>
+                    <div style="font-size:11px;color:var(--dim)">Browser, HTTP, Terminal, Python</div>
+                    <div style="font-size:11px;color:var(--red)">❌ Must build</div>
+                </div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-step active">
+                    <div style="font-size:32px">📝</div>
+                    <div><strong>Report Layer</strong></div>
+                    <div style="font-size:11px;color:var(--dim)">PoC, Evidence, Bug Bounty format</div>
+                    <div style="font-size:11px;color:var(--yellow)">⚠️ Partial</div>
+                </div>
+            </div>
+
+            <h3 style="color:var(--green);margin:30px 0 15px" data-fa="سیستم Multi-Agent جدید" data-en="New Multi-Agent System">سیستم Multi-Agent جدید</h3>
+
+            <div class="grid grid-2">
+                <div class="card">
+                    <h4 class="card-title">🎯 Hunter Agent (ایجنت اصلی)</h4>
+                    <p data-fa="مسئول کل فرآیند شکار. هدف می‌گیره، استراتژی می‌سازه، sub-agent‌ها رو مدیریت می‌کنه، نتایج رو جمع‌بندی می‌کنه." data-en="Responsible for the entire hunting process. Sets objectives, builds strategies, manages sub-agents, consolidates results.">
+                        مسئول کل فرآیند شکار. هدف می‌گیره، استراتژی می‌سازه، sub-agent‌ها رو مدیریت می‌کنه.
+                    </p>
+                    <ul style="list-style:none;padding:0;font-size:14px">
+                        <li>• دریافت داده‌های ریکان</li>
+                        <li>• تحلیل attack surface</li>
+                        <li>• انتخاب استراتژی اولیه</li>
+                        <li>• اسپAWN sub-agent‌ها</li>
+                        <li>• تصمیم‌گیری خلاقانه</li>
+                        <li>• گزارش‌دهی نهایی</li>
+                    </ul>
+                </div>
+                <div class="card">
+                    <h4 class="card-title">🔬 Specialist Agents (ایجنت‌های متخصص)</h4>
+                    <p data-fa="هر کدام متخصص یک نوع حمله. وقتی Hunter تشخیص بده، اسپAWN می‌شن." data-en="Each specializes in one attack type. Spawned when Hunter identifies an opportunity.">
+                        هر کدام متخصص یک نوع حمله.
+                    </p>
+                    <ul style="list-style:none;padding:0;font-size:14px">
+                        <li>• <strong>XSS Hunter</strong> - reflected, stored, DOM</li>
+                        <li>• <strong>SQLi Hunter</strong> - blind, error-based, union</li>
+                        <li>• <strong>IDOR Hunter</strong> - horizontal, vertical</li>
+                        <li>• <strong>SSRF Hunter</strong> - internal, OOB</li>
+                        <li>• <strong>Auth Hunter</strong> - bypass, escalation</li>
+                        <li>• <strong>Logic Hunter</strong> - race, workflow</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="recommendation important">
+                <h4 data-fa="🟡 کلید اصلی: ابزارهای واقعی" data-en="🟡 Key: Real Tools">🟡 کلید اصلی: ابزارهای واقعی</h4>
+                <p data-fa="هر Specialist Agent باید به ابزارهای واقعی دسترسی داشته باشه: HTTP client برای ارسال payload، Browser برای تست DOM، Terminal برای اجرای nuclei/sqlmap. نه فقط pattern matching." data-en="Each Specialist Agent must have access to real tools: HTTP client for sending payloads, Browser for DOM testing, Terminal for running nuclei/sqlmap. Not just pattern matching.">
+                    هر Specialist Agent باید به ابزارهای واقعی دسترسی داشته باشه: HTTP client، Browser، Terminal. نه فقط pattern matching.
+                </p>
+            </div>
+        </section>
+
+        <!-- بخش ۴: چی حذف بشه، چی بمونه -->
+        <section class="section">
+            <h2 class="section-title"><span data-fa="بخش ۴: چی حذف بشه، چی بمونه، چی بازسازی بشه" data-en="Section 4: What to Remove, Keep, Rebuild">بخش ۴: حذف / نگه‌داشتن / بازسازی</span></h2>
+
+            <h3 style="color:var(--green);margin:20px 0 15px" data-fa="✅ نگه دار (واقعاً مفیده)" data-en="✅ Keep (Actually Useful)">✅ نگه دار</h3>
+            <table>
+                <thead><tr><th data-fa="فیچر" data-en="Feature">فیچر</th><th data-fa="دلیل" data-en="Reason">دلیل</th></tr></thead>
+                <tbody>
+                    <tr><td data-fa="پایپ‌لاین ریکان کامل" data-en="Full Recon Pipeline">پایپ‌لاین ریکان</td><td data-fa="核心 ارزش. ابزارهای استاندارد. checkpoint/resume." data-en="Core value. Standard tools. Checkpoint/resume.">核心 ارزش پروژه</td></tr>
+                    <tr><td data-fa="سیستم یافتن‌ها" data-en="Findings System">سیستم یافتن‌ها</td><td data-fa="CRUD واقعی، export، triage" data-en="Real CRUD, export, triage">کاربردی</td></tr>
+                    <tr><td data-fa="چت ایجنت + LLM اپراتور" data-en="Agent Chat + LLM Operator">چت ایجنت</td><td data-fa="برنامه‌ریزی واقعی با AI" data-en="Real AI planning">AI واقعی</td></tr>
+                    <tr><td data-fa="Target Policy" data-en="Target Policy">Target Policy</td><td data-fa="مدیریت scope و مجوزها" data-en="Scope and permission management">ضروری</td></tr>
+                    <tr><td data-fa="Auth Context" data-en="Auth Context">Auth Context</td><td data-fa="تست authenticated" data-en="Authenticated testing">ضروری</td></tr>
+                    <tr><td data-fa="Target Memory (RAG)" data-en="Target Memory (RAG)">حافظه RAG</td><td data-fa="یادگیری بلندمدت" data-en="Long-term learning">یادگیری</td></tr>
+                    <tr><td data-fa="PDF Reports" data-en="PDF Reports">گزارش PDF</td><td data-fa="خروجی نهایی" data-en="Final output">خروجی</td></tr>
+                    <tr><td data-fa="تنظیمات کاربر (LLM, VT, Telegram, Wordlists)" data-en="User Settings (LLM, VT, Telegram, Wordlists)">تنظیمات کاربر</td><td data-fa="ضروری" data-en="Essential">ضروری</td></tr>
+                </tbody>
+            </table>
+
+            <h3 style="color:var(--red);margin:20px 0 15px" data-fa="❌ حذف کن (بدردنخور / گمراه‌کننده)" data-en="❌ Remove (Useless / Misleading)">❌ حذف کن</h3>
+            <table>
+                <thead><tr><th data-fa="فیچر" data-en="Feature">فیچر</th><th data-fa="دلیل حذف" data-en="Reason for Removal">دلیل حذف</th></tr></thead>
+                <tbody>
+                    <tr><td data-fa="Bug Pattern Registry Panel" data-en="Bug Pattern Registry Panel">Bug Pattern Registry</td><td data-fa="Read-only viewer از داده‌های seed شده. کاربرد نداره" data-en="Read-only viewer of seeded data. No user value">Read-only، بی‌فایده</td></tr>
+                    <tr><td data-fa="Bug Payload Registry Panel" data-en="Bug Payload Registry Panel">Bug Payload Registry</td><td data-fa="Payload‌ها وجود دارن ولی اجرا غیرفعاله. گمراه‌کننده" data-en="Payloads exist but execution disabled. Misleading">گمراه‌کننده</td></tr>
+                    <tr><td data-fa="Bug Tests Panel (passive mode)" data-en="Bug Tests Panel (passive mode)">Bug Tests (passive)</td><td data-fa="فقط pattern matching. نویز تولید می‌کنه" data-en="Only pattern matching. Generates noise">نویز محض</td></tr>
+                    <tr><td data-fa="سه AI Agent (Triage/Summary/Report)" data-en="Three AI Agents (Triage/Summary/Report)">سه AI Agent</td><td data-fa="if/else scoring هستن، اسمشون گمراه‌کننده‌ست" data-en="Just if/else scoring, misleading name">گمراه‌کننده</td></tr>
+                    <tr><td data-fa="Operator Skills (14 مهارت فعلی)" data-en="Operator Skills (current 14 skills)">مهارت‌های فعلی</td><td data-fa="همه analysis/planning هستن. جایگزین با skills واقعی مثل Strix" data-en="All analysis/planning. Replace with real skills like Strix">جایگزین بشه</td></tr>
+                </tbody>
+            </table>
+
+            <h3 style="color:var(--yellow);margin:20px 0 15px" data-fa="🔄 بازسازی کن (ایده خوبه، اجرا ضعیف)" data-en="🔄 Rebuild (Good Idea, Poor Execution)">🔄 بازسازی کن</h3>
+            <table>
+                <thead><tr><th data-fa="فیچر" data-en="Feature">فیچر</th><th data-fa="مشکل فعلی" data-en="Current Problem">مشکل</th><th data-fa="راه‌حل" data-en="Solution">راه‌حل</th></tr></thead>
+                <tbody>
+                    <tr><td data-fa="Controlled Runtime" data-en="Controlled Runtime">Controlled Runtime</td><td data-fa="فقط HTTP probe کار می‌کنه" data-en="Only HTTP probe works">اضافه کردن Browser, Terminal, Python runtime</td></tr>
+                    <tr><td data-fa="تب Analysis" data-en="Analysis Tab">تب Analysis</td><td data-fa="۹ بخش مجزا و شلوغ" data-en="9 separate crowded sections">تبدیل به Agent Dashboard واحد</td></tr>
+                    <tr><td data-fa="Autopilot" data-en="Autopilot">Autopilot</td><td data-fa="auto-approve بدون اجرای واقعی" data-en="Auto-approve without real execution">اتصال به ابزارهای واقعی</td></tr>
+                    <tr><td data-fa="Agent Actions" data-en="Agent Actions">Agent Actions</td><td data-fa="workflow پیچیده بدون نتیجه واقعی" data-en="Complex workflow without real results">ساده‌سازی + اتصال به execution</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- بخش ۵: نقشه راه جدید -->
+        <section class="section">
+            <h2 class="section-title"><span data-fa="بخش ۵: نقشه راه جدید" data-en="Section 5: New Roadmap">بخش ۵: نقشه راه جدید</span></h2>
+
+            <div class="card" style="border-color:var(--green)">
+                <h3 class="card-title" data-fa="v4.0 - Hunter Agent Core" data-en="v4.0 - Hunter Agent Core">v4.0 - Hunter Agent Core</h3>
+                <p data-fa="هدف: ساخت موتور اصلی Hunter Agent با ابزارهای واقعی" data-en="Goal: Build the core Hunter Agent engine with real tools">هدف: ساخت موتور اصلی Hunter Agent</p>
+                <ul style="list-style:none;padding:0;margin-top:15px">
+                    <li>✅ <strong>HTTP Client Engine</strong> - ارسال درخواست‌های HTTP با payload، مدیریت session، cookie jar</li>
+                    <li>✅ <strong>Browser Engine</strong> - Playwright headless برای تست XSS/DOM/CSRF</li>
+                    <li>✅ <strong>Terminal Engine</strong> - اجرای nuclei, sqlmap, ffuf با مدیریت timeout</li>
+                    <li>✅ <strong>Evidence Capture</strong> - ذخیره request/response/PoC برای هر تست</li>
+                    <li>✅ <strong>Hunter Agent Loop</strong> - حلقه: observe → hypothesize → test → learn</li>
+                </ul>
+            </div>
+
+            <div class="card" style="border-color:var(--blue)">
+                <h3 class="card-title" data-fa="v4.1 - Specialist Agents" data-en="v4.1 - Specialist Agents">v4.1 - Specialist Agents</h3>
+                <p data-fa="هدف: ساخت ایجنت‌های متخصص برای هر کلاس باگ" data-en="Goal: Build specialist agents for each bug class">هدف: ایجنت‌های متخصص هر کلاس باگ</p>
+                <ul style="list-style:none;padding:0;margin-top:15px">
+                    <li>🔬 <strong>XSS Agent</strong> - reflected, stored, DOM با payload‌های واقعی</li>
+                    <li>🔬 <strong>SQLi Agent</strong> - blind, error-based, union با sqlmap</li>
+                    <li>🔬 <strong>IDOR Agent</strong> - تست با دو حساب کاربری</li>
+                    <li>🔬 <strong>SSRF Agent</strong> - internal + OOB callback</li>
+                    <li>🔬 <strong>Auth Agent</strong> - bypass, escalation, JWT attacks</li>
+                </ul>
+            </div>
+
+            <div class="card" style="border-color:var(--purple)">
+                <h3 class="card-title" data-fa="v4.2 - Skills + Learning" data-en="v4.2 - Skills + Learning">v4.2 - Skills + Learning</h3>
+                <p data-fa="هدف: سیستم مهارت و یادگیری واقعی" data-en="Goal: Real skills and learning system">هدف: سیستم مهارت و یادگیری</p>
+                <ul style="list-style:none;padding:0;margin-top:15px">
+                    <li>📚 <strong>Skills as Markdown</strong> - مثل Strix، هر skill = فایل Markdown با YAML frontmatter</li>
+                    <li>🧠 <strong>Learning Loop</strong> - ایجنت از نتایج یاد می‌گیره و استراتژی عوض می‌کنه</li>
+                    <li>🔄 <strong>Creative Discovery</strong> - اگر XSS دنبال می‌کنه، SQLi ببینه sub-agent اسپAWN کنه</li>
+                    <li>📝 <strong>User Skills</strong> - کاربر بتونه skill/strategy اختصاصی بسازه</li>
+                </ul>
+            </div>
+
+            <div class="card" style="border-color:var(--orange)">
+                <h3 class="card-title" data-fa="v4.3 - UI + Reports" data-en="v4.3 - UI + Reports">v4.3 - UI + Reports</h3>
+                <p data-fa="هدف: UI ساده و گزارش‌های استاندارد" data-en="Goal: Clean UI and standard reports">هدف: UI ساده و گزارش استاندارد</p>
+                <ul style="list-style:none;padding:0;margin-top:15px">
+                    <li>🎨 <strong>Agent Dashboard</strong> - جایگزین تب Analysis فعلی</li>
+                    <li>📊 <strong>Live Progress</strong> - نمایش زنده فرآیند شکار</li>
+                    <li>📝 <strong>Bug Bounty Reports</strong> - فرمت استاندارد HackerOne/Bugcrowd</li>
+                    <li>🎯 <strong>Target Selector</strong> - انتخاب ساب‌دامین و شروع تست مستقیم</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- بخش ۶: جمع‌بندی -->
+        <section class="section">
+            <h2 class="section-title"><span data-fa="بخش ۶: جمع‌بندی" data-en="Section 6: Summary">بخش ۶: جمع‌بندی</span></h2>
+
+            <div class="card" style="border-color:var(--green);background:linear-gradient(135deg,var(--card),#111)">
+                <h3 class="card-title" data-fa="خلاصه تصمیمات" data-en="Decision Summary">خلاصه تصمیمات</h3>
+                <table>
+                    <thead><tr><th data-fa="تصمیم" data-en="Decision">تصمیم</th><th data-fa="اقدام" data-en="Action">اقدام</th></tr></thead>
+                    <tbody>
+                        <tr><td data-fa="پایپ‌لاین ریکان" data-en="Recon Pipeline">پایپ‌لاین ریکان</td><td><span class="badge badge-green">نگه دار</span></td></tr>
+                        <tr><td data-fa="Bug Pattern/Payload Registry" data-en="Bug Pattern/Payload Registry">Bug Pattern/Payload Registry</td><td><span class="badge badge-red">حذف کن</span></td></tr>
+                        <tr><td data-fa="14 مهارت فعلی" data-en="Current 14 skills">مهارت‌های فعلی</td><td><span class="badge badge-yellow">جایگزین با Strix-style skills</span></td></tr>
+                        <tr><td data-fa="سه AI Agent" data-en="Three AI Agents">سه AI Agent</td><td><span class="badge badge-red">حذف کن</span></td></tr>
+                        <tr><td data-fa="تب Analysis" data-en="Analysis Tab">تب Analysis</td><td><span class="badge badge-yellow">بازسازی به Agent Dashboard</span></td></tr>
+                        <tr><td data-fa="Controlled Runtime" data-en="Controlled Runtime">Controlled Runtime</td><td><span class="badge badge-yellow">اضافه کردن ابزارهای واقعی</span></td></tr>
+                        <tr><td data-fa="Hunter Agent" data-en="Hunter Agent">Hunter Agent</td><td><span class="badge badge-blue">جدید بساز</span></td></tr>
+                        <tr><td data-fa="Specialist Agents" data-en="Specialist Agents">Specialist Agents</td><td><span class="badge badge-blue">جدید بساز</span></td></tr>
+                        <tr><td data-fa="Skills System" data-en="Skills System">Skills System</td><td><span class="badge badge-blue">جدید بساز (Strix-style)</span></td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="recommendation">
+                <h4 data-fa="🟢 توصیه نهایی" data-en="🟢 Final Recommendation">🟢 توصیه نهایی</h4>
+                <p data-fa="اول Hunter Agent Core رو بساز (v4.0). وقتی یک agent واقعی بتونه یک endpoint رو تست کنه و PoC تولید کنه، اونوقت Specialist Agents و Skills System ارزش پیدا می‌کنن. الان فیچرهای زیادی داری که ظاهرسازی هستن - بهتره حذفشون کنی و روی چیزایی تمرکز کنی که واقعاً باگ پیدا می‌کنه." data-en="Build Hunter Agent Core first (v4.0). When a real agent can test an endpoint and produce a PoC, then Specialist Agents and Skills System become valuable. You have many features that are pretend - better to remove them and focus on what actually finds bugs.">
+                اول Hunter Agent Core رو بساز (v4.0). وقتی یک agent واقعی بتونه یک endpoint رو تست کنه و PoC تولید کنه، اونوقت Specialist Agents و Skills System ارزش پیدا می‌کنن.
+                </p>
+            </div>
+        </section>
+
+        <footer style="text-align:center;padding:40px 0;border-top:1px solid var(--border);margin-top:60px">
+            <p style="color:var(--dim);font-size:14px">Hunt Engine v4.0 Reengineering Plan</p>
+            <p style="color:var(--dim);font-size:12px;margin-top:10px">Mustache Security Team | Inspired by Strix</p>
+        </footer>
+    </div>
+    <script>
+        let currentLang='fa';
+        function switchLang(lang){
+            currentLang=lang;
+            document.documentElement.lang=lang;
+            document.documentElement.dir=lang==='fa'?'rtl':'ltr';
+            document.querySelectorAll('.lang-btn').forEach(b=>{b.classList.remove('active');if(b.textContent.includes(lang==='fa'?'فارسی':'English'))b.classList.add('active')});
+            document.querySelectorAll('[data-'+lang+']').forEach(el=>{el.textContent=el.getAttribute('data-'+lang)});
+        }
+    </script>
+</body>
+</html>

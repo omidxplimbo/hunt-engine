@@ -350,25 +350,6 @@ const TargetAssets = () => {
     FEATURE_FLAGS.targetPolicy,
     true,
   );
-  const featureAIAnalysis = isAccountFeatureEnabled(
-    accountFeatureFlags,
-    FEATURE_FLAGS.aiAnalysis,
-    true,
-  );
-
-  const featureAgentRuns = isAccountFeatureEnabled(
-    accountFeatureFlags,
-    FEATURE_FLAGS.agentRuns,
-    true,
-  );
-
-  const featureAnalysisTab = featureAIAnalysis || featureAgentRuns;
-
-  useEffect(() => {
-    if (activeTab === "analysis" && !featureAnalysisTab) {
-      setActiveTab("assets");
-    }
-  }, [activeTab, featureAnalysisTab]);
 
   useEffect(() => {
     if (activeTab === "policy" && !featureTargetPolicy) {
@@ -586,15 +567,10 @@ const TargetAssets = () => {
           </button>
 
           <button
-            onClick={() => featureAnalysisTab && setActiveTab("analysis")}
-            disabled={!featureAnalysisTab}
-            title={
-              featureAIAnalysis
-                ? "Target analysis"
-                : "Analysis is disabled by feature flag"
-            }
+            onClick={() => setActiveTab("analysis")}
+            title="Hunting Dashboard"
             className={clsx(
-              "hack-btn flex-1 justify-center md:flex-none disabled:opacity-40",
+              "hack-btn flex-1 justify-center md:flex-none",
               activeTab === "analysis"
                 ? "bg-hack-primary text-black"
                 : "bg-transparent text-hack-dim border-hack-dim/30",

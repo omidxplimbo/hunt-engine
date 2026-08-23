@@ -242,6 +242,11 @@ func main() {
 	api.Post("/targets/:id/agents/summary/run", handlers.RunTargetSummaryAgent)
 	api.Post("/targets/:id/agents/report/run", handlers.RunTargetReportAgent)
 	api.Delete("/targets/:id/agents/runs/:run_id", handlers.DeleteTargetAgentRun)
+
+	// Hunter Agent Routes (v4.0)
+	api.Post("/targets/:id/hunter/start", handlers.StartHunt)
+	api.Get("/targets/:id/hunter/results", handlers.GetHuntResults)
+
 	// Safe Bug Testing Routes
 	api.Get("/targets/:id/controlled-tests/runs", handlers.GetTargetControlledTestRuns)
 	api.Post("/targets/:id/controlled-tests/runs", handlers.CreateTargetControlledTestRun)
