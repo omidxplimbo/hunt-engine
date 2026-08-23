@@ -38,20 +38,11 @@ import {
   isAccountFeatureEnabled,
 } from "../api/me";
 import FindingsPanel from "../components/FindingsPanel";
-import AIAnalysisPanel from "../components/AIAnalysisPanel";
-import AgentRunsPanel from "../components/AgentRunsPanel";
-import AgentActionsPanel from "../components/AgentActionsPanel";
-import AgentChatPanel from "../components/AgentChatPanel";
-import BugTestsPanel from "../components/BugTestsPanel";
-import BugPatternRegistryPanel from "../components/BugPatternRegistryPanel";
-import BugPayloadRegistryPanel from "../components/BugPayloadRegistryPanel";
 import TargetPolicyPanel from "../components/TargetPolicyPanel";
-import TwoAccountScannerPanel from "../components/TwoAccountScannerPanel";
 import AuthContextManager from "../components/AuthContextManager";
-import OperatorSkillProfilePanel from "../components/OperatorSkillProfilePanel";
+import HuntingDashboard from "../components/HuntingDashboard";
 
 type ActiveTab = "assets" | "urls" | "findings" | "analysis" | "policy";
-type AnalysisSection = "overview" | "recommendations" | "agents" | "actions" | "bugtests" | "patterns" | "payloads" | "skills" | "chat";
 
 const KNOWN_ASSET_PROVIDERS = [
   { id: "subfinder", label: "Subfinder" },
@@ -148,7 +139,6 @@ const TargetAssets = () => {
   const targetId = Number(id);
 
   const [activeTab, setActiveTab] = useState<ActiveTab>("assets");
-  const [activeAnalysisSection, setActiveAnalysisSection] = useState<AnalysisSection>("overview");
   const [page, setPage] = useState(1);
   const [goToPage, setGoToPage] = useState("1");
   const [lastKnownTotalRecords, setLastKnownTotalRecords] = useState(0);
@@ -360,71 +350,6 @@ const TargetAssets = () => {
     FEATURE_FLAGS.targetPolicy,
     true,
   );
-  const featureAIAnalysis = isAccountFeatureEnabled(
-    accountFeatureFlags,
-    FEATURE_FLAGS.aiAnalysis,
-    true,
-  );
-  const featureLLMAssistedAnalysis = isAccountFeatureEnabled(
-    accountFeatureFlags,
-    FEATURE_FLAGS.llmAssistedAnalysis,
-    true,
-  );
-  const featureAIRecommendations = isAccountFeatureEnabled(
-    accountFeatureFlags,
-    FEATURE_FLAGS.aiRecommendations,
-    true,
-  );
-
-  const featureAgentRuns = isAccountFeatureEnabled(
-    accountFeatureFlags,
-    FEATURE_FLAGS.agentRuns,
-    true,
-  );
-
-  const featureAgentActions = isAccountFeatureEnabled(
-    accountFeatureFlags,
-    FEATURE_FLAGS.agentActions,
-    true,
-  );
-
-  const featureAgentChat = isAccountFeatureEnabled(
-    accountFeatureFlags,
-    FEATURE_FLAGS.agentChat,
-    true,
-  );
-
-  const featureSafeBugTesting = isAccountFeatureEnabled(
-    featureFlagsQuery.data?.flags,
-    FEATURE_FLAGS.safeBugTesting,
-    true,
-  );
-
-  const featureAITriageAgent = isAccountFeatureEnabled(
-    accountFeatureFlags,
-    FEATURE_FLAGS.aiTriageAgent,
-    true,
-  );
-
-  const featureAISummaryAgent = isAccountFeatureEnabled(
-    accountFeatureFlags,
-    FEATURE_FLAGS.aiSummaryAgent,
-    true,
-  );
-
-  const featureAIReportAgent = isAccountFeatureEnabled(
-    accountFeatureFlags,
-    FEATURE_FLAGS.aiReportAgent,
-    true,
-  );
-
-  const featureAnalysisTab = featureAIAnalysis || featureAgentRuns;
-
-  useEffect(() => {
-    if (activeTab === "analysis" && !featureAnalysisTab) {
-      setActiveTab("assets");
-    }
-  }, [activeTab, featureAnalysisTab]);
 
   useEffect(() => {
     if (activeTab === "policy" && !featureTargetPolicy) {
@@ -642,15 +567,10 @@ const TargetAssets = () => {
           </button>
 
           <button
-            onClick={() => featureAnalysisTab && setActiveTab("analysis")}
-            disabled={!featureAnalysisTab}
-            title={
-              featureAIAnalysis
-                ? "Target analysis"
-                : "Analysis is disabled by feature flag"
-            }
+            onClick={() => setActiveTab("analysis")}
+            title="Hunting Dashboard"
             className={clsx(
-              "hack-btn flex-1 justify-center md:flex-none disabled:opacity-40",
+              "hack-btn flex-1 justify-center md:flex-none",
               activeTab === "analysis"
                 ? "bg-hack-primary text-black"
                 : "bg-transparent text-hack-dim border-hack-dim/30",
@@ -888,160 +808,7 @@ const TargetAssets = () => {
           <AuthContextManager />
         </>
       ) : activeTab === "analysis" ? (
-        <div className="space-y-4">
-          <div className="border border-hack-border bg-black/30 p-4">
-          <TwoAccountScannerPanel targetId={targetId} />
-            <div className="mb-3 font-mono text-xs uppercase tracking-wider text-hack-dim">
-              Analysis Workspace
-            </div>
-
-            <div className="grid gap-2 md:grid-cols-6">
-              {[
-                {
-                  id: "overview",
-                  label: "AI Analysis",
-                  description: "risk and narrative",
-                  enabled: featureAIAnalysis,
-                },
-                {
-                  id: "recommendations",
-                  label: "Recommendations",
-                  description: "operational tasks",
-                  enabled: featureAIRecommendations,
-                },
-                {
-                  id: "agents",
-                  label: "Advisory Agents",
-                  description: "triage / summary / report",
-                  enabled: featureAgentRuns,
-                },
-                {
-                  id: "actions",
-                  label: "Agent Actions",
-                  description: "approve / reject",
-                  enabled: featureAgentActions,
-                },
-                {
-                  id: "bugtests",
-                  label: "Bug Tests",
-                  description: "safe passive checks",
-                  enabled: featureSafeBugTesting,
-                },
-                  {
-                    id: "patterns",
-                    label: "Pattern Registry",
-                    description: "safe test rules",
-                    enabled: featureSafeBugTesting,
-                  },
-                  {
-                    id: "payloads",
-                    label: "Payload Registry",
-                    description: "metadata only",
-                    enabled: featureSafeBugTesting,
-                  },
-                  {
-                    id: "skills",
-                    label: "Operator Profile",
-                    description: "skills + methodology",
-                    enabled: featureAgentChat,
-                  },
-                {
-                  id: "chat",
-                  label: "Attack Surface Chat",
-                  description: "chat to action plan",
-                  enabled: featureAgentChat,
-                },
-              ].map((section) => (
-                <button
-                  key={section.id}
-                  type="button"
-                  disabled={!section.enabled}
-                  onClick={() =>
-                    section.enabled &&
-                    setActiveAnalysisSection(section.id as AnalysisSection)
-                  }
-                  className={clsx(
-                    "border p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-40",
-                    activeAnalysisSection === section.id
-                      ? "border-hack-primary bg-hack-primary/10 text-hack-primary"
-                      : "border-hack-border bg-black/20 text-hack-dim hover:border-hack-primary/60 hover:text-white",
-                  )}
-                >
-                  <div className="font-mono text-xs uppercase tracking-wider">
-                    {section.label}
-                  </div>
-                  <div className="mt-1 text-[11px] text-hack-dim">
-                    {section.description}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {activeAnalysisSection === "overview" && (
-            <AIAnalysisPanel
-              targetId={targetId}
-              aiAnalysisEnabled={featureAIAnalysis}
-              llmAssistedEnabled={featureLLMAssistedAnalysis}
-              recommendationsEnabled={featureAIRecommendations}
-              mode="analysis"
-            />
-          )}
-
-          {activeAnalysisSection === "recommendations" && (
-            <AIAnalysisPanel
-              targetId={targetId}
-              aiAnalysisEnabled={featureAIAnalysis}
-              llmAssistedEnabled={featureLLMAssistedAnalysis}
-              recommendationsEnabled={featureAIRecommendations}
-              mode="recommendations"
-            />
-          )}
-
-          {activeAnalysisSection === "agents" && (
-            <AgentRunsPanel
-              targetId={targetId}
-              agentRunsEnabled={featureAgentRuns}
-              triageEnabled={featureAITriageAgent}
-              summaryEnabled={featureAISummaryAgent}
-              reportEnabled={featureAIReportAgent}
-            />
-          )}
-
-          {activeAnalysisSection === "actions" && (
-            <AgentActionsPanel
-              targetId={targetId}
-              enabled={featureAgentActions}
-            />
-          )}
-
-          {activeAnalysisSection === "bugtests" && (
-            <BugTestsPanel
-              targetId={targetId}
-              enabled={featureSafeBugTesting}
-            />
-          )}
-
-          {activeAnalysisSection === "patterns" && (
-            <BugPatternRegistryPanel enabled={featureSafeBugTesting} />
-          )}
-
-          {activeAnalysisSection === "payloads" && (
-            <BugPayloadRegistryPanel enabled={featureSafeBugTesting} />
-          )}
-
-          {activeAnalysisSection === "skills" && (
-            <OperatorSkillProfilePanel targetId={targetId} />
-          )}
-
-          {activeAnalysisSection === "chat" && (
-            <AgentChatPanel
-              targetId={targetId}
-              enabled={featureAgentChat}
-              onJumpToActions={() => setActiveAnalysisSection("actions")}
-            />
-          )}
-        </div>
+        <HuntingDashboard targetId={targetId} />
       ) : (
         <div className="overflow-hidden border border-hack-border bg-black/20">
           <div className="border-b border-hack-border px-3 py-2 font-mono text-xs uppercase tracking-wider text-hack-dim">

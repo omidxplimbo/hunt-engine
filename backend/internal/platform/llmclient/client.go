@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -38,7 +40,8 @@ type chatRequest struct {
 type chatResponse struct {
 	Choices []struct {
 		Message struct {
-			Content string `json:"content"`
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content,omitempty"`
 		} `json:"message"`
 	} `json:"choices"`
 	Error interface{} `json:"error,omitempty"`
@@ -181,7 +184,7 @@ func GenerateJSON(ctx context.Context, cfg *Config, req JSONRequest) (map[string
 		req.Temperature = 0
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 180*time.Second)
 	defer cancel()
 
 	userJSON, _ := json.Marshal(req.UserPayload)
@@ -217,13 +220,14 @@ func generateOpenAICompatibleJSON(ctx context.Context, cfg *Config, systemPrompt
 		Temperature: temperature,
 		MaxTokens:   maxTokens,
 		Messages: []chatMessage{
-			{Role: "system", Content: systemPrompt},
+			{Role: "system", Content: systemPrompt + "\n\nIMPORTANT: Return valid JSON only. Do not wrap in markdown."},
 			{Role: "user", Content: userJSON},
 		},
-		ResponseFormat: map[string]interface{}{"type": "json_object"},
 	}
 
 	rawReq, _ := json.Marshal(reqBody)
+
+	log.Printf("[LLM] Request to %s model=%s body_len=%d", cfg.BaseURL, cfg.Model, len(rawReq))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.BaseURL+"/chat/completions", bytes.NewReader(rawReq))
 	if err != nil {
@@ -237,27 +241,38 @@ func generateOpenAICompatibleJSON(ctx context.Context, cfg *Config, systemPrompt
 		req.Header.Set("X-Title", "Hunt Engine")
 	}
 
-	client := http.Client{Timeout: 65 * time.Second}
+	client := http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("LLM request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	var parsed chatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return nil, fmt.Errorf("decode LLM response: %w", err)
-	}
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	bodyStr := string(bodyBytes)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("LLM API returned status %d: %v", resp.StatusCode, parsed.Error)
+		return nil, fmt.Errorf("LLM API returned status %d: %s", resp.StatusCode, bodyStr[:min(len(bodyStr), 500)])
 	}
 
-	if len(parsed.Choices) == 0 || strings.TrimSpace(parsed.Choices[0].Message.Content) == "" {
+	var parsed chatResponse
+	if err := json.Unmarshal(bodyBytes, &parsed); err != nil {
+		return nil, fmt.Errorf("decode LLM response (body_len=%d body=%s): %w", len(bodyStr), bodyStr[:min(len(bodyStr), 200)], err)
+	}
+
+	if len(parsed.Choices) == 0 {
+		return nil, fmt.Errorf("LLM API returned empty choices")
+	}
+
+	content := strings.TrimSpace(parsed.Choices[0].Message.Content)
+	if content == "" {
+		content = strings.TrimSpace(parsed.Choices[0].Message.ReasoningContent)
+	}
+	if content == "" {
 		return nil, fmt.Errorf("LLM API returned empty content")
 	}
 
-	return decodeJSONMap(parsed.Choices[0].Message.Content)
+	return decodeJSONMap(content)
 }
 
 func generateGeminiJSON(ctx context.Context, cfg *Config, systemPrompt string, userJSON string, temperature float64, maxTokens int) (map[string]interface{}, error) {
@@ -443,11 +458,19 @@ func generateOpenAICompatibleNarrative(ctx context.Context, cfg *Config, systemP
 		return nil, fmt.Errorf("LLM API returned status %d: %v", resp.StatusCode, parsed.Error)
 	}
 
-	if len(parsed.Choices) == 0 || strings.TrimSpace(parsed.Choices[0].Message.Content) == "" {
+	if len(parsed.Choices) == 0 {
+		return nil, fmt.Errorf("LLM API returned empty choices")
+	}
+
+	content := strings.TrimSpace(parsed.Choices[0].Message.Content)
+	if content == "" {
+		content = strings.TrimSpace(parsed.Choices[0].Message.ReasoningContent)
+	}
+	if content == "" {
 		return nil, fmt.Errorf("LLM API returned empty content")
 	}
 
-	return decodeNarrativeJSON(parsed.Choices[0].Message.Content)
+	return decodeNarrativeJSON(content)
 }
 
 func generateGeminiNarrative(ctx context.Context, cfg *Config, systemPrompt string, userJSON string) (map[string]interface{}, error) {
