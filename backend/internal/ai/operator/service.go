@@ -327,7 +327,7 @@ func GeneratePlanWithConfig(ctx context.Context, cfg *llmclient.Config, req Plan
 		SystemPrompt:    SystemPrompt(),
 		UserPayload:     payload,
 		Temperature:     0.2,
-		MaxTokens:       1400,
+		MaxTokens:       8000,
 		ResponseVersion: PromptVersion,
 	})
 	if err != nil {
