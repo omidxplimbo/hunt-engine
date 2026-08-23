@@ -250,6 +250,20 @@ func (h *HTTPClient) do(req *http.Request) *HTTPResult {
 
 // buildURL constructs the full URL from base + path + params
 func (h *HTTPClient) buildURL(path string, params map[string]string) string {
+	// If path is already a full URL, use it directly
+	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+		if len(params) > 0 {
+			u, _ := url.Parse(path)
+			q := u.Query()
+			for k, v := range params {
+				q.Set(k, v)
+			}
+			u.RawQuery = q.Encode()
+			return u.String()
+		}
+		return path
+	}
+	
 	base := strings.TrimRight(h.baseURL, "/")
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path

@@ -140,7 +140,7 @@ Be specific and practical. Focus on high-impact vulnerabilities.`
 		
 		strategy := &Strategy{
 			Objective:  objective,
-			BugClasses: h.getStringSlice(result, "bug_classes"),
+			BugClasses: normalizeBugClasses(h.getStringSlice(result, "bug_classes")),
 			Targets:    h.getStringSlice(result, "targets"),
 			Priority:   h.getInt(result, "priority"),
 			Status:     "planning",
@@ -194,17 +194,43 @@ func (h *HunterAgent) executeStrategy(ctx context.Context) error {
 	var urls []models.FoundURL
 	h.db.Where("target_id = ?", h.target.ID).Limit(100).Find(&urls)
 	
+	// If no URLs in DB, probe the target directly
+	if len(urls) == 0 {
+		log.Printf("[Hunter] No URLs in database, probing target directly: %s", h.target.RootDomain)
+		urls = h.probeTarget()
+	}
+	
+	// Filter to URLs with parameters
+	var testableURLs []models.FoundURL
+	for _, u := range urls {
+		if extractParams(u.Value) != nil {
+			testableURLs = append(testableURLs, u)
+		}
+	}
+	
+	// If still no testable URLs, test common endpoints
+	if len(testableURLs) == 0 {
+		log.Printf("[Hunter] No URLs with parameters, testing common endpoints")
+		testableURLs = h.generateCommonEndpoints()
+	}
+	
 	// Test each bug class
 	for _, bugClass := range h.strategy.BugClasses {
-		log.Printf("[Hunter] Testing bug class: %s", bugClass)
+		log.Printf("[Hunter] Testing bug class: %s on %d URLs", bugClass, len(testableURLs))
 		
-		switch bugClass {
-		case "xss":
-			h.testXSS(ctx, urls)
-		case "sqli":
-			h.testSQLi(ctx, urls)
-		case "idor":
-			h.testIDOR(ctx, urls)
+		// Use contains-based matching for flexibility
+		classLower := strings.ToLower(bugClass)
+		switch {
+		case strings.Contains(classLower, "xss") || strings.Contains(classLower, "script"):
+			h.testXSS(ctx, testableURLs)
+		case strings.Contains(classLower, "sqli") || strings.Contains(classLower, "sql"):
+			h.testSQLi(ctx, testableURLs)
+		case strings.Contains(classLower, "idor") || strings.Contains(classLower, "bola") || strings.Contains(classLower, "authorization"):
+			h.testIDOR(ctx, testableURLs)
+		default:
+			// For unknown classes, run XSS as default
+			log.Printf("[Hunter] Unknown bug class '%s', running XSS test", bugClass)
+			h.testXSS(ctx, testableURLs)
 		}
 		
 		// Check if we found something - be creative!
@@ -212,13 +238,79 @@ func (h *HunterAgent) executeStrategy(ctx context.Context) error {
 			confirmed := h.evidence.GetConfirmed()
 			if len(confirmed) > 0 {
 				log.Printf("[Hunter] Found %d confirmed vulnerabilities!", len(confirmed))
-				// Could spawn sub-agents here for deeper testing
 			}
 		}
 	}
 	
 	h.strategy.Status = "completed"
 	return nil
+}
+
+// probeTarget makes initial requests to discover endpoints
+func (h *HunterAgent) probeTarget() []models.FoundURL {
+	var urls []models.FoundURL
+	
+	// Test common paths
+	commonPaths := []string{
+		"/", "/index.php", "/index.html", "/search", "/search.php",
+		"/login", "/login.php", "/admin", "/api", "/api/v1",
+		"/user", "/profile", "/dashboard", "/contact", "/about",
+	}
+	
+	for _, path := range commonPaths {
+		result := h.httpClient.Get(path, nil)
+		if result.Error == "" && result.ResponseStatus == 200 {
+			// Check if response contains forms or parameters
+			if strings.Contains(result.ResponseBody, "<form") || 
+			   strings.Contains(result.ResponseBody, "action=") ||
+			   strings.Contains(result.ResponseBody, "<input") {
+				log.Printf("[Hunter] Found form at %s", path)
+			}
+			// Add to URLs for further testing
+			urls = append(urls, models.FoundURL{
+				Value:  fmt.Sprintf("https://%s%s", h.target.RootDomain, path),
+				Source: "hunter_probe",
+			})
+		}
+	}
+	
+	return urls
+}
+
+// generateCommonEndpoints creates test URLs with common parameter patterns
+func (h *HunterAgent) generateCommonEndpoints() []models.FoundURL {
+	var urls []models.FoundURL
+	baseURL := fmt.Sprintf("https://%s", h.target.RootDomain)
+	
+	// Common parameter patterns to test
+	testPatterns := []struct {
+		path   string
+		params []string
+	}{
+		{"/search", []string{"q", "query", "search", "keyword"}},
+		{"/login", []string{"username", "password", "user", "email"}},
+		{"/user", []string{"id", "user_id", "uid"}},
+		{"/profile", []string{"id", "user_id"}},
+		{"/api/users", []string{"id", "page", "limit"}},
+		{"/api/search", []string{"q", "query"}},
+		{"/page", []string{"id", "page", "p"}},
+		{"/product", []string{"id", "product_id"}},
+		{"/item", []string{"id", "item_id"}},
+		{"/redirect", []string{"url", "next", "return", "goto"}},
+	}
+	
+	for _, pattern := range testPatterns {
+		for _, param := range pattern.params {
+			testURL := fmt.Sprintf("%s%s?%s=test", baseURL, pattern.path, param)
+			urls = append(urls, models.FoundURL{
+				Value:  testURL,
+				Source: "hunter_generated",
+			})
+		}
+	}
+	
+	log.Printf("[Hunter] Generated %d test URLs with parameters", len(urls))
+	return urls
 }
 
 // testXSS tests for XSS vulnerabilities with multiple payload types
@@ -585,4 +677,63 @@ func applyAuthToClient(client *HTTPClient, ctx *models.AuthContext) {
 	case models.AuthContextToken:
 		client.SetAuth("bearer", ctx.Value)
 	}
+}
+
+// normalizeBugClasses normalizes LLM-generated bug class names to standard names
+func normalizeBugClasses(classes []string) []string {
+	normalizationMap := map[string]string{
+		"reflected xss":              "xss",
+		"stored xss":                 "xss",
+		"dom xss":                    "xss",
+		"dom-based xss":              "xss",
+		"xss via query parameters":   "xss",
+		"xss via post data":          "xss",
+		"xss in http headers":        "xss",
+		"cross-site scripting":       "xss",
+		"cross-site scripting (xss)": "xss",
+		"xss_reflected":              "xss",
+		"xss_stored":                 "xss",
+		"xss_dom":                    "xss",
+		"sql injection":              "sqli",
+		"sql injection (sqli)":       "sqli",
+		"blind sql injection":        "sqli",
+		"error-based sqli":           "sqli",
+		"union-based sqli":           "sqli",
+		"sqli_injection":             "sqli",
+		"insecure direct object reference": "idor",
+		"broken object level authorization": "idor",
+		"idor/bola":                  "idor",
+		"idor_bola":                  "idor",
+		"server-side request forgery": "ssrf",
+		"ssrf (server-side request forgery)": "ssrf",
+		"ssrf_testing":               "ssrf",
+		"command injection":          "command_injection",
+		"os command injection":       "command_injection",
+		"remote code execution":      "rce",
+		"template injection":         "ssti",
+		"server-side template injection": "ssti",
+		"open redirect":              "open_redirect",
+		"path traversal":             "path_traversal",
+		"local file inclusion":       "lfi",
+		"cross-site request forgery": "csrf",
+		"parameter injection":        "parameter_injection",
+		"header injection":           "header_injection",
+		"crlf injection":             "crlf",
+	}
+	
+	result := make([]string, 0, len(classes))
+	seen := make(map[string]bool)
+	
+	for _, class := range classes {
+		normalized := strings.ToLower(strings.TrimSpace(class))
+		if mapped, ok := normalizationMap[normalized]; ok {
+			normalized = mapped
+		}
+		if !seen[normalized] {
+			seen[normalized] = true
+			result = append(result, normalized)
+		}
+	}
+	
+	return result
 }
