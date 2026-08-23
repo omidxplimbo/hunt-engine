@@ -90,6 +90,8 @@ func Connect() {
 		models.TargetMemoryEvent{},
 		&models.BugPayload{},
 		&models.NucleiTemplate{},
+		&models.AuthContext{},
+		&models.TwoAccountSession{},
 	)
 
 	if err != nil {

@@ -12,13 +12,16 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/recover"
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/api/handlers"
+	// دو-account handler will be imported here
 	"github.com/omidxplimbo/hunt-engine/backend/internal/api/middleware"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/bugpatterns" // 👈 ایمپورت جدید
+	"github.com/omidxplimbo/hunt-engine/backend/internal/handler"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/scheduler"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/telegram"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/service"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/utils"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/worker"
 
@@ -93,6 +96,23 @@ func main() {
 	// --- Protected Routes (محافظت شده) ---
 	// همه روت‌های زیر نیاز به توکن دارند
 	api.Use(middleware.Protected())
+
+	// TEST ROUTE: Debug Auth Context
+	api.Get("/test-auth-debug", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"status": "success", "message": "Auth working!", "user": c.Locals("user_id")})
+	})
+
+	// Initialize Auth Context Service & Handlers (v3.16.0)
+	authContextSvc := service.NewAuthContextService(database.DB, []byte(os.Getenv("JWT_SECRET")))
+	authContextHdl := handler.NewAuthContextHandler(authContextSvc)
+
+	// Auth Context Routes
+	api.Post("/auth-contexts", authContextHdl.Create)
+	api.Get("/targets/:target_id/auth-contexts", authContextHdl.List)
+        // Two-Account Testing Routes
+        api.Get("/targets/:target_id/two-account-sessions", handlers.GetTwoAccountSessions)
+        api.Post("/targets/:target_id/two-account-sessions", handlers.StartTwoAccountSession)
+	api.Delete("/auth-contexts/:id", authContextHdl.Delete)
 
 	// Operator Skill Registry Routes
 	api.Get("/operator-skills", handlers.ListOperatorSkills)

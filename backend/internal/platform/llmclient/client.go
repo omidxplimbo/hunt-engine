@@ -338,6 +338,7 @@ func decodeJSONMap(content string) (map[string]interface{}, error) {
 	return out, nil
 }
 
+// GenerateTargetNarrative generates a human-readable security narrative for a target.
 func GenerateTargetNarrative(ctx context.Context, cfg *Config, snapshot map[string]interface{}, deterministicOutput map[string]interface{}) (map[string]interface{}, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("LLM config is required")

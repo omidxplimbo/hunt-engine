@@ -8,6 +8,9 @@ import (
 )
 
 const (
+	ActionStartTwoAccountTest = "START_TWO_ACCOUNT_TEST"
+	ActionAnalyzeIDOR          = "ANALYZE_IDOR"
+	ActionSwitchIdentity       = "SWITCH_IDENTITY"
 	AgentActionStatusProposed        = "proposed"
 	AgentActionStatusApproved        = "approved"
 	AgentActionStatusRejected        = "rejected"
@@ -99,7 +102,6 @@ type AgentAction struct {
 }
 
 const (
-	AgentActionApprovalDecisionApproved = "approved"
 	AgentActionApprovalDecisionRejected = "rejected"
 )
 
