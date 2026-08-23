@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/omidxplimbo/hunt-engine/backend/internal/ai/hunter/skills"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/llmclient"
 	"gorm.io/gorm"
@@ -20,6 +21,8 @@ type HunterAgent struct {
 	evidence     *EvidenceStore
 	llmCfg       *llmclient.Config
 	strategy     *Strategy
+	skillLoader  *skills.SkillLoader
+	learning     *LearningEngine
 	sessionID    uint
 	userID       uint
 	ownerKey     string
@@ -50,15 +53,24 @@ type HunterResult struct {
 
 // NewHunterAgent creates a new Hunter Agent
 func NewHunterAgent(db *gorm.DB, target models.Target, llmCfg *llmclient.Config, userID uint, ownerKey string) *HunterAgent {
+	// Load skills
+	skillLoader := skills.NewSkillLoader("/app/internal/ai/hunter/skills")
+	skillLoader.LoadAll() // Best effort
+	
+	// Create learning engine
+	learning := NewLearningEngine(db, target.ID, userID, ownerKey)
+	
 	return &HunterAgent{
-		db:         db,
-		target:     target,
-		httpClient: NewHTTPClient(fmt.Sprintf("https://%s", target.RootDomain), 30*time.Second),
-		evidence:   NewEvidenceStore(),
-		llmCfg:     llmCfg,
-		strategy:   &Strategy{},
-		userID:     userID,
-		ownerKey:   ownerKey,
+		db:          db,
+		target:      target,
+		httpClient:  NewHTTPClient(fmt.Sprintf("https://%s", target.RootDomain), 30*time.Second),
+		evidence:    NewEvidenceStore(),
+		llmCfg:      llmCfg,
+		strategy:    &Strategy{},
+		skillLoader: skillLoader,
+		learning:    learning,
+		userID:      userID,
+		ownerKey:    ownerKey,
 	}
 }
 
@@ -427,17 +439,34 @@ func (h *HunterAgent) testIDOR(ctx context.Context, urls []models.FoundURL) {
 func (h *HunterAgent) analyzeResults() *HunterResult {
 	confirmed := h.evidence.GetConfirmed()
 	
-	summary := fmt.Sprintf("Hunt completed on %s. Tested %d bug classes. Found %d confirmed vulnerabilities out of %d tests.",
-		h.target.RootDomain, len(h.strategy.BugClasses), len(confirmed), h.evidence.Count())
+	// Learn from results
+	insights := h.learning.LearnFromResults(h.evidence.GetAll())
 	
+	// Check if we should spawn sub-agents for creative discoveries
+	spawnClasses := h.learning.ShouldSpawnSubAgent(insights)
+	if len(spawnClasses) > 0 {
+		log.Printf("[Hunter] Creative discovery! Should spawn sub-agents for: %v", spawnClasses)
+		// TODO: Actually spawn sub-agents in future version
+	}
+	
+	// Build next steps from learning insights
 	nextSteps := []string{}
 	if len(confirmed) > 0 {
 		nextSteps = append(nextSteps, "Generate detailed PoC reports for confirmed vulnerabilities")
 		nextSteps = append(nextSteps, "Test for vulnerability chaining")
-	} else {
+	}
+	for _, insight := range insights {
+		if insight.Type == "creative" {
+			nextSteps = append(nextSteps, insight.NextSteps...)
+		}
+	}
+	if len(nextSteps) == 0 {
 		nextSteps = append(nextSteps, "Try different payloads or injection points")
 		nextSteps = append(nextSteps, "Expand URL discovery with more crawling")
 	}
+	
+	summary := fmt.Sprintf("Hunt completed on %s. Tested %d bug classes. Found %d confirmed vulnerabilities out of %d tests. Learned %d insights.",
+		h.target.RootDomain, len(h.strategy.BugClasses), len(confirmed), h.evidence.Count(), len(insights))
 	
 	return &HunterResult{
 		Strategy:   h.strategy,
