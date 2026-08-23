@@ -15,6 +15,7 @@ import {
   Crosshair,
   CheckCircle,
   XCircle,
+  FileText,
 } from "lucide-react";
 import { toast } from "react-hot-toast";
 
@@ -670,6 +671,13 @@ function HunterView({ targetId }: { targetId: number }) {
               <Crosshair className="h-4 w-4" />
             )}
             {startHuntMutation.isPending ? "Hunting..." : "Start Hunt"}
+          </button>
+          <button
+            onClick={() => window.open(`${API_BASE}/targets/${targetId}/hunter/report/download`, '_blank')}
+            className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm rounded flex items-center gap-2"
+          >
+            <FileText className="h-4 w-4" />
+            Report
           </button>
         </div>
       </div>
