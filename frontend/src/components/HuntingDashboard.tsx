@@ -12,6 +12,9 @@ import {
   AlertTriangle,
   Clock,
   Eye,
+  Crosshair,
+  CheckCircle,
+  XCircle,
 } from "lucide-react";
 import { toast } from "react-hot-toast";
 
@@ -120,7 +123,7 @@ const riskColors: Record<string, string> = {
 
 export default function HuntingDashboard({ targetId }: { targetId: number }) {
   const queryClient = useQueryClient();
-  const [activeView, setActiveView] = useState<"dashboard" | "actions" | "chat">("dashboard");
+  const [activeView, setActiveView] = useState<"dashboard" | "hunter" | "actions" | "chat">("dashboard");
 
   const { data: stats } = useQuery({
     queryKey: ["huntingStats", targetId],
@@ -163,6 +166,7 @@ export default function HuntingDashboard({ targetId }: { targetId: number }) {
       <div className="flex gap-2 border-b border-hack-border pb-2">
         {[
           { id: "dashboard", label: "Dashboard", icon: Target },
+          { id: "hunter", label: "Hunter", icon: Crosshair },
           { id: "actions", label: "Actions", icon: Zap },
           { id: "chat", label: "Chat", icon: MessageSquare },
         ].map((tab) => (
@@ -311,6 +315,11 @@ export default function HuntingDashboard({ targetId }: { targetId: number }) {
             </div>
           )}
         </div>
+      )}
+
+      {/* Hunter View */}
+      {activeView === "hunter" && (
+        <HunterView targetId={targetId} />
       )}
 
       {/* Actions View */}
@@ -581,6 +590,128 @@ function ChatView({ targetId }: { targetId: number }) {
         ) : (
           <div className="flex items-center justify-center h-full text-hack-dim text-sm">
             Select a session or create a new one to start chatting
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Hunter View Component - Real AI Hacking
+function HunterView({ targetId }: { targetId: number }) {
+  const queryClient = useQueryClient();
+  const [objective, setObjective] = useState("Find XSS vulnerabilities");
+
+  const { data: huntResults, isLoading: resultsLoading } = useQuery({
+    queryKey: ["huntResults", targetId],
+    queryFn: async () => {
+      const res = await fetch(`${API_BASE}/targets/${targetId}/hunter/results`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
+      });
+      if (!res.ok) throw new Error("Failed to fetch results");
+      const data = await res.json();
+      return data.data || [];
+    },
+    enabled: !!targetId,
+    refetchInterval: 10000,
+  });
+
+  const startHuntMutation = useMutation({
+    mutationFn: async (obj: string) => {
+      const res = await fetch(`${API_BASE}/targets/${targetId}/hunter/start`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("token")}`,
+        },
+        body: JSON.stringify({ objective: obj }),
+      });
+      if (!res.ok) throw new Error("Failed to start hunt");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      const vulns = data.data?.vulns_found || 0;
+      if (vulns > 0) {
+        toast.success(`Found ${vulns} vulnerabilities!`);
+      } else {
+        toast.success("Hunt completed. No vulnerabilities found.");
+      }
+      queryClient.invalidateQueries({ queryKey: ["huntResults", targetId] });
+    },
+    onError: () => toast.error("Hunt failed"),
+  });
+
+  return (
+    <div className="space-y-4">
+      {/* Hunt Control */}
+      <div className="bg-hack-panel border border-hack-border p-4 rounded">
+        <h3 className="text-hack-primary font-mono text-sm uppercase mb-4 flex items-center gap-2">
+          <Crosshair className="h-4 w-4" /> AI Hunter
+        </h3>
+        <p className="text-hack-dim text-xs mb-4">
+          The Hunter Agent will analyze the target, build a strategy, and test for real vulnerabilities using HTTP requests with payloads.
+        </p>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={objective}
+            onChange={(e) => setObjective(e.target.value)}
+            placeholder="e.g., Find XSS vulnerabilities, Test for SQLi on login"
+            className="flex-1 bg-black/30 border border-hack-border text-white text-sm p-2 rounded focus:outline-none focus:border-hack-primary"
+          />
+          <button
+            onClick={() => startHuntMutation.mutate(objective)}
+            disabled={startHuntMutation.isPending}
+            className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-700 text-white text-sm rounded flex items-center gap-2"
+          >
+            {startHuntMutation.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Crosshair className="h-4 w-4" />
+            )}
+            {startHuntMutation.isPending ? "Hunting..." : "Start Hunt"}
+          </button>
+        </div>
+      </div>
+
+      {/* Hunt Results */}
+      <div className="bg-hack-panel border border-hack-border p-4 rounded">
+        <h3 className="text-hack-primary font-mono text-sm uppercase mb-4">Hunt History</h3>
+        {resultsLoading ? (
+          <div className="flex items-center gap-2 text-hack-dim">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading...
+          </div>
+        ) : huntResults && huntResults.length > 0 ? (
+          <div className="space-y-3">
+            {huntResults.map((result: any) => (
+              <div
+                key={result.id}
+                className="p-3 bg-black/30 border border-hack-border rounded"
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    {result.content?.includes("0 vulnerabilities") ? (
+                      <XCircle className="h-4 w-4 text-hack-dim" />
+                    ) : (
+                      <CheckCircle className="h-4 w-4 text-green-400" />
+                    )}
+                    <span className="text-white text-sm">{result.title}</span>
+                  </div>
+                  <span className="text-hack-dim text-xs">
+                    {new Date(result.created_at).toLocaleString()}
+                  </span>
+                </div>
+                <p className="text-hack-dim text-xs">{result.summary}</p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-8">
+            <Crosshair className="w-12 h-12 text-gray-600 mx-auto mb-3" />
+            <p className="text-hack-dim text-sm">No hunts yet</p>
+            <p className="text-gray-600 text-xs mt-1">
+              Enter an objective and click "Start Hunt" to begin
+            </p>
           </div>
         )}
       </div>
