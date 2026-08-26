@@ -92,6 +92,7 @@ func Connect() {
 		&models.NucleiTemplate{},
 		&models.AuthContext{},
 		&models.TwoAccountSession{},
+		&models.HuntEvidence{},
 	)
 
 	if err != nil {

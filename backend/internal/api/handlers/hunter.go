@@ -12,6 +12,8 @@ import (
 
 type startHuntRequest struct {
 	Objective string `json:"objective"`
+	// Mode: "single" (one agent, default) or "multi" (supervisor + workers per bug class)
+	Mode string `json:"mode,omitempty"`
 }
 
 // StartHunt starts a new hunting session on a target
@@ -52,15 +54,35 @@ func StartHunt(c *fiber.Ctx) error {
 
 	// Create and run hunter agent
 	agent := hunter.NewHunterAgent(database.DB, target, llmCfg, uid, ownerKey)
-	result, err := agent.Hunt(c.Context(), req.Objective)
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	targetIDUint := uint(targetID)
+
+	var result *hunter.HunterResult
+	if req.Mode == "multi" {
+		multi, err := agent.HuntMultiAgent(c.Context(), req.Objective,
+			hunter.WithProgress(targetIDUint, handlersPublishEvent),
+			hunter.WithPersistence(database.DB, targetIDUint, uid, ownerKey))
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
+		result = multi
+	} else {
+		result, err = agent.Hunt(c.Context(), req.Objective,
+			hunter.WithProgress(targetIDUint, handlersPublishEvent),
+			hunter.WithPersistence(database.DB, targetIDUint, uid, ownerKey))
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
 	}
 
 	return c.JSON(fiber.Map{
 		"status": "success",
 		"data":   result,
 	})
+}
+
+// handlersPublishEvent adapts hunter.AgentEvent to the WebSocket hub
+func handlersPublishEvent(targetID uint, ev hunter.AgentEvent) {
+	PublishHuntEvent(targetID, ev)
 }
 
 // GetHuntResults returns all hunt results for a target
@@ -78,5 +100,23 @@ func GetHuntResults(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"status": "success",
 		"data":   memories,
+	})
+}
+
+// GetHuntEvidence returns persisted hunt evidence for a target
+func GetHuntEvidence(c *fiber.Ctx) error {
+	targetID, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid target ID"})
+	}
+
+	evidence, err := hunter.ListByTarget(database.DB, uint(targetID))
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	return c.JSON(fiber.Map{
+		"status": "success",
+		"data":   evidence,
 	})
 }

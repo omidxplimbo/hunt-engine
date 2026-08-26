@@ -63,7 +63,7 @@ func NewHunterAgent(db *gorm.DB, target models.Target, llmCfg *llmclient.Config,
 	return &HunterAgent{
 		db:          db,
 		target:      target,
-		httpClient:  NewHTTPClient(fmt.Sprintf("https://%s", target.RootDomain), 30*time.Second),
+		httpClient:  NewHTTPClient(targetBaseURL(target.RootDomain), 30*time.Second),
 		evidence:    NewEvidenceStore(),
 		llmCfg:      llmCfg,
 		strategy:    &Strategy{},
@@ -74,30 +74,180 @@ func NewHunterAgent(db *gorm.DB, target models.Target, llmCfg *llmclient.Config,
 	}
 }
 
-// Hunt starts the hunting process with a given objective
-func (h *HunterAgent) Hunt(ctx context.Context, objective string) (*HunterResult, error) {
+// HuntOption configures optional hunt behaviors (persistence, live progress)
+type HuntOption func(*huntOptions)
+
+type huntOptions struct {
+	persister  *EvidencePersister
+	progressFn func(targetID uint, ev AgentEvent)
+	targetID   uint
+}
+
+// WithPersistence saves evidence to PostgreSQL during the hunt
+func WithPersistence(db *gorm.DB, targetID uint, userID uint, ownerKey string) HuntOption {
+	return func(o *huntOptions) {
+		o.persister = NewEvidencePersister(db, targetID, userID, ownerKey, "agent_loop")
+	}
+}
+
+// WithProgress streams live AgentEvents to the given callback
+func WithProgress(targetID uint, fn func(targetID uint, ev AgentEvent)) HuntOption {
+	return func(o *huntOptions) {
+		o.progressFn = fn
+		o.targetID = targetID
+	}
+}
+
+func applyOptions(opts []HuntOption) *huntOptions {
+	o := &huntOptions{}
+	for _, opt := range opts {
+		opt(o)
+	}
+	return o
+}
+
+// Hunt starts the hunting process with a given objective.
+// Uses the LLM-driven AgentLoop for real AI-powered testing.
+func (h *HunterAgent) Hunt(ctx context.Context, objective string, opts ...HuntOption) (*HunterResult, error) {
 	log.Printf("[Hunter] Starting hunt on %s: %s", h.target.RootDomain, objective)
-	
-	// Step 1: Build strategy using LLM
+	options := applyOptions(opts)
+
+	// Use the new LLM-driven AgentLoop
+	agentLoop := NewAgentLoop(
+		h.llmCfg,
+		targetBaseURL(h.target.RootDomain),
+		objective,
+		h.skillLoader,
+		h.evidence,
+		h.learning,
+	)
+	if options.persister != nil {
+		agentLoop.SetPersister(options.persister)
+	}
+	if options.progressFn != nil {
+		tid := options.targetID
+		agentLoop.SetProgressCallback(func(ev AgentEvent) {
+			options.progressFn(tid, ev)
+		})
+	}
+
+	result, err := agentLoop.Run(ctx)
+	if err != nil {
+		log.Printf("[Hunter] AgentLoop error: %v, falling back to legacy mode", err)
+		return h.legacyHunt(ctx, objective)
+	}
+
+	// Save to memory
+	h.saveToMemory(result)
+
+	return result, nil
+}
+
+// legacyHunt is the old scripted hunt mode, used as fallback
+func (h *HunterAgent) legacyHunt(ctx context.Context, objective string) (*HunterResult, error) {
+	log.Printf("[Hunter] Using legacy hunt mode")
+
 	strategy, err := h.buildStrategy(ctx, objective)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build strategy: %w", err)
 	}
 	h.strategy = strategy
-	
-	// Step 2: Execute the strategy
+
 	err = h.executeStrategy(ctx)
 	if err != nil {
 		log.Printf("[Hunter] Strategy execution error: %v", err)
 	}
-	
-	// Step 3: Analyze results and learn
+
 	result := h.analyzeResults()
-	
-	// Step 4: Save to memory
 	h.saveToMemory(result)
-	
+
 	return result, nil
+}
+
+// HuntMultiAgent runs the multi-agent mode: a supervisor dispatches one
+// worker per bug class, all sharing the same evidence store.
+func (h *HunterAgent) HuntMultiAgent(ctx context.Context, objective string, opts ...HuntOption) (*HunterResult, error) {
+	log.Printf("[Hunter] Starting MULTI-AGENT hunt on %s: %s", h.target.RootDomain, objective)
+	options := applyOptions(opts)
+
+	targetURL := targetBaseURL(h.target.RootDomain)
+
+	// Ask the LLM which bug classes to cover; fall back to defaults.
+	bugClasses := h.selectBugClasses(ctx, objective)
+
+	supervisor := NewSupervisor(h.llmCfg, targetURL, objective, bugClasses, h.skillLoader, h.evidence, h.learning)
+	if options.persister != nil {
+		supervisor.SetPersister(options.persister)
+	}
+	if options.progressFn != nil {
+		tid := options.targetID
+		supervisor.SetProgress(func(ev AgentEvent) {
+			options.progressFn(tid, ev)
+		})
+	}
+
+	supResult, err := supervisor.Run(ctx)
+	if err != nil {
+		log.Printf("[Hunter] Supervisor error: %v, falling back to single agent", err)
+		return h.Hunt(ctx, objective, opts...)
+	}
+
+	result := &HunterResult{
+		Strategy: &Strategy{
+			Objective:  objective,
+			BugClasses: bugClasses,
+			Targets:    []string{targetURL},
+			Status:     "completed",
+			Findings:   []string{supResult.Summary},
+		},
+		Evidence:   h.evidence.GetAll(),
+		Summary:    supResult.Summary,
+		VulnsFound: supResult.VulnsFound,
+		NextSteps:  h.multiAgentNextSteps(supResult),
+	}
+
+	h.saveToMemory(result)
+	return result, nil
+}
+
+// selectBugClasses asks the LLM for relevant bug classes with a safe default.
+func (h *HunterAgent) selectBugClasses(ctx context.Context, objective string) []string {
+	if h.llmCfg == nil {
+		return []string{"xss", "sqli"}
+	}
+	res, err := llmclient.GenerateJSON(ctx, h.llmCfg, llmclient.JSONRequest{
+		SystemPrompt: "You are a penetration testing planner. Given an objective and target, return JSON with key bug_classes: a list of at most 3 vulnerability classes to test, chosen from: xss, sqli, ssrf, idor, ssti, command_injection. Return only the JSON.",
+		UserPayload: map[string]interface{}{
+			"objective": objective,
+			"target":    h.target.RootDomain,
+		},
+		Temperature: 0.2,
+		MaxTokens:   400,
+	})
+	if err != nil {
+		log.Printf("[Hunter] Bug class selection failed, using defaults: %v", err)
+		return []string{"xss", "sqli"}
+	}
+	classes := normalizeBugClasses(h.getStringSlice(res, "bug_classes"))
+	if len(classes) == 0 || len(classes) > 3 {
+		return []string{"xss", "sqli"}
+	}
+	return classes
+}
+
+func (h *HunterAgent) multiAgentNextSteps(sr *SupervisorResult) []string {
+	steps := []string{}
+	for _, ws := range sr.WorkerStatuses {
+		if ws.Status == "failed" {
+			steps = append(steps, fmt.Sprintf("Re-run failed worker %s: %s", ws.Name, ws.Error))
+		}
+	}
+	if sr.VulnsFound > 0 {
+		steps = append(steps, "Generate PoC reports for confirmed vulnerabilities")
+	} else {
+		steps = append(steps, "Expand scope or try different bug classes")
+	}
+	return steps
 }
 
 // buildStrategy uses LLM to build a hunting strategy
@@ -268,7 +418,7 @@ func (h *HunterAgent) probeTarget() []models.FoundURL {
 			}
 			// Add to URLs for further testing
 			urls = append(urls, models.FoundURL{
-				Value:  fmt.Sprintf("https://%s%s", h.target.RootDomain, path),
+				Value:  targetBaseURL(h.target.RootDomain) + path,
 				Source: "hunter_probe",
 			})
 		}
@@ -280,7 +430,7 @@ func (h *HunterAgent) probeTarget() []models.FoundURL {
 // generateCommonEndpoints creates test URLs with common parameter patterns
 func (h *HunterAgent) generateCommonEndpoints() []models.FoundURL {
 	var urls []models.FoundURL
-	baseURL := fmt.Sprintf("https://%s", h.target.RootDomain)
+	baseURL := targetBaseURL(h.target.RootDomain)
 	
 	// Common parameter patterns to test
 	testPatterns := []struct {
@@ -478,8 +628,8 @@ func (h *HunterAgent) testIDOR(ctx context.Context, urls []models.FoundURL) {
 	}
 	
 	// Use two different accounts
-	clientA := NewHTTPClient(fmt.Sprintf("https://%s", h.target.RootDomain), 30*time.Second)
-	clientB := NewHTTPClient(fmt.Sprintf("https://%s", h.target.RootDomain), 30*time.Second)
+	clientA := NewHTTPClient(targetBaseURL(h.target.RootDomain), 30*time.Second)
+	clientB := NewHTTPClient(targetBaseURL(h.target.RootDomain), 30*time.Second)
 	
 	// Set auth for each client
 	applyAuthToClient(clientA, &contexts[0])
@@ -572,11 +722,18 @@ func (h *HunterAgent) analyzeResults() *HunterResult {
 // saveToMemory saves the hunting results to target memory
 func (h *HunterAgent) saveToMemory(result *HunterResult) {
 	// Save summary as memory item
+	objective := h.strategy.Objective
+	if objective == "" && result.Strategy != nil {
+		objective = result.Strategy.Objective
+	}
+	if objective == "" {
+		objective = "General assessment"
+	}
 	memoryItem := models.TargetMemoryItem{
 		TargetID:   h.target.ID,
 		UserID:     h.userID,
 		OwnerKey:   h.ownerKey,
-		Title:      fmt.Sprintf("Hunt: %s", h.strategy.Objective),
+		Title:      fmt.Sprintf("Hunt: %s", objective),
 		Summary:    result.Summary,
 		Content:    fmt.Sprintf("Found %d vulnerabilities", result.VulnsFound),
 		MemoryType: "hunt_result",
@@ -677,6 +834,15 @@ func applyAuthToClient(client *HTTPClient, ctx *models.AuthContext) {
 	case models.AuthContextToken:
 		client.SetAuth("bearer", ctx.Value)
 	}
+}
+
+// targetBaseURL builds the base URL for a target, honoring an explicit
+// http:// scheme in RootDomain (used by local test fixtures).
+func targetBaseURL(domain string) string {
+	if strings.HasPrefix(domain, "http://") || strings.HasPrefix(domain, "https://") {
+		return domain
+	}
+	return "https://" + domain
 }
 
 // normalizeBugClasses normalizes LLM-generated bug class names to standard names

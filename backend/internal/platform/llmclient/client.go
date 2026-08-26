@@ -346,11 +346,71 @@ func decodeJSONMap(content string) (map[string]interface{}, error) {
 	content = strings.TrimSuffix(content, "```")
 	content = strings.TrimSpace(content)
 
+	// Try direct unmarshal first
 	var out map[string]interface{}
-	if err := json.Unmarshal([]byte(content), &out); err != nil {
-		return nil, fmt.Errorf("LLM returned non-JSON response: %w", err)
+	if err := json.Unmarshal([]byte(content), &out); err == nil {
+		return out, nil
 	}
-	return out, nil
+
+	// Model may return concatenated objects ({...}{...}) or embed the JSON in
+	// prose. json.Decoder reads the first valid top-level value and ignores
+	// whatever follows.
+	dec := json.NewDecoder(strings.NewReader(content))
+	for {
+		var candidate map[string]interface{}
+		err := dec.Decode(&candidate)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			break
+		}
+		if len(candidate) > 0 {
+			return candidate, nil
+		}
+	}
+
+	// Last resort: extract the substring between the first '{' and its matching '}'
+	start := strings.Index(content, "{")
+	if start >= 0 {
+		depth := 0
+		inStr := false
+		esc := false
+		for i := start; i < len(content); i++ {
+			c := content[i]
+			if esc {
+				esc = false
+				continue
+			}
+			switch {
+			case c == '\\' && inStr:
+				esc = true
+			case c == '"' && !esc:
+				inStr = !inStr
+			case inStr:
+			case c == '{':
+				depth++
+			case c == '}':
+				depth--
+				if depth == 0 {
+					var fallback map[string]interface{}
+					if err := json.Unmarshal([]byte(content[start:i+1]), &fallback); err == nil {
+						return fallback, nil
+					}
+				}
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("LLM returned non-JSON response: %s", truncateForLog(content))
+}
+
+func truncateForLog(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 200 {
+		return s[:200] + "..."
+	}
+	return s
 }
 
 // GenerateTargetNarrative generates a human-readable security narrative for a target.

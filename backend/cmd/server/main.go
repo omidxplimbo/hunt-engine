@@ -246,8 +246,18 @@ func main() {
 	// Hunter Agent Routes (v4.0)
 	api.Post("/targets/:id/hunter/start", handlers.StartHunt)
 	api.Get("/targets/:id/hunter/results", handlers.GetHuntResults)
+	api.Get("/targets/:id/hunter/evidence", handlers.GetHuntEvidence)
 	api.Get("/targets/:id/hunter/report", handlers.GenerateBugBountyReport)
 	api.Get("/targets/:id/hunter/report/download", handlers.DownloadBugBountyReport)
+
+	// Hunter live progress (WebSocket, v5.0)
+	api.Use("/targets/:id/hunter/ws", func(c *fiber.Ctx) error {
+		if websocket.IsWebSocketUpgrade(c) {
+			return c.Next()
+		}
+		return c.Status(fiber.StatusUpgradeRequired).SendString("Upgrade Required")
+	})
+	api.Get("/targets/:id/hunter/ws", websocket.New(handlers.HuntProgressWS))
 
 	// Safe Bug Testing Routes
 	api.Get("/targets/:id/controlled-tests/runs", handlers.GetTargetControlledTestRuns)

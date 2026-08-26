@@ -15,9 +15,9 @@ import {
   Crosshair,
   CheckCircle,
   XCircle,
-  FileText,
 } from "lucide-react";
 import { toast } from "react-hot-toast";
+import HuntLivePanel from "./HuntLivePanel";
 
 const API_BASE = "/api";
 
@@ -600,9 +600,6 @@ function ChatView({ targetId }: { targetId: number }) {
 
 // Hunter View Component - Real AI Hacking
 function HunterView({ targetId }: { targetId: number }) {
-  const queryClient = useQueryClient();
-  const [objective, setObjective] = useState("Find XSS vulnerabilities");
-
   const { data: huntResults, isLoading: resultsLoading } = useQuery({
     queryKey: ["huntResults", targetId],
     queryFn: async () => {
@@ -617,70 +614,10 @@ function HunterView({ targetId }: { targetId: number }) {
     refetchInterval: 10000,
   });
 
-  const startHuntMutation = useMutation({
-    mutationFn: async (obj: string) => {
-      const res = await fetch(`${API_BASE}/targets/${targetId}/hunter/start`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${localStorage.getItem("token")}`,
-        },
-        body: JSON.stringify({ objective: obj }),
-      });
-      if (!res.ok) throw new Error("Failed to start hunt");
-      return res.json();
-    },
-    onSuccess: (data) => {
-      const vulns = data.data?.vulns_found || 0;
-      if (vulns > 0) {
-        toast.success(`Found ${vulns} vulnerabilities!`);
-      } else {
-        toast.success("Hunt completed. No vulnerabilities found.");
-      }
-      queryClient.invalidateQueries({ queryKey: ["huntResults", targetId] });
-    },
-    onError: () => toast.error("Hunt failed"),
-  });
-
   return (
     <div className="space-y-4">
-      {/* Hunt Control */}
-      <div className="bg-hack-panel border border-hack-border p-4 rounded">
-        <h3 className="text-hack-primary font-mono text-sm uppercase mb-4 flex items-center gap-2">
-          <Crosshair className="h-4 w-4" /> AI Hunter
-        </h3>
-        <p className="text-hack-dim text-xs mb-4">
-          The Hunter Agent will analyze the target, build a strategy, and test for real vulnerabilities using HTTP requests with payloads.
-        </p>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={objective}
-            onChange={(e) => setObjective(e.target.value)}
-            placeholder="e.g., Find XSS vulnerabilities, Test for SQLi on login"
-            className="flex-1 bg-black/30 border border-hack-border text-white text-sm p-2 rounded focus:outline-none focus:border-hack-primary"
-          />
-          <button
-            onClick={() => startHuntMutation.mutate(objective)}
-            disabled={startHuntMutation.isPending}
-            className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-700 text-white text-sm rounded flex items-center gap-2"
-          >
-            {startHuntMutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Crosshair className="h-4 w-4" />
-            )}
-            {startHuntMutation.isPending ? "Hunting..." : "Start Hunt"}
-          </button>
-          <button
-            onClick={() => window.open(`${API_BASE}/targets/${targetId}/hunter/report/download`, '_blank')}
-            className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm rounded flex items-center gap-2"
-          >
-            <FileText className="h-4 w-4" />
-            Report
-          </button>
-        </div>
-      </div>
+      {/* Live Hunt Panel: controls + agent stream + persisted evidence */}
+      <HuntLivePanel targetId={targetId} />
 
       {/* Hunt Results */}
       <div className="bg-hack-panel border border-hack-border p-4 rounded">

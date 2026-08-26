@@ -37,8 +37,9 @@ RUN go install github.com/projectdiscovery/katana/cmd/katana@latest
 
 # --- بیلد برنامه اصلی ---
 COPY go.mod go.sum ./
-RUN go mod download
+RUN go mod download || true
 COPY . .
+RUN go mod tidy
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o hunt-engine-api ./cmd/server
 
 # ================================================
