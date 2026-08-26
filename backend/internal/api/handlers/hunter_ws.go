@@ -52,12 +52,31 @@ func PublishHuntEvent(targetID uint, ev hunter.AgentEvent) {
 }
 
 // HuntProgressWS upgrades to WebSocket and streams live hunt events.
+// This function expects the auth middleware to have already run and set user context.
 func HuntProgressWS(c *websocket.Conn) {
 	targetID, err := parseUint(c.Params("id"))
 	if err != nil {
 		c.Close()
 		return
 	}
+
+	// Extract user context that was set by Protected() middleware
+	userID, ok := c.Locals("user_id").(uint)
+	if !ok {
+		// Try float64 conversion (JSON numeric type)
+		if floatID, ok := c.Locals("user_id").(float64); ok {
+			userID = uint(floatID)
+		} else {
+			c.Close()
+			return
+		}
+	}
+	username, _ := c.Locals("username").(string)
+	role, _ := c.Locals("role").(string)
+
+	// Verify user has access to this target
+	// For now, we trust the auth middleware has verified the user's token
+	// In the future, we could implement additional checks here
 
 	ch := make(chan []byte, 128)
 	progressHub.mu.Lock()
