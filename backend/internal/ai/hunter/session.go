@@ -46,6 +46,10 @@ type PendingApproval struct {
 	decision  chan ApprovalDecision
 }
 
+// newPendingApproval creates a PendingApproval with a fresh uuid. Used
+// internally by AgentLoop and exported as NewPendingApprovalForTest for
+// handler tests that need to seed an approval without going through the
+// full agent loop.
 func newPendingApproval(tool string, params map[string]any) *PendingApproval {
 	return &PendingApproval{
 		ActionID:  uuid.NewString(),
@@ -54,6 +58,13 @@ func newPendingApproval(tool string, params map[string]any) *PendingApproval {
 		Requested: time.Now(),
 		decision:  make(chan ApprovalDecision, 1),
 	}
+}
+
+// NewPendingApprovalForTest exposes newPendingApproval to the handler
+// test package. Kept separate from newPendingApproval so the test
+// surface doesn't leak into the production hunter package.
+func NewPendingApprovalForTest(tool string, params map[string]any) *PendingApproval {
+	return newPendingApproval(tool, params)
 }
 
 // Decision returns the channel the loop blocks on. Resolved once and only once.
