@@ -245,6 +245,7 @@ func main() {
 
 	// Hunter Agent Routes (v4.0)
 	api.Post("/targets/:id/hunter/start", handlers.StartHunt)
+	api.Get("/targets/:id/hunter/sessions", handlers.ListHuntSessions)
 	api.Get("/targets/:id/hunter/results", handlers.GetHuntResults)
 	api.Get("/targets/:id/hunter/evidence", handlers.GetHuntEvidence)
 	api.Get("/targets/:id/hunter/report", handlers.GenerateBugBountyReport)

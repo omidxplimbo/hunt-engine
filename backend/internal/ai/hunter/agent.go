@@ -81,6 +81,7 @@ type huntOptions struct {
 	persister  *EvidencePersister
 	progressFn func(targetID uint, ev AgentEvent)
 	targetID   uint
+	session    *HuntSession // for steering; nil means no user control surface
 }
 
 // WithPersistence saves evidence to PostgreSQL during the hunt
@@ -95,6 +96,14 @@ func WithProgress(targetID uint, fn func(targetID uint, ev AgentEvent)) HuntOpti
 	return func(o *huntOptions) {
 		o.progressFn = fn
 		o.targetID = targetID
+	}
+}
+
+// WithSession attaches a HuntSession for mid-run steering (pause/resume/message).
+// When set, the loop will read SteerCh and ApproveCh from this session.
+func WithSession(s *HuntSession) HuntOption {
+	return func(o *huntOptions) {
+		o.session = s
 	}
 }
 
@@ -129,6 +138,9 @@ func (h *HunterAgent) Hunt(ctx context.Context, objective string, opts ...HuntOp
 		agentLoop.SetProgressCallback(func(ev AgentEvent) {
 			options.progressFn(tid, ev)
 		})
+	}
+	if options.session != nil {
+		agentLoop.AttachSession(options.session)
 	}
 
 	result, err := agentLoop.Run(ctx)
@@ -184,6 +196,9 @@ func (h *HunterAgent) HuntMultiAgent(ctx context.Context, objective string, opts
 		supervisor.SetProgress(func(ev AgentEvent) {
 			options.progressFn(tid, ev)
 		})
+	}
+	if options.session != nil {
+		supervisor.AttachSession(options.session)
 	}
 
 	supResult, err := supervisor.Run(ctx)

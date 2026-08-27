@@ -25,6 +25,7 @@ type Supervisor struct {
 	learning    *LearningEngine
 	persister   *EvidencePersister
 	progressFn  func(AgentEvent)
+	session     *HuntSession // optional steering target (T2/T3 wire this in)
 
 	maxWorkers     int
 	workerTimeout  time.Duration
@@ -35,6 +36,10 @@ func (s *Supervisor) SetPersister(p *EvidencePersister) { s.persister = p }
 
 // SetProgress wires a live progress callback (already bound to a target ID)
 func (s *Supervisor) SetProgress(fn func(AgentEvent)) { s.progressFn = fn }
+
+// AttachSession binds the supervisor (and all its workers) to a HuntSession
+// for mid-run steering. T1 plumbs the option; T3 wires the fan-out.
+func (s *Supervisor) AttachSession(sess *HuntSession) { s.session = sess }
 
 // emit publishes an event on both the bus and the progress callback
 func (s *Supervisor) emit(eventType, detail, bugClass string) {
