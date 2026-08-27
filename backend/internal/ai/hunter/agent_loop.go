@@ -29,6 +29,7 @@ type AgentLoop struct {
 	learning    *LearningEngine
 	persister   *EvidencePersister // optional DB persistence
 	progressFn  func(AgentEvent)   // optional live progress callback
+	session     *HuntSession       // optional steering target (T2 wires this in)
 	target      string
 	objective   string
 	history     []map[string]string
@@ -94,6 +95,11 @@ func (a *AgentLoop) SetPersister(p *EvidencePersister) { a.persister = p }
 
 // SetProgressCallback wires live progress events (WebSocket streaming)
 func (a *AgentLoop) SetProgressCallback(fn func(AgentEvent)) { a.progressFn = fn }
+
+// AttachSession binds the loop to a HuntSession for mid-run steering.
+// T1 plumbs the option; T2 wires the actual select{} on SteerCh and
+// the pause/approval gates into the turn loop.
+func (a *AgentLoop) AttachSession(s *HuntSession) { a.session = s }
 
 // emit sends a progress event if a callback is registered
 func (a *AgentLoop) emit(eventType, detail, bugClass string, turn int) {
