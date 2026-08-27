@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/omidxplimbo/hunt-engine/backend/internal/ai/hunter/skills"
@@ -32,10 +33,13 @@ type AgentLoop struct {
 	session     *HuntSession       // optional steering target (T2 wires this in)
 	target      string
 	objective   string
-	history     []map[string]string
-	findings    []string
+
+	mu      sync.RWMutex
+	history []map[string]string
 	// strategyTargets records URLs that returned 200 during recon
 	strategyTargets map[string]bool
+
+	findings []string
 }
 
 // AgentEvent is a live progress event emitted during the hunt (for WebSocket)
@@ -101,6 +105,163 @@ func (a *AgentLoop) SetProgressCallback(fn func(AgentEvent)) { a.progressFn = fn
 // the pause/approval gates into the turn loop.
 func (a *AgentLoop) AttachSession(s *HuntSession) { a.session = s }
 
+// EnqueueMessage appends a user message to the conversation history so
+// the LLM sees it on its next turn. Safe to call from any goroutine; the
+// loop acquires the same mutex before reading history.
+func (a *AgentLoop) EnqueueMessage(content string) {
+	a.mu.Lock()
+	a.history = append(a.history, map[string]string{
+		"role":    "user",
+		"content": "[OPERATOR MESSAGE] " + content,
+	})
+	a.mu.Unlock()
+	a.emit("operator_message", truncateStr(content, 300), "", 0)
+}
+
+// SetObjective replaces the objective at the next LLM call. The objective
+// is also re-injected into the next conversation build (callLLM reads
+// a.objective under the mutex).
+func (a *AgentLoop) SetObjective(content string) {
+	a.mu.Lock()
+	a.objective = content
+	a.mu.Unlock()
+	a.emit("objective_changed", truncateStr(content, 300), "", 0)
+}
+
+// RequestPause marks the session paused. The loop's run will finish the
+// current turn, emit a "paused" event, then block waiting for resume /
+// cancel / new message on SteerCh.
+func (a *AgentLoop) RequestPause() {
+	if a.session == nil {
+		return
+	}
+	a.session.PauseRequested()
+}
+
+// Resume clears the pause flag. The loop unblocks and starts the next turn.
+func (a *AgentLoop) Resume() {
+	if a.session == nil {
+		return
+	}
+	a.session.ResumeRequested()
+}
+
+// Cancel calls the session cancel function. The loop's context is cancelled
+// and Run returns with ctx.Err() on the next check.
+func (a *AgentLoop) Cancel() {
+	if a.session == nil || a.session.CancelFn == nil {
+		return
+	}
+	a.session.CancelFn()
+}
+
+// History returns a snapshot of the current conversation history. Used by
+// tests to assert steer messages reached the LLM.
+func (a *AgentLoop) History() []map[string]string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	out := make([]map[string]string, len(a.history))
+	for i, m := range a.history {
+		cp := make(map[string]string, len(m))
+		for k, v := range m {
+			cp[k] = v
+		}
+		out[i] = cp
+	}
+	return out
+}
+
+// Objective returns the current objective under the mutex.
+func (a *AgentLoop) Objective() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.objective
+}
+
+// appendHistory adds a message under the loop's mutex.
+func (a *AgentLoop) appendHistory(msg map[string]string) {
+	a.mu.Lock()
+	a.history = append(a.history, msg)
+	a.mu.Unlock()
+}
+
+// snapshotHistory returns a deep copy of the conversation history.
+// The copy lets the LLM caller iterate without holding the mutex.
+func (a *AgentLoop) snapshotHistory() []map[string]string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	out := make([]map[string]string, len(a.history))
+	for i, m := range a.history {
+		cp := make(map[string]string, len(m))
+		for k, v := range m {
+			cp[k] = v
+		}
+		out[i] = cp
+	}
+	return out
+}
+
+// drainSteer consumes SteerCh. If block is true it waits on the channel
+// until a Resume / Cancel / new Message arrives. Returns false if the
+// context was cancelled (caller should propagate ctx.Err() upward).
+// Messages received while paused are still applied to history.
+func (a *AgentLoop) drainSteer(ctx context.Context, block bool) bool {
+	sess := a.session
+	if sess == nil {
+		return true
+	}
+	ch := sess.SteerCh
+	for {
+		var cmd SteerCommand
+		var ok bool
+		select {
+		case <-ctx.Done():
+			return false
+		case cmd, ok = <-ch:
+			if !ok {
+				return false
+			}
+		default:
+			if block {
+				// No command available right now; if non-blocking, just return.
+				// If blocking, wait synchronously.
+				select {
+				case <-ctx.Done():
+					return false
+				case cmd, ok = <-ch:
+					if !ok {
+						return false
+					}
+				}
+			} else {
+				return true
+			}
+		}
+		switch cmd.Type {
+		case SteerMessage:
+			a.EnqueueMessage(cmd.Content)
+		case SteerSetObjective:
+			a.SetObjective(cmd.Content)
+		case SteerPause:
+			sess.PauseRequested()
+		case SteerResume:
+			sess.ResumeRequested()
+			// Caller in Run() sets MarkStatus running AFTER unblocking.
+			// If we were already paused, returning true here resumes the loop.
+			if block {
+				return true
+			}
+		case SteerCancel:
+			if sess.CancelFn != nil {
+				sess.CancelFn()
+			}
+			if block {
+				return false
+			}
+		}
+	}
+}
+
 // emit sends a progress event if a callback is registered
 func (a *AgentLoop) emit(eventType, detail, bugClass string, turn int) {
 	if a.progressFn == nil {
@@ -124,12 +285,12 @@ func (a *AgentLoop) Run(ctx context.Context) (*HunterResult, error) {
 	systemPrompt := a.buildSystemPrompt()
 
 	// Initialize conversation
-	a.history = append(a.history, map[string]string{
+	a.appendHistory(map[string]string{
 		"role":    "system",
 		"content": systemPrompt,
 	})
 
-	a.history = append(a.history, map[string]string{
+	a.appendHistory(map[string]string{
 		"role":    "user",
 		"content": fmt.Sprintf("Target: %s\nObjective: %s\n\nBegin the security assessment. Use the available tools to test the target.", a.target, a.objective),
 	})
@@ -139,6 +300,22 @@ func (a *AgentLoop) Run(ctx context.Context) (*HunterResult, error) {
 	for turn := 0; turn < maxTurns; turn++ {
 		log.Printf("[AgentLoop] Turn %d/%d", turn+1, maxTurns)
 		a.emit("turn", fmt.Sprintf("Turn %d of %d", turn+1, maxTurns), "", turn+1)
+
+		// Mid-loop steering: drain pending SteerCh and block while paused.
+		// The drain runs BEFORE the LLM call so operator messages and a
+		// new objective reach the model in the same turn they were sent.
+		if a.session != nil {
+			a.drainSteer(ctx, false)
+			if a.session.IsPaused() {
+				a.session.MarkStatus("paused")
+				a.emit("paused", "Agent paused by operator", "", turn+1)
+				if !a.drainSteer(ctx, true) {
+					return nil, ctx.Err()
+				}
+				a.session.MarkStatus("running")
+				a.emit("resumed", "Agent resumed", "", turn+1)
+			}
+		}
 
 		// Call LLM with retry/backoff on rate limits and transient errors
 		var response string
@@ -173,7 +350,7 @@ func (a *AgentLoop) Run(ctx context.Context) (*HunterResult, error) {
 				log.Printf("[AgentLoop] Giving up after %d consecutive LLM failures", llmErrors)
 				return nil, fmt.Errorf("LLM unavailable: %w", err)
 			}
-			a.history = append(a.history, map[string]string{
+			a.appendHistory(map[string]string{
 				"role":    "user",
 				"content": "There was an error. Please continue with the assessment using available information.",
 			})
@@ -202,11 +379,11 @@ func (a *AgentLoop) Run(ctx context.Context) (*HunterResult, error) {
 			turnResult.ToolOutput = output
 
 			// Add tool result to history
-			a.history = append(a.history, map[string]string{
+			a.appendHistory(map[string]string{
 				"role":    "assistant",
 				"content": response,
 			})
-			a.history = append(a.history, map[string]string{
+			a.appendHistory(map[string]string{
 				"role":    "user",
 				"content": fmt.Sprintf("[TOOL RESULT: %s]\n%s", turnResult.ToolName, output),
 			})
@@ -220,7 +397,7 @@ func (a *AgentLoop) Run(ctx context.Context) (*HunterResult, error) {
 			log.Printf("[AgentLoop] LLM response: %s", truncateStr(turnResult.Response, 200))
 			a.emit("progress", truncateStr(turnResult.Response, 300), "", turn+1)
 
-			a.history = append(a.history, map[string]string{
+			a.appendHistory(map[string]string{
 				"role":    "assistant",
 				"content": response,
 			})
@@ -297,9 +474,16 @@ func (a *AgentLoop) callLLM(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("no LLM config available")
 	}
 
+	// Snapshot history + objective under the mutex so the LLM client
+	// iterates a stable copy while steer commands can keep appending.
+	history := a.snapshotHistory()
+	a.mu.RLock()
+	objective := a.objective
+	a.mu.RUnlock()
+
 	// Build the prompt from history
 	var systemMsg, userMsg string
-	for _, msg := range a.history {
+	for _, msg := range history {
 		switch msg["role"] {
 		case "system":
 			systemMsg = msg["content"]
@@ -316,7 +500,7 @@ func (a *AgentLoop) callLLM(ctx context.Context) (string, error) {
 		UserPayload: map[string]interface{}{
 			"conversation": userMsg,
 			"target":       a.target,
-			"objective":     a.objective,
+			"objective":    objective,
 		},
 		Temperature: 0.3,
 		MaxTokens:   4000,
@@ -492,7 +676,9 @@ func (a *AgentLoop) analyzeToolOutput(toolName, input, output string) {
 	// Recon evidence: record discovered endpoints for the strategy
 	if toolName == "http" || toolName == "browser" {
 		if strings.Contains(outputLower, "[response] 200") {
+			a.mu.Lock()
 			a.strategyTargets[testURL] = true
+			a.mu.Unlock()
 		}
 	}
 }
@@ -569,10 +755,12 @@ func (a *AgentLoop) buildResult() *HunterResult {
 	}
 
 	// Build discovered targets list
+	a.mu.RLock()
 	discovered := make([]string, 0, len(a.strategyTargets))
 	for u := range a.strategyTargets {
 		discovered = append(discovered, u)
 	}
+	a.mu.RUnlock()
 	if len(discovered) == 0 {
 		discovered = []string{a.target}
 	}
