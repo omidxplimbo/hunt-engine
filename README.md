@@ -1,5 +1,20 @@
 <!-- HUNT_V3_12_0_START -->
 
+## v5.0.0 — Mid-Run Steering (Strix Parity)
+
+v5.0.0 turns the Hunter Agent from a fire-and-forget batch job into a real interactive agent. The operator can now chat with the agent mid-run, change the objective, pause/resume the hunt, cancel it, and approve or deny high-risk tool calls (e.g. arbitrary `shell` execution) before they run. Brings Hunt Engine to parity with Strix's mid-run steering surface.
+
+Highlights:
+
+- **Async hunt start** — `POST /hunter/start` returns `session_id` immediately. The agent runs in a goroutine with a detached context; the hunt survives client disconnects.
+- **Bidirectional WebSocket** — `/hunter/ws` accepts operator commands (`message`, `set_objective`, `pause`, `resume`, `cancel`, `approve`, `deny`) and streams back a richer event set (`paused`, `resumed`, `cancelled`, `operator_message`, `objective_changed`, `approval_required`, `approval_resolved`, `session_done`).
+- **Tool policy + human approval** — high-risk tools (`shell`) block on operator approval before executing. `ApprovalPopover` modal shows the tool name, masked params (credentials → `***`), and a 60s countdown. Approve runs the tool, deny returns `[TOOL DENIED] reason` to the LLM. Low-risk tools (`http`) auto-execute.
+- **Session registry + history** — `GET /hunter/sessions` lists every active and historical session for a target. New `POST .../pause`, `POST .../resume`, `DELETE /sessions/:sid` endpoints; admin users can act on any session.
+- **Steerable multi-agent mode** — the supervisor broadcasts every steer command to all parallel workers; each worker has its own session.
+- **Frontend rewrite** — `HuntLivePanel.tsx` now has a chat input, an editable objective, a Pause/Resume toggle, a Cancel button, a session history panel, and a status badge that reflects `running` (pulse red) / `paused` (yellow) / `cancelled` (gray) / `completed` (green) / `failed` (red). New `ApprovalPopover.tsx` is a full-screen modal for high-risk approvals.
+
+Coverage: 25 new Go unit tests (hunter + handler packages). Backend `go build ./...` and `go test ./internal/...` pass. Frontend targeted `tsc --noEmit` passes on the changed files.
+
 ## v3.15.0 — User-Programmable Operator Skills + Personal Operator Learning
 
 v3.15.0 adds the first user-programmable operator skill and methodology layer for Hunt Engine's AI-driven authorized pentest workflow. The Operator can now use target-selected methodology records as planning guidance, expose applied methodology in chat, manage user-defined executable skills, select matching custom skills from chat trigger signals, create planned OperatorSkillRun records for those custom skills, and show dispatcher-gated custom skill queues directly in Attack Surface Chat.
