@@ -44,12 +44,14 @@ type AgentLoop struct {
 
 // AgentEvent is a live progress event emitted during the hunt (for WebSocket)
 type AgentEvent struct {
-	Type       string `json:"type"` // turn, tool_call, tool_result, finding, done, error
-	Turn       int    `json:"turn,omitempty"`
-	ToolName   string `json:"tool_name,omitempty"`
-	Detail     string `json:"detail"`
-	BugClass   string `json:"bug_class,omitempty"`
-	Timestamp  string `json:"timestamp"`
+	Type       string         `json:"type"` // turn, tool_call, tool_result, finding, done, error, approval_required, ...
+	Turn       int            `json:"turn,omitempty"`
+	ToolName   string         `json:"tool_name,omitempty"`
+	Detail     string         `json:"detail"`
+	BugClass   string         `json:"bug_class,omitempty"`
+	ActionID   string         `json:"action_id,omitempty"`  // populated for approval_required / approval_resolved
+	Params     map[string]any `json:"params,omitempty"`     // masked params for approval_required
+	Timestamp  string         `json:"timestamp"`
 }
 
 // AgentTurnResult represents the result of a single agent turn
@@ -558,7 +560,11 @@ func (a *AgentLoop) parseResponse(turn int, response string) *AgentTurnResult {
 	return result
 }
 
-// executeTool executes a tool with the given parameters
+// executeTool executes a tool with the given parameters. If the policy
+// says the tool is risk:high (or risk:medium on the first call of a
+// session), it emits an "approval_required" event and blocks on the
+// session's ApproveCh for up to 60s. Deny/timeout returns a "denied
+// by operator" string for the LLM to see in the next turn.
 func (a *AgentLoop) executeTool(ctx context.Context, toolName string, inputJSON string) (string, error) {
 	tool, ok := a.registry.Get(toolName)
 	if !ok {
@@ -570,12 +576,82 @@ func (a *AgentLoop) executeTool(ctx context.Context, toolName string, inputJSON 
 		return "", fmt.Errorf("invalid tool parameters: %w", err)
 	}
 
+	// T4: human-approval gate. Skip entirely when no session is attached
+	// (legacy/non-steerable callers).
+	if a.session != nil && tools.DefaultPolicy.RequiresApproval(toolName) {
+		decision, ok := a.requestApproval(ctx, toolName, params)
+		if !ok {
+			return "", fmt.Errorf("approval denied or timed out for tool %s", toolName)
+		}
+		if !decision.Approve {
+			reason := decision.Reason
+			if reason == "" {
+				reason = "denied by operator"
+			}
+			return fmt.Sprintf("[TOOL DENIED] %s: %s", toolName, reason), nil
+		}
+	}
+
 	output, err := tool.Execute(ctx, params)
 	if err != nil {
 		return "", fmt.Errorf("tool execution failed: %w", err)
 	}
 
 	return output, nil
+}
+
+// requestApproval emits the approval_required event and waits for the
+// operator's decision. Returns the decision and true if resolved, or
+// the zero value and false on context cancel. 60s timeout = deny.
+func (a *AgentLoop) requestApproval(ctx context.Context, toolName string, params map[string]any) (ApprovalDecision, bool) {
+	sess := a.session
+	approval := newPendingApproval(toolName, params)
+	sess.SetPendingApproval(approval)
+	defer sess.ClearPendingApproval()
+
+	// Surface the masked params in the event so the WS layer (T5) can
+	// show "agent wants to run X" verbatim without leaking credentials.
+	masked := tools.MaskSensitiveParams(params)
+	a.emitApprovalRequired(approval, toolName, masked)
+
+	// Auto-deny after 60s. Use AfterFunc so the operator's late response
+	// does not panic on a closed channel — Resolve is idempotent.
+	timer := time.AfterFunc(60*time.Second, func() {
+		approval.Resolve(ApprovalDecision{ActionID: approval.ActionID, Approve: false, Reason: "timeout"})
+	})
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		approval.Resolve(ApprovalDecision{ActionID: approval.ActionID, Approve: false, Reason: "session cancelled"})
+		a.emit("approval_resolved", "approve:false:context", toolName, 0)
+		return ApprovalDecision{Approve: false, Reason: "session cancelled"}, false
+	case d, ok := <-approval.Decision():
+		if !ok {
+			return ApprovalDecision{Approve: false, Reason: "closed"}, false
+		}
+		approved := "false"
+		if d.Approve {
+			approved = "true"
+		}
+		a.emit("approval_resolved", "approve:"+approved, toolName, 0)
+		return d, true
+	}
+}
+
+// emitApprovalRequired sends a typed event the WS layer (T5) can
+// recognize and serialize with the action_id + masked params.
+func (a *AgentLoop) emitApprovalRequired(a2 *PendingApproval, toolName string, masked map[string]any) {
+	if a.progressFn == nil {
+		return
+	}
+	a.progressFn(AgentEvent{
+		Type:      "approval_required",
+		ToolName:  toolName,
+		ActionID:  a2.ActionID,
+		Params:    masked,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
 }
 
 // analyzeToolOutput analyzes tool output for evidence of vulnerabilities
