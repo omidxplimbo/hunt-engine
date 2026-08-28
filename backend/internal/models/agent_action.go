@@ -48,6 +48,16 @@ const (
 	AgentActionTypeApplySeverityChange   = "apply_severity_change"
 	AgentActionTypeGenerateReport        = "generate_report"
 	AgentActionTypeSubmitReport          = "submit_report"
+	// T15: bridge Agent Actions to the Hunter Agent. Each of these
+	// is a real pentest action: the dispatcher starts a Hunter
+	// session (single mode) with a built objective, instead of
+	// returning a preview. None of these are in the
+	// isHardBlockedDispatcherAction switch, so they pass the
+	// policy gate; the per-tool human-approval gate inside the
+	// Hunter still applies for high-risk tools (e.g. shell).
+	AgentActionTypeTestXSSOnTarget   = "test_xss_on_target"
+	AgentActionTypeTestSQLiOnTarget  = "test_sqli_on_target"
+	AgentActionTypeTestIDOROnTarget  = "test_idor_on_target"
 )
 
 // AgentAction stores proposed/approved/rejected/executed workflow actions.
