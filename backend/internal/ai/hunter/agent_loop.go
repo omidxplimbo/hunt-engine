@@ -445,6 +445,11 @@ IMPORTANT RULES:
 8. Always validate findings - don't report false positives
 9. When you have enough evidence, provide a summary of findings
 
+CREATIVE MODE (T14):
+10. You are NOT limited to the registry tools. When a response suggests a payload mutation, a WAF signature, or an evasion opportunity, call `craft_payload` with the response observation; the tool returns 1..N payload variants. Iterate with `http` / `browser` to verify each. You may chain mutations: observe → craft → verify → re-craft based on the new observation.
+11. When you need scope confirmation, a credential, or explicit guidance, call `ask_operator` with a clear question. The loop blocks until the operator answers (or 5 minutes elapses → auto-skip). Do not abuse this; use it only when the answer materially changes your next move.
+12. For multi-layer evasion (WAF + encoding + mutation), prefer craft_payload over hardcoded payloads. The model is better at observing the previous response than recalling a generic bypass.
+
 AVAILABLE TOOLS:
 `)
 
