@@ -28,6 +28,9 @@ import {
   type SessionStatus,
 } from "../api/hunter";
 import ApprovalPopover from "./ApprovalPopover";
+import TurnCounter from "./TurnCounter";
+import ToolCallCard from "./ToolCallCard";
+import OperatorQuestionCard from "./OperatorQuestionCard";
 
 const STATUS_STYLES: Record<
   AgentEventType,
@@ -45,6 +48,9 @@ const STATUS_STYLES: Record<
   cancelled: { color: "text-hack-dim", icon: X },
   session_done: { color: "text-hack-dim", icon: CheckCircle },
   operator_message: { color: "text-cyan-400", icon: MessageSquare },
+  operator_question: { color: "text-cyan-400", icon: MessageSquare },
+  operator_accepted: { color: "text-hack-dim", icon: CheckCircle },
+  operator_skipped: { color: "text-hack-dim", icon: X },
   objective_changed: { color: "text-purple-400", icon: Zap },
   approval_required: { color: "text-yellow-400", icon: Shield },
   approval_resolved: { color: "text-hack-dim", icon: CheckCircle },
@@ -82,6 +88,12 @@ export default function HuntLivePanel({ targetId }: { targetId: number }) {
     tool: string;
     params: Record<string, unknown>;
   } | null>(null);
+  // T14: track the current turn number (from the latest 'turn' event)
+  // and the set of pending operator questions. The turn counter drives
+  // the live progress bar; the pending questions drive the inline
+  // OperatorQuestionCard in the stream.
+  const [currentTurn, setCurrentTurn] = useState(0);
+  const [pendingQuestions, setPendingQuestions] = useState<Record<string, AgentEvent>>({});
   const wsRef = useRef<WebSocket | null>(null);
   const feedRef = useRef<HTMLDivElement>(null);
   const chatRef = useRef<HTMLInputElement>(null);
@@ -108,7 +120,10 @@ export default function HuntLivePanel({ targetId }: { targetId: number }) {
     feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight });
   }, [events]);
 
-  // Detect "approval_required" events and surface them in the popover.
+  // Detect "approval_required" events and surface them in the popover;
+  // track "turn" for the live progress bar; track "operator_question"
+  // for the inline question card; clear pending questions when the
+  // server acknowledges the answer.
   useEffect(() => {
     const last = events[events.length - 1];
     if (!last) return;
@@ -121,6 +136,26 @@ export default function HuntLivePanel({ targetId }: { targetId: number }) {
         actionId: last.action_id,
         tool: last.tool_name || "tool",
         params: last.params || {},
+      });
+    }
+    if (last.type === "turn" && typeof last.turn === "number") {
+      setCurrentTurn(last.turn);
+    }
+    if (last.type === "operator_question" && last.action_id) {
+      setPendingQuestions((prev) => ({ ...prev, [last.action_id!]: last }));
+    }
+    if (last.type === "operator_accepted" && last.action_id) {
+      setPendingQuestions((prev) => {
+        const next = { ...prev };
+        delete next[last.action_id!];
+        return next;
+      });
+    }
+    if (last.type === "operator_skipped" && last.action_id) {
+      setPendingQuestions((prev) => {
+        const next = { ...prev };
+        delete next[last.action_id!];
+        return next;
       });
     }
   }, [events, approval]);
@@ -345,8 +380,11 @@ export default function HuntLivePanel({ targetId }: { targetId: number }) {
       {/* Live Feed */}
       {events.length > 0 && (
         <div className="bg-hack-panel border border-hack-border p-4 rounded">
-          <h3 className="text-hack-primary font-mono text-sm uppercase mb-3">Agent Stream</h3>
-          <div ref={feedRef} className="max-h-80 overflow-y-auto space-y-1 font-mono text-xs">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-hack-primary font-mono text-sm uppercase">Agent Stream</h3>
+            <TurnCounter current={currentTurn} max={20} status={sessionStatus === "running" ? "running" : sessionStatus} />
+          </div>
+          <div ref={feedRef} className="max-h-96 overflow-y-auto space-y-1 font-mono text-xs">
             {events.map((ev, i) => {
               const st = STATUS_STYLES[ev.type] || STATUS_STYLES.turn;
               if (ev.type === "finding") {
@@ -378,6 +416,35 @@ export default function HuntLivePanel({ targetId }: { targetId: number }) {
                     </p>
                   </div>
                 );
+              }
+              if (ev.type === "operator_question" && ev.action_id) {
+                // Render the pending question as a card only if it's
+                // still in pendingQuestions (operator_accepted/skipped
+                // would have removed it).
+                if (pendingQuestions[ev.action_id]) {
+                  return (
+                    <OperatorQuestionCard
+                      key={i}
+                      event={ev}
+                      onAnswer={(actionId, content) => {
+                        sendWs({ type: "operator_answer", action_id: actionId, content });
+                      }}
+                      onSkip={(actionId) => {
+                        sendWs({ type: "operator_answer", action_id: actionId, content: "[skip]" });
+                      }}
+                    />
+                  );
+                }
+                // Pending question was answered/skipped; fall through
+                // and render a small acknowledgment line.
+                return (
+                  <div key={i} className="p-1 text-hack-dim text-[10px]">
+                    question: {ev.detail} — answered
+                  </div>
+                );
+              }
+              if (ev.type === "tool_call") {
+                return <ToolCallCard key={i} event={ev} index={i} />;
               }
               if (ev.type === "approval_required") {
                 return (
