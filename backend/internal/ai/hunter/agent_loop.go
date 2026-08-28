@@ -81,11 +81,15 @@ func NewAgentLoop(
 	// T14: ask_operator is the conduit to the operator for scope
 	// confirmation and interactive guidance; the loop blocks on it
 	// until the operator answers (or 5 minutes elapses).
+	// T14: craft_payload is the LLM-backed payload synthesizer. The
+	// loop injects the LLM config into the context before tool
+	// execution so craft_payload can call the LLM recursively.
 	registry.Register(tools.NewShellTool())
 	registry.Register(tools.NewHTTPTool())
 	registry.Register(tools.NewBrowserTool())
 	registry.Register(tools.NewProxyTool())
 	registry.Register(tools.NewAskOperatorTool())
+	registry.Register(tools.NewCraftPayloadTool())
 
 	return &AgentLoop{
 		llmCfg:          llmCfg,
@@ -597,19 +601,23 @@ func (a *AgentLoop) executeTool(ctx context.Context, toolName string, inputJSON 
 		}
 	}
 
-	// T14: inject the OperatorChannel into the context so ask_operator
-	// (and any future interactive tool) can block on the operator.
-	// Also emit the operator_question event BEFORE blocking so the UI
-	// can render the question immediately.
+	// T14: emit operator_question event BEFORE ask_operator blocks,
+	// so the UI can render the question immediately.
 	if a.session != nil && toolName == "ask_operator" {
 		question, _ := params["question"].(string)
 		if question != "" {
 			a.emitOperatorQuestion(question, params)
 		}
 	}
+	// T14: inject the OperatorChannel + LLM config into the context
+	// so ask_operator (interactive) and craft_payload (recursive LLM
+	// call) can run.
 	callCtx := ctx
 	if a.session != nil {
-		callCtx = tools.WithOperatorChannel(ctx, a.session.operator)
+		callCtx = tools.WithOperatorChannel(callCtx, a.session.operator)
+	}
+	if a.llmCfg != nil {
+		callCtx = tools.WithLLMConfig(callCtx, a.llmCfg)
 	}
 
 	output, err := tool.Execute(callCtx, params)
