@@ -76,11 +76,16 @@ func NewAgentLoop(
 ) *AgentLoop {
 	registry := tools.NewToolRegistry()
 
-	// Register all available tools
+	// Register all available tools. Order does not matter — the LLM
+	// sees the full list in the system prompt and chooses by name.
+	// T14: ask_operator is the conduit to the operator for scope
+	// confirmation and interactive guidance; the loop blocks on it
+	// until the operator answers (or 5 minutes elapses).
 	registry.Register(tools.NewShellTool())
 	registry.Register(tools.NewHTTPTool())
 	registry.Register(tools.NewBrowserTool())
 	registry.Register(tools.NewProxyTool())
+	registry.Register(tools.NewAskOperatorTool())
 
 	return &AgentLoop{
 		llmCfg:          llmCfg,
@@ -592,12 +597,65 @@ func (a *AgentLoop) executeTool(ctx context.Context, toolName string, inputJSON 
 		}
 	}
 
-	output, err := tool.Execute(ctx, params)
+	// T14: inject the OperatorChannel into the context so ask_operator
+	// (and any future interactive tool) can block on the operator.
+	// Also emit the operator_question event BEFORE blocking so the UI
+	// can render the question immediately.
+	if a.session != nil && toolName == "ask_operator" {
+		question, _ := params["question"].(string)
+		if question != "" {
+			a.emitOperatorQuestion(question, params)
+		}
+	}
+	callCtx := ctx
+	if a.session != nil {
+		callCtx = tools.WithOperatorChannel(ctx, a.session.operator)
+	}
+
+	output, err := tool.Execute(callCtx, params)
 	if err != nil {
 		return "", fmt.Errorf("tool execution failed: %w", err)
 	}
 
 	return output, nil
+}
+
+// emitOperatorQuestion fires the operator_question event so the UI
+// can show the question while the AgentLoop blocks in the tool call.
+// The event carries the action_id of the pending OperatorChannel
+// question (the channel assigns the id internally; the agent loop
+// reads it back via session.operator.lastActionID() for the event).
+func (a *AgentLoop) emitOperatorQuestion(question string, params map[string]any) {
+	if a.session == nil || a.session.operator == nil {
+		return
+	}
+	actionID := a.session.operator.lastActionID()
+	if actionID == "" {
+		return
+	}
+	// Trim the question from params since it's the payload field.
+	out := map[string]any{
+		"question":  question,
+		"action_id": actionID,
+	}
+	if ctx, ok := params["context"].(string); ok && ctx != "" {
+		out["context"] = ctx
+	}
+	if opts, ok := params["options"].([]any); ok && len(opts) > 0 {
+		out["options"] = opts
+	}
+	a.emit("operator_question", question, "", 0)
+	// Also fire the typed envelope so the WS layer can forward
+	// action_id + options to the frontend modal.
+	if a.progressFn != nil {
+		a.progressFn(AgentEvent{
+			Type:      "operator_question",
+			Detail:    question,
+			ActionID:  actionID,
+			Params:    out,
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		})
+	}
 }
 
 // requestApproval emits the approval_required event and waits for the

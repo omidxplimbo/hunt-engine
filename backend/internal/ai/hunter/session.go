@@ -104,6 +104,7 @@ type HuntSession struct {
 	mu              sync.RWMutex
 	paused          bool
 	pendingApproval *PendingApproval
+	operator        *OperatorChannel  // T14: per-session conduit for ask_operator
 	lastError       string
 	summary         string
 	vulnsFound      int
@@ -126,6 +127,7 @@ func NewHuntSession(targetID, userID uint, ownerKey, mode, objective string) *Hu
 		Status:    "running",
 		StartedAt: time.Now().UTC(),
 		SteerCh:   make(chan SteerCommand, 32),
+		operator:  NewOperatorChannel(),
 	}
 }
 
@@ -255,6 +257,15 @@ func (s *HuntSession) GetLoop() *AgentLoop {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.loop
+}
+
+// Operator returns the per-session OperatorChannel used by the
+// ask_operator tool (T14). Returns nil only for sessions created
+// before T14 or for tests that bypass NewHuntSession.
+func (s *HuntSession) Operator() *OperatorChannel {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.operator
 }
 
 // EnqueueSteer pushes a command into the session's channel. Non-blocking;

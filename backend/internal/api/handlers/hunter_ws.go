@@ -254,6 +254,39 @@ func handleClientMessage(targetID uint, raw []byte, sessRef **hunter.HuntSession
 		} else {
 			sendError(out, "no pending approval to resolve", msg.Type)
 		}
+	case "operator_answer":
+		// T14: the agent asked the operator a question via the
+		// ask_operator tool. Deliver the answer to the matching
+		// pending OperatorChannel entry (matched by action_id).
+		if sess == nil {
+			sendError(out, "no active session for this target", msg.Type)
+			return
+		}
+		if msg.ActionID == "" {
+			sendError(out, "operator_answer: action_id is required", msg.Type)
+			return
+		}
+		if sess.Operator() == nil {
+			sendError(out, "no operator channel on this session", msg.Type)
+			return
+		}
+		if !sess.Operator().Resolve(msg.ActionID, msg.Content) {
+			sendError(out, "operator_answer: no pending question with that action_id (timed out or already answered)", msg.Type)
+			return
+		}
+		// Confirm to the operator that their answer was delivered.
+		ev := hunter.AgentEvent{
+			Type:      "operator_accepted",
+			Detail:    "answer delivered to agent",
+			ActionID:  msg.ActionID,
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		}
+		if data, err := json.Marshal(ev); err == nil {
+			select {
+			case out <- data:
+			default:
+			}
+		}
 	default:
 		sendError(out, "unknown command type", msg.Type)
 	}
