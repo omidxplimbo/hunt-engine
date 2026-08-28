@@ -1,0 +1,1199 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hunt Engine v5.0.0 — راهنمای کامل (Mid-Run Steering + Recon Pipeline)</title>
+  <style>
+    :root {
+      --bg: #0a0a0a;
+      --bg-panel: #111111;
+      --bg-soft: #1a1a1a;
+      --border: #2a2a2a;
+      --border-soft: #1f1f1f;
+      --primary: #00ff41;
+      --primary-dim: #00cc33;
+      --accent: #00d4ff;
+      --warn: #ffaa00;
+      --danger: #ff003c;
+      --text: #e0e0e0;
+      --text-dim: #888;
+      --text-mute: #555;
+      --code-bg: #0d0d0d;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', Tahoma, 'Vazirmatn', system-ui, sans-serif;
+      line-height: 1.7;
+      font-size: 15px;
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 32px 24px; }
+    header.hero {
+      border: 1px solid var(--border);
+      background: linear-gradient(135deg, #050505 0%, #0a1a0a 100%);
+      padding: 36px 28px;
+      border-radius: 6px;
+      margin-bottom: 32px;
+      position: relative;
+      overflow: hidden;
+    }
+    header.hero::before {
+      content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+      background: linear-gradient(90deg, transparent, var(--primary), transparent);
+    }
+    h1 {
+      font-size: 32px; margin: 0 0 8px;
+      color: var(--primary);
+      font-family: 'Courier New', monospace;
+      letter-spacing: 1px;
+    }
+    h1 .ver {
+      font-size: 18px; color: var(--accent); font-weight: normal;
+    }
+    h2 {
+      color: var(--primary);
+      font-family: 'Courier New', monospace;
+      font-size: 22px;
+      margin: 40px 0 16px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border-soft);
+    }
+    h3 {
+      color: var(--accent);
+      font-size: 17px;
+      margin: 24px 0 10px;
+      font-family: 'Courier New', monospace;
+    }
+    h4 {
+      color: var(--primary-dim);
+      font-size: 15px;
+      margin: 18px 0 8px;
+    }
+    p { margin: 8px 0; }
+    code {
+      background: var(--code-bg);
+      color: var(--primary);
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+      border: 1px solid var(--border-soft);
+    }
+    pre {
+      background: var(--code-bg);
+      color: #d0d0d0;
+      border: 1px solid var(--border);
+      border-right: 3px solid var(--primary);
+      padding: 14px 16px;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    pre code { background: none; padding: 0; border: 0; color: inherit; }
+    .lead {
+      color: var(--text-dim);
+      font-size: 14px;
+      margin-top: 0;
+    }
+    nav.toc {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      padding: 18px 22px;
+      border-radius: 6px;
+      margin-bottom: 32px;
+    }
+    nav.toc h3 {
+      margin: 0 0 12px; color: var(--primary);
+      font-size: 14px; text-transform: uppercase; letter-spacing: 1px;
+    }
+    nav.toc ol {
+      margin: 0; padding-right: 24px; columns: 2; column-gap: 30px;
+    }
+    nav.toc li { margin: 4px 0; break-inside: avoid; }
+    nav.toc a {
+      color: var(--text-dim);
+      text-decoration: none;
+      font-size: 13px;
+    }
+    nav.toc a:hover { color: var(--primary); }
+    .panel {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 18px 22px;
+      margin: 16px 0;
+    }
+    .panel.warn { border-right: 3px solid var(--warn); }
+    .panel.danger { border-right: 3px solid var(--danger); }
+    .panel.info { border-right: 3px solid var(--accent); }
+    .panel.ok { border-right: 3px solid var(--primary); }
+    ul, ol { padding-right: 22px; }
+    li { margin: 4px 0; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0;
+      font-size: 13px;
+    }
+    th, td {
+      border: 1px solid var(--border-soft);
+      padding: 8px 10px;
+      text-align: right;
+      vertical-align: top;
+    }
+    th { background: var(--bg-soft); color: var(--primary); font-weight: normal; font-family: 'Courier New', monospace; }
+    tr:hover td { background: var(--bg-soft); }
+    .kbd {
+      display: inline-block;
+      background: var(--bg-soft);
+      border: 1px solid var(--border);
+      border-bottom-width: 2px;
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      color: var(--accent);
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 3px;
+      font-size: 11px;
+      font-family: 'Courier New', monospace;
+      border: 1px solid;
+    }
+    .badge.ok { background: #001a08; color: var(--primary); border-color: var(--primary); }
+    .badge.warn { background: #1a1100; color: var(--warn); border-color: var(--warn); }
+    .badge.danger { background: #1a0008; color: var(--danger); border-color: var(--danger); }
+    .badge.info { background: #00121a; color: var(--accent); border-color: var(--accent); }
+    .step {
+      display: inline-block;
+      width: 24px; height: 24px;
+      background: var(--primary); color: #000;
+      border-radius: 50%;
+      text-align: center; line-height: 24px;
+      font-weight: bold; font-family: monospace;
+      margin-left: 8px;
+    }
+    .flow {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      background: var(--bg-soft);
+      padding: 12px; border-radius: 4px;
+      font-family: monospace; font-size: 13px;
+      margin: 12px 0;
+    }
+    .flow .node {
+      background: var(--code-bg);
+      border: 1px solid var(--primary);
+      color: var(--primary);
+      padding: 6px 10px;
+      border-radius: 3px;
+    }
+    .flow .arrow { color: var(--text-mute); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+      margin: 12px 0;
+    }
+    .card {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px 16px;
+    }
+    .card .h {
+      color: var(--primary); font-family: 'Courier New', monospace;
+      font-size: 13px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px;
+    }
+    .card p { font-size: 13px; color: var(--text-dim); margin: 4px 0; }
+    footer {
+      margin-top: 60px; padding-top: 24px;
+      border-top: 1px solid var(--border-soft);
+      color: var(--text-mute); font-size: 12px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>Hunt Engine <span class="ver">v5.0.0</span></h1>
+  <p class="lead">راهنمای کامل — از Recon تا Steering Real-time ایجنت شکارچی</p>
+  <p style="color:var(--text-mute); font-size:13px; margin-top:14px;">
+    <span class="badge ok">v5.0.0</span>
+    Mid-Run Steering (Strix Parity) + بک‌اند Go/Fiber + فرانت React/TypeScript + PostgreSQL/Redis + Docker
+  </p>
+</header>
+
+<nav class="toc">
+  <h3>فهرست مطالب</h3>
+  <ol>
+    <li><a href="#intro">مقدمه — Hunt Engine چیست؟</a></li>
+    <li><a href="#stack">استک فنی و معماری</a></li>
+    <li><a href="#deploy">نصب و راه‌اندازی (Docker)</a></li>
+    <li><a href="#auth">ورود و سطوح دسترسی</a></li>
+    <li><a href="#targets">مدیریت تارگت‌ها</a></li>
+    <li><a href="#recon">پایپ‌لاین Recon (کشف و پروب)</a></li>
+    <li><a href="#ai-analysis">تحلیل AI (Triage / Summary / Report)</a></li>
+    <li><a href="#hunter">Hunter Agent (ایجنت شکارچی)</a></li>
+    <li><a href="#steering">Mid-Run Steering (v5.0.0)</a></li>
+    <li><a href="#approval">Human-Approval Gate</a></li>
+    <li><a href="#bugtests">Bug Tests + Bug Bounty Report</a></li>
+    <li><a href="#findings">Findings و Promoted Findings</a></li>
+    <li><a href="#agent-actions">Agent Actions (پیشنهاد/تأیید/اجرا)</a></li>
+    <li><a href="#agent-chat">Agent Chat (جلسات مکالمه)</a></li>
+    <li><a href="#memory">Target Memory و RAG</a></li>
+    <li><a href="#operator-skills">Operator Skills (مهارت‌های اپراتور)</a></li>
+    <li><a href="#two-account">Two-Account Testing (IDOR/BOLA)</a></li>
+    <li><a href="#policy">Target Policy</a></li>
+    <li><a href="#settings">تنظیمات (LLM / Telegram / VirusTotal / ...)</a></li>
+    <li><a href="#monitoring">مانیتورینگ و لاگ‌ها</a></li>
+    <li><a href="#deployment-flow">فلو دیپلوی و URLs</a></li>
+    <li><a href="#api">مرجع سریع API</a></li>
+    <li><a href="#security">نکات امنیتی و Scope</a></li>
+  </ol>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="intro"><span class="step">1</span> مقدمه — Hunt Engine چیست؟</h2>
+
+<div class="panel ok">
+<p><strong>Hunt Engine</strong> یک پلتفرم <strong>تجاری و سازمانی</strong> برای <strong>کشف سطح حمله (Attack Surface Discovery)، ارزیابی امنیتی، و Bug Bounty Hunting</strong> است. این پلتفرم ترکیبی از:</p>
+<ul>
+  <li><strong>Recon Pipeline خودکار</strong> با ۱۳ ابزار امنیتی معروف (subfinder، httpx، nuclei، katana، dnsx، ...)</li>
+  <li><strong>ایجنت AI شکارچی (Hunter Agent)</strong> که با LLM واقعی تست‌های امنیتی انجام می‌دهد (v5.0.0 قابلیت Steering real-time دارد)</li>
+  <li><strong>Agent های تحلیلی</strong> (Triage / Summary / Report) برای کمک به تصمیم‌گیری</li>
+  <li><strong>سیستم Two-Account</strong> برای تست IDOR/BOLA/BFLA</li>
+  <li><strong>Operator Skills</strong> — مهارت‌های قابل برنامه‌ریزی توسط اپراتور</li>
+  <li><strong>سیستم گزارش‌دهی</strong> PDF + Bug Bounty (HackerOne format)</li>
+</ul>
+</div>
+
+<p><strong>معماری کلان:</strong></p>
+<div class="flow">
+  <span class="node">Frontend (React/Vite)</span>
+  <span class="arrow">⇄</span>
+  <span class="node">Nginx (Reverse Proxy)</span>
+  <span class="arrow">⇄</span>
+  <span class="node">Backend (Go/Fiber)</span>
+  <span class="arrow">⇄</span>
+  <span class="node">PostgreSQL 15</span>
+  <span class="arrow">+</span>
+  <span class="node">Redis 7</span>
+  <span class="arrow">+</span>
+  <span class="node">LLM Provider (OpenRouter)</span>
+</div>
+
+<p>Backend در دو حالت dev (پورت‌های 5080/5443) و prod اجرا می‌شود. هر کدام Docker compose جداگانه با دیتابیس و ولوم مستقل دارند.</p>
+
+<!-- ============================================================ -->
+<h2 id="stack"><span class="step">2</span> استک فنی و معماری</h2>
+
+<div class="grid">
+  <div class="card">
+    <div class="h">Backend</div>
+    <p>Go 1.26 + Fiber + GORM + go-redis + JWT</p>
+    <p>پکیج‌ها: <code>internal/ai/hunter/</code>, <code>internal/worker/</code>, <code>internal/api/handlers/</code></p>
+  </div>
+  <div class="card">
+    <div class="h">Frontend</div>
+    <p>React 19 + TypeScript 5.9 + Vite 7 + Tailwind 3.4 + React Query 5 + lucide-react</p>
+    <p>تم HUNTOS: <code>bg-black/30</code>, <code>text-hack-*</code>, <code>border-hack-*</code></p>
+  </div>
+  <div class="card">
+    <div class="h">Database</div>
+    <p>PostgreSQL 15-alpine + Redis 7-alpine</p>
+    <p>dev: <code>huntdb_dev</code> / prod: <code>huntdb</code></p>
+  </div>
+  <div class="card">
+    <div class="h">Storage</div>
+    <p>Volume های <code>hunt_workspaces</code>, <code>custom_wordlists</code>, <code>hunt-wordlists</code></p>
+    <p>Docker socket به backend متصل است (برای recon)</p>
+  </div>
+</div>
+
+<h3>ساختار پوشه‌ها</h3>
+<pre><code>backend/
+├── cmd/server/main.go            # entrypoint + route registration
+├── internal/
+│   ├── ai/
+│   │   ├── hunter/               # Hunter Agent v5.0.0 (steering, tools, validators)
+│   │   ├── agents/               # Triage / Summary / Report
+│   │   ├── operator/             # Operator service (planning layer)
+│   │   ├── analysis/             # Commercial risk + target narrative
+│   │   └── recommendation/       # AI recommendations
+│   ├── api/handlers/             # HTTP endpoints (~150 routes)
+│   ├── api/middleware/           # JWT auth, owner scope
+│   ├── worker/                   # Recon pipeline (discovery / probing / crawling / security)
+│   │   ├── discovery/{subfinder,nmap}.go
+│   │   ├── phases/{discovery,probing,crawling,security}/
+│   │   ├── engine/{dispatcher,queue,locks}.go
+│   │   └── findings/generator.go
+│   ├── models/                   # GORM models (~25 models)
+│   ├── platform/{database,llmclient,redis,crypto}/
+│   ├── reports/                  # PDF + bug bounty report
+│   ├── service/                  # Auth context + Two-account
+│   └── utils/                    # JWT + helpers
+└── Dockerfile                    # golang:1.26-alpine + recon tools
+
+frontend/
+├── src/
+│   ├── pages/                    # 11 pages (Landing, Login, Dashboard, Targets, ...)
+│   ├── components/               # 28 components
+│   ├── api/                      # REST client + types
+│   └── layouts/MainLayout.tsx
+└── package.json                  # version 5.0.0
+</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="deploy"><span class="step">3</span> نصب و راه‌اندازی (Docker)</h2>
+
+<h3>Dev Stack (Staging)</h3>
+<p>dev stack در <code>/opt/hunt-engine/dev/app/</code> قرار دارد. کانتینرها با پیش‌وند <code>hunt-</code>.</p>
+
+<pre><code># کلون + تنظیم env
+git clone https://github.com/omidxplimbo/hunt-engine.git
+cd hunt-engine
+cp .env.example .env
+# ویرایش .env: JWT_SECRET (≥۳۲ کاراکتر)، DB_PASSWORD، DOMAIN_NAME، ...
+
+# بالا آوردن dev stack
+cd /opt/hunt-engine/dev/app
+docker compose -p hunt-dev -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+
+# مشاهده وضعیت
+docker ps --filter "name=hunt-"
+</code></pre>
+
+<p><strong>پورت‌های dev:</strong></p>
+<ul>
+  <li><code>5080</code> — HTTP</li>
+  <li><code>5443</code> — HTTPS</li>
+  <li>Backend داخلی: <code>8080</code></li>
+  <li>Frontend داخلی: <code>80</code></li>
+</ul>
+
+<h3>Prod Stack</h3>
+<p>prod stack در <code>/opt/hunt-engine/prod/app/</code>، کانتینرها با پیش‌وند <code>hunt-engine-</code>، DNS اختصاصی (BIND9)، certbot برای SSL.</p>
+
+<pre><code>cd /opt/hunt-engine/prod/app
+docker compose -p hunt-prod up -d --build
+</code></pre>
+
+<h3>تنظیمات ضروری <code>.env</code></h3>
+<pre><code>JWT_SECRET=at-least-32-characters-long-secret-here
+DB_USER=hunter
+DB_PASSWORD=secure_password
+DB_NAME=huntdb              # یا huntdb_dev
+DB_HOST=postgres
+REDIS_HOST=redis
+DOMAIN_NAME=stage.mustache-security.ir
+HUNT_MAX_REQUEST_BODY_MB=5120
+PROBE_BATCH_SIZE=1000
+DNSX_BATCH_SIZE=2000
+DNSX_THREADS=30
+AMASS_TIMEOUT_SECONDS=900
+TRUSTED_RESOLVERS=1.1.1.1,8.8.8.8
+NUCLEI_ALLOW_AI_TEMPLATES=false
+NUCLEI_CUSTOM_TEMPLATES_DIR=/data/nuclei/custom
+HUNT_NUCLEI_TIMEOUT=10m
+VIRUSTOTAL_API_KEY=
+</code></pre>
+
+<div class="panel warn">
+  <strong>هشدار:</strong> هرگز <code>JWT_SECRET</code> را با مقدار نمونه بگذارید. backend در <code>init()</code> panic می‌کند اگر طول آن کمتر از ۳۲ کاراکتر باشد.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="auth"><span class="step">4</span> ورود و سطوح دسترسی</h2>
+
+<p>سیستم احراز هویت JWT-based. توکن در <code>localStorage</code> مرورگر ذخیره می‌شود. سه سطح دسترسی:</p>
+<ul>
+  <li><strong>Public</strong> — صفحات Landing، Login، Documentation</li>
+  <li><strong>Protected</strong> — هر کاربر authenticated</li>
+  <li><strong>Admin</strong> — فقط ادمین (User Management، Nuclei Templates، System Settings)</li>
+</ul>
+
+<h3>ورود اولیه</h3>
+<p>ادمین پیش‌فرض در اولین startup ساخته می‌شود:</p>
+<pre><code>username: admin
+password: admin123
+</code></pre>
+<p>بعد از اولین ورود، فوراً رمز را عوض کنید.</p>
+
+<h3>مسیرهای Protected در Frontend</h3>
+<table>
+  <tr><th>مسیر</th><th>دسترسی</th><th>توضیح</th></tr>
+  <tr><td><code>/dashboard</code></td><td>auth</td><td>داشبورد اصلی + آمار</td></tr>
+  <tr><td><code>/targets</code></td><td>auth</td><td>لیست تارگت‌ها + ایجاد</td></tr>
+  <tr><td><code>/targets/:id</code></td><td>auth</td><td>جزئیات تارگت + Hunter + Findings + Policy</td></tr>
+  <tr><td><code>/operator-skills</code></td><td>auth</td><td>مهارت‌های اپراتور (CRUD)</td></tr>
+  <tr><td><code>/operator-learning</code></td><td>auth</td><td>یادگیری اپراتور (Personal methodology)</td></tr>
+  <tr><td><code>/account</code></td><td>auth</td><td>تنظیمات شخصی (LLM, Telegram, VirusTotal, ...)</td></tr>
+  <tr><td><code>/nuclei-templates</code></td><td>admin</td><td>مدیریت تمپلیت‌های Nuclei</td></tr>
+  <tr><td><code>/settings</code></td><td>admin</td><td>تنظیمات سیستم (concurrency, feature flags, ...)</td></tr>
+</table>
+
+<h3>ساختار Owner Scope</h3>
+<p>هر کاربر با <code>owner_key = "user:&lt;id&gt;"</code> داده‌های خودش را می‌بیند. ادمین‌ها <code>owner_key = "admin"</code> دارند و به همه تارگت‌ها دسترسی دارند. <code>user_id</code>/<code>created_by_user_id</code> فیلد actor/audit هستند.</p>
+
+<!-- ============================================================ -->
+<h2 id="targets"><span class="step">5</span> مدیریت تارگت‌ها</h2>
+
+<p>صفحه <code>/targets</code> لیست تمام تارگت‌های شما را نشان می‌دهد. هر تارگت با root_domain (مثلن <code>example.com</code> یا <code>http://internal:8000</code>) مشخص می‌شود.</p>
+
+<h3>ایجاد تارگت</h3>
+<ol>
+  <li>در <code>/targets</code> روی <span class="kbd">+ New Target</span> کلیک کنید.</li>
+  <li>نام، root domain، و توضیحات را وارد کنید.</li>
+  <li>(اختیاری) Policy پیش‌فرض برای تارگت تنظیم کنید.</li>
+  <li>ذخیره کنید.</li>
+</ol>
+
+<h3>عملیات روی تارگت</h3>
+<table>
+  <tr><th>عمل</th><th>API</th><th>توضیح</th></tr>
+  <tr><td>Discovery شروع</td><td><code>POST /targets/:id/discovery</code></td><td>شروع فاز ۱ (subfinder, assetfinder, ...)</td></tr>
+  <tr><td>Probe شروع</td><td><code>POST /targets/:id/probe</code></td><td>شروع httpx روی assets موجود</td></tr>
+  <tr><td>ادامه اسکن</td><td><code>POST /targets/:id/resume</code></td><td>ادامه اسکن متوقف‌شده</td></tr>
+  <tr><td>توقف</td><td><code>POST /targets/:id/stop</code></td><td>توقف کامل اسکن</td></tr>
+  <tr><td>ری‌استارت</td><td><code>POST /targets/:id/restart</code></td><td>از نو شروع</td></tr>
+  <tr><td>خروجی assets</td><td><code>GET /targets/:id/assets/download</code></td><td>CSV دانلود</td></tr>
+  <tr><td>خروجی URLs</td><td><code>GET /targets/:id/urls/download</code></td><td>TXT دانلود</td></tr>
+  <tr><td>خروجی IPs</td><td><code>GET /targets/:id/ips</code></td><td>TXT دانلود</td></tr>
+  <tr><td>گزارش PDF</td><td><code>GET /targets/:id/report.pdf</code></td><td>PDF حرفه‌ای</td></tr>
+  <tr><td>Export</td><td><code>GET /targets/export?id=...</code></td><td>JSON برای backup</td></tr>
+  <tr><td>Import</td><td><code>POST /targets/import</code></td><td>JSON برای بازیابی</td></tr>
+</table>
+
+<div class="panel info">
+<strong>نکته:</strong> <code>root_domain</code> می‌تواند scheme داشته باشد (<code>http://internal-app:8000</code>) که برای تست روی تارگت داخلی (مثل vulnapp fixture) مفید است.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="recon"><span class="step">6</span> پایپ‌لاین Recon (کشف و پروب)</h2>
+
+<p>پایپ‌لاین در <code>backend/internal/worker/phases/</code> به ۴ فاز تقسیم می‌شود:</p>
+
+<div class="flow">
+  <span class="node">Discovery (Pass3)</span>
+  <span class="arrow">→</span>
+  <span class="node">Probing (httpx)</span>
+  <span class="arrow">→</span>
+  <span class="node">Crawling (katana)</span>
+  <span class="arrow">→</span>
+  <span class="node">Security (nuclei)</span>
+</div>
+
+<h3>فاز ۱: Discovery (زیردامنه‌یابی)</h3>
+<p>در <code>backend/internal/worker/discovery/</code> و <code>backend/internal/worker/phases/discovery/</code>:</p>
+<table>
+  <tr><th>ابزار</th><th>فایل</th><th>کار</th></tr>
+  <tr><td><code>subfinder</code></td><td><code>worker/discovery/subfinder.go</code></td><td>Passive subdomain enum از ۴۰+ منبع</td></tr>
+  <tr><td><code>assetfinder</code></td><td>passive sources</td><td>subs از certificate transparency</td></tr>
+  <tr><td><code>alterx</code></td><td>alterx</td><td>Permutation (subs با الگوهای رایج)</td></tr>
+  <tr><td><code>dnsx</code></td><td>dnsx</td><td>Brute-force DNS با wordlist</td></tr>
+  <tr><td><code>cero</code></td><td>cero</td><td>Certificate Search</td></tr>
+  <tr><td><code>puredns</code></td><td>passive/puredns</td><td>MassDNS wrapper + wildcard filter</td></tr>
+  <tr><td><code>nmap</code></td><td><code>worker/discovery/nmap.go</code></td><td>Port scan (اختیاری)</td></tr>
+</table>
+
+<p>خروجی: لیست subdomains (assets) در جدول <code>assets</code>.</p>
+
+<h3>فاز ۲: Probing</h3>
+<p>در <code>backend/internal/worker/phases/probing/</code>:</p>
+<table>
+  <tr><th>ابزار</th><th>کار</th></tr>
+  <tr><td><code>httpx</code></td><td>HTTP probe: status, title, tech stack, CDN detection</td></tr>
+  <tr><td><code>cdncheck</code></td><td>تشخیص CDN (Cloudflare, Akamai, ...) برای جلوگیری از false positive</td></tr>
+</table>
+
+<p>خروجی: assets با status_code, title, technologies در <code>assets</code>.</p>
+
+<h3>فاز ۳: Crawling (اختیاری)</h3>
+<p>در <code>backend/internal/worker/phases/crawling/</code>:</p>
+<ul>
+  <li><code>katana</code> — JavaScript-based crawler</li>
+  <li><code>waybackurls</code>, <code>gau</code> — historical URL discovery</li>
+  <li><code>jsintel</code> — JavaScript intelligence (extract API endpoints, secrets)</li>
+</ul>
+
+<p>خروجی: <code>found_urls</code> با hash canonical.</p>
+
+<h3>فاز ۴: Security Scanning</h3>
+<p>در <code>backend/internal/worker/phases/security/</code>:</p>
+<ul>
+  <li><code>nuclei</code> — تمپلیت‌های آسیب‌پذیری (CVE, misconfig, exposure)</li>
+  <li>Custom nuclei templates در <code>/data/nuclei/custom</code></li>
+  <li>Takeover detection (subdomain takeover via CNAME)</li>
+</ul>
+
+<p>خروجی: <code>findings</code> با severity, CVE, PoC reference.</p>
+
+<h3>ایجاد صف اسکن</h3>
+<p>صف اسکن‌ها در <code>backend/internal/worker/engine/</code> مدیریت می‌شود:</p>
+<ul>
+  <li><strong>Queue</strong> — هر تارگت یک آیتم صف</li>
+  <li><strong>Dispatcher</strong> — یک worker در هر زمان (concurrency در <code>SystemConfig.max_concurrent_scans</code>)</li>
+  <li><strong>Locks</strong> — قفل per-target برای جلوگیری از race</li>
+</ul>
+
+<p>از <code>/dashboard</code> صف اسکن‌های فعال قابل مشاهده و کنترل است.</p>
+
+<!-- ============================================================ -->
+<h2 id="ai-analysis"><span class="step">7</span> تحلیل AI (Triage / Summary / Report)</h2>
+
+<p>سه ایجنت تحلیلی مستقل از Hunter Agent، روی <strong>findings موجود</strong> کار می‌کنند:</p>
+
+<table>
+  <tr><th>Agent</th><th>هدف</th><th>خروجی</th></tr>
+  <tr><td><strong>Triage</strong></td><td>دسته‌بندی findings: True/False Positive، severity validation</td><td>AI analysis row با verdict + reasoning</td></tr>
+  <tr><td><strong>Summary</strong></td><td>خلاصه executive-level از وضعیت تارگت</td><td>Agent run با narrative</td></tr>
+  <tr><td><strong>Report</strong></td><td>گزارش حرفه‌ای PDF-ready</td><td>Markdown + downloadable</td></tr>
+</table>
+
+<h3>نحوه استفاده</h3>
+<ol>
+  <li>به <code>/targets/:id</code> بروید (تب Analysis یا Agents).</li>
+  <li>روی <span class="kbd">Run Triage</span> / <span class="kbd">Run Summary</span> / <span class="kbd">Run Report</span> کلیک کنید.</li>
+  <li>نتیجه در چند ثانیه در همان صفحه ظاهر می‌شود.</li>
+</ol>
+
+<h3>Commercial Risk Engine</h3>
+<p>در <code>backend/internal/engine/smart_analyzer/</code> یک <strong>موتور deterministic</strong> برای محاسبه risk score 0-100 وجود دارد. این موتور <strong>guardrail</strong> دارد که جلوی inflation امتیاز را می‌گیرد. AI فقط نقش interpretation دارد — score نهایی deterministic است.</p>
+
+<!-- ============================================================ -->
+<h2 id="hunter"><span class="step">8</span> Hunter Agent (ایجنت شکارچی)</h2>
+
+<p>ایجنت شکارچی <strong>قلب پلتفرم</strong> است. این ایجنت یک LLM را با ۴ ابزار واقعی ترکیب می‌کند و روی تارگت تست‌های امنیتی واقعی انجام می‌دهد. در v5.0.0، این ایجنت <strong>real-time steerable</strong> است.</p>
+
+<h3>معماری Hunter Agent</h3>
+<pre><code>                    +-----------------------+
+                    |    Supervisor Agent    |  (multi mode)
+                    |  (LLM-driven loop      |
+                    |   with tool calling)   |
+                    +-----------+-----------+
+                                |
+              +---------+---------+---------+---------+
+              |         |         |         |         |
+        +-----+----+ +--+---+ +---+----+ +--+----+ +---+-----+
+        |  Recon   | | Vuln | | Exploit| |Browser| | Report  |
+        |  Worker  | | Scan | | Worker | | Worker| | Worker  |
+        +----------+ +------+ +--------+ +-------+ +---------+
+</code></pre>
+
+<h3>ابزارهای ایجنت</h3>
+<table>
+  <tr><th>ابزار</th><th>ریسک</th><th>فایل</th><th>کار</th></tr>
+  <tr><td><code>http</code></td><td><span class="badge ok">low</span></td><td><code>tools/http.go</code></td><td>GET/POST/PUT/DELETE با payload injection</td></tr>
+  <tr><td><code>browser</code></td><td><span class="badge warn">medium</span></td><td><code>tools/browser.go</code> (chromedp)</td><td>DOM XSS، form fill، screenshot</td></tr>
+  <tr><td><code>proxy</code></td><td><span class="badge warn">medium</span></td><td><code>tools/proxy.go</code> (goproxy)</td><td>MITM برای intercept ترافیک</td></tr>
+  <tr><td><code>shell</code></td><td><span class="badge danger">high</span></td><td><code>tools/shell.go</code></td><td>nuclei, sqlmap, httpx, nmap, ...</td></tr>
+</table>
+
+<h3>Validator ها (اعتبارسنجی اکسپلویت)</h3>
+<table>
+  <tr><th>Validator</th><th>روش</th><th>فایل</th></tr>
+  <tr><td><strong>XSS</strong></td><td>chromedp ListenTarget + native alert dialog</td><td><code>validators/xss.go</code></td></tr>
+  <tr><td><strong>SQLi</strong></td><td>sqlmap batch (--level 2 --risk 2)</td><td><code>validators/sqli.go</code></td></tr>
+  <tr><td><strong>SSRF</strong></td><td>OOB callback (interactsh-style)</td><td><code>validators/ssrf.go</code></td></tr>
+  <tr><td><strong>IDOR</strong></td><td>two-account fetch + Jaccard similarity</td><td><code>validators/idor.go</code></td></tr>
+</table>
+
+<h3>حالت‌های اجرا</h3>
+<table>
+  <tr><th>Mode</th><th>توضیح</th></tr>
+  <tr><td><code>single</code></td><td>یک AgentLoop کل تارگت را بررسی می‌کند (پیش‌فرض)</td></tr>
+  <tr><td><code>multi</code></td><td>Supervisor + یک worker per bug class (xss, sqli, ssrf, idor, ssti, ...)</td></tr>
+</table>
+
+<h3>Skills</h3>
+<p>فایل‌های Markdown در <code>backend/internal/ai/hunter/skills/</code> که شامل تکنیک‌های واقعی حمله، payload ها، روش‌های bypass هستند. ایجنت در system prompt خود skill های مرتبط را می‌بیند.</p>
+
+<h3>شروع Hunt</h3>
+<ol>
+  <li>به <code>/targets/:id</code> بروید.</li>
+  <li>تب <strong>Hunter</strong> را باز کنید.</li>
+  <li>Objective را بنویسید (مثلن "find reflected xss").</li>
+  <li>Mode را انتخاب کنید: <code>single</code> یا <code>multi</code>.</li>
+  <li>روی <span class="kbd">Start Hunt</span> کلیک کنید.</li>
+</ol>
+
+<p>ایجنت شروع می‌کند به reconnaissance، payload تزریق می‌کند، evidence ذخیره می‌کند، و در نهایت HunterResult + Bug Bounty Report تولید می‌کند.</p>
+
+<!-- ============================================================ -->
+<h2 id="steering"><span class="step">9</span> Mid-Run Steering (v5.0.0 — قابلیت جدید)</h2>
+
+<div class="panel ok">
+<p><strong>v5.0.0 بزرگ‌ترین feature این release است.</strong> حالا می‌توانید <strong>وسط اجرای hunt</strong> با ایجنت تعامل داشته باشید:</p>
+<ul>
+  <li>پیام chat بفرستید (مثلن "focus on /search?q=")</li>
+  <li>Objective را عوض کنید</li>
+  <li>Hunt را pause کنید، بعد resume</li>
+  <li>Hunt را cancel کنید</li>
+  <li>قبل از اجرای هر tool پرخطر (مثل shell)، تأیید (Approve) یا رد (Deny) کنید</li>
+</ul>
+</div>
+
+<h3>UI: چگونه با ایجنت چت کنیم؟</h3>
+<ol>
+  <li>Hunt را با <span class="kbd">Start Hunt</span> شروع کنید.</li>
+  <li>بعد از شروع، یک <strong>chat input</strong> در پایین کنترل‌ها ظاهر می‌شود.</li>
+  <li>هر پیامی که می‌نویسید و <kbd>Enter</kbd> می‌زنید، مستقیماً به LLM در next turn می‌رسد.</li>
+  <li>مثلن بنویسید: <code>focus on the /search endpoint</code> یا <code>try harder on the login form</code></li>
+</ol>
+
+<h3>UI: Pause / Resume / Cancel</h3>
+<table>
+  <tr><th>دکمه</th><th>زمان نمایش</th><th>کار</th></tr>
+  <tr><td><span class="kbd">Pause</span></td><td>وقتی hunt در حال اجراست</td><td>ایجنت بعد از turn فعلی متوقف می‌شود (status زرد می‌شود)</td></tr>
+  <tr><td><span class="kbd">Resume</span></td><td>وقتی hunt paused است</td><td>ادامه hunt از همین نقطه</td></tr>
+  <tr><td><span class="kbd">Cancel</span></td><td>running یا paused</td><td>توقف کامل + آزادسازی context</td></tr>
+</table>
+
+<h3>UI: تغییر Objective</h3>
+<ol>
+  <li>فیلد Objective در بالای پنل (همیشه قابل ویرایش).</li>
+  <li>متن را عوض کنید.</li>
+  <li>اگر hunt در حال اجراست، لینک <code>(send update)</code> در پایین فیلد ظاهر می‌شود.</li>
+  <li>روی <span class="kbd">(send update)</span> کلیک کنید تا objective جدید در next turn به LLM برسد.</li>
+</ol>
+
+<h3>وضعیت‌های Session (Status Badge)</h3>
+<table>
+  <tr><th>رنگ</th><th>Status</th><th>معنی</th></tr>
+  <tr><td><span class="badge danger">قرمز چشمک‌زن</span></td><td><code>running</code></td><td>ایجنت فعال</td></tr>
+  <tr><td><span class="badge warn">زرد</span></td><td><code>paused</code></td><td>متوقف‌شده توسط شما</td></tr>
+  <tr><td><span class="badge">خاکستری</span></td><td><code>cancelled</code></td><td>لغو شده</td></tr>
+  <tr><td><span class="badge ok">سبز</span></td><td><code>completed</code></td><td>تمام شده</td></tr>
+  <tr><td><span class="badge danger">قرمز</span></td><td><code>failed</code></td><td>خطا</td></tr>
+</table>
+
+<h3>Wire Protocol (WebSocket)</h3>
+<p>endpoint: <code>wss://&lt;host&gt;/api/targets/:id/hunter/ws?token=&lt;JWT&gt;</code></p>
+
+<p><strong>Server → Client events:</strong></p>
+<pre><code>{"type":"turn","turn":5,"detail":"Turn 5 of 20","timestamp":"..."}
+{"type":"tool_call","tool":"shell","params":{"cmd":"nuclei ..."}}
+{"type":"tool_result","tool":"shell","output":"...","truncated":true}
+{"type":"approval_required","action_id":"uuid","tool_name":"shell","params":{"cmd":"rm -rf /"}}
+{"type":"approval_resolved","detail":"approve:false:reason"}
+{"type":"paused","detail":"agent paused"}
+{"type":"resumed"}
+{"type":"cancelled"}
+{"type":"operator_message","detail":"focus on /search"}
+{"type":"objective_changed","detail":"new objective"}
+{"type":"finding","bug_class":"xss","detail":"...","confidence":0.95}
+{"type":"session_done","detail":"completed"}
+{"type":"done","summary":"..."}
+</code></pre>
+
+<p><strong>Client → Server commands:</strong></p>
+<pre><code>{"type":"message","content":"focus on /search?q="}
+{"type":"set_objective","content":"find auth bypass"}
+{"type":"pause"}
+{"type":"resume"}
+{"type":"cancel"}
+{"type":"approve","action_id":"uuid-from-approval_required"}
+{"type":"deny","action_id":"uuid","reason":"too aggressive"}
+{"type":"ping"}
+</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="approval"><span class="step">10</span> Human-Approval Gate</h2>
+
+<p>هر ابزار <strong>risk:high</strong> (در حال حاضر فقط <code>shell</code>) قبل از اجرا <strong>منتظر تأیید شما</strong> می‌ماند. این یک مکانیزم ایمنی است که ایجنت نتواند arbitrary command اجرا کند.</p>
+
+<h3>فلو تأیید</h3>
+<ol>
+  <li>ایجنت تصمیم می‌گیرد tool پرخطر اجرا کند.</li>
+  <li>ایجنت event <code>approval_required</code> با action_id و پارامترهای masked ارسال می‌کند.</li>
+  <li>UI یک <strong>modal</strong> نمایش می‌دهد: نام tool، پارامترها (credential ها با <code>***</code> mask شده)، و یک شمارنده معکوس ۶۰ ثانیه‌ای.</li>
+  <li>سه گزینه: <span class="kbd">Approve</span> / <span class="kbd">Deny</span> / <span class="kbd">Dismiss</span> (dismiss فقط modal را می‌بندد، بعد از ۶۰ ثانیه خودکار deny می‌شود).</li>
+  <li>اگر Approve: tool اجرا می‌شود.</li>
+  <li>اگر Deny: ایجنت پاسخ <code>[TOOL DENIED] reason</code> می‌بیند و استراتژی خود را تنظیم می‌کند.</li>
+</ol>
+
+<div class="panel warn">
+<strong>Timeout = Deny.</strong> اگر ۶۰ ثانیه پاسخ ندهید، ایجنت خودکار deny می‌شود. این <strong>fail-closed</strong> است.
+</div>
+
+<h3>Mask شدن Credential ها</h3>
+<p>قبل از ارسال <code>approval_required</code> به UI، مقادیر زیر با <code>***</code> جایگزین می‌شوند:</p>
+<ul>
+  <li><code>authorization</code>, <code>cookie</code>, <code>x-api-key</code>, <code>x-auth</code></li>
+  <li><code>apikey</code>, <code>api_key</code>, <code>token</code></li>
+  <li><code>password</code>, <code>secret</code></li>
+  <li>رشته‌هایی که شبیه header هستند (<code>Authorization: Bearer ...</code>)</li>
+</ul>
+
+<h3>Policy در کد</h3>
+<pre><code>// backend/internal/ai/hunter/tools/policy.go
+var DefaultPolicy = Policy{
+    Levels: map[string]RiskLevel{
+        "http":    RiskLow,     // passive probe
+        "browser": RiskMedium,  // first call per session asks
+        "proxy":   RiskMedium,  // intercepts all traffic
+        "shell":   RiskHigh,    // every call asks
+    },
+}
+</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="bugtests"><span class="step">11</span> Bug Tests + Bug Bounty Report</h2>
+
+<p>Hunter Agent به طور خودکار Bug Test هایی ایجاد می‌کند (هر <code>candidate</code> evidence یک Bug Test Run می‌شود). شما می‌توانید:</p>
+<ol>
+  <li>Bug Test Results را در UI مرور کنید.</li>
+  <li>Status را تنظیم کنید (<code>candidate</code> / <code>confirmed</code> / <code>false_positive</code>).</li>
+  <li>روی <span class="kbd">Promote to Finding</span> کلیک کنید تا به Finding اصلی تبدیل شود.</li>
+</ol>
+
+<h3>Bug Bounty Report</h3>
+<p>از <code>backend/internal/reports/bugbounty/</code>:</p>
+<ol>
+  <li>به <code>/targets/:id</code> → تب Hunter بروید.</li>
+  <li>روی <span class="kbd">Generate Bug Bounty Report</span> کلیک کنید.</li>
+  <li>خروجی JSON: <code>{"title","severity","cwe","steps_to_reproduce","poc","impact","remediation"}</code> — فرمت HackerOne.</li>
+  <li>روی <span class="kbd">Download .md</span> کلیک کنید تا فایل Markdown دانلود شود.</li>
+</ol>
+
+<pre><code>POST /api/targets/:id/hunter/report          # JSON
+GET  /api/targets/:id/hunter/report/download  # .md
+</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="findings"><span class="step">12</span> Findings و Promoted Findings</h2>
+
+<p><strong>Finding</strong> یک آسیب‌پذیری <strong>تأییدشده</strong> است که در جدول <code>findings</code> ذخیره می‌شود. سه منبع اصلی:</p>
+<ol>
+  <li><strong>Nuclei scan</strong> — فاز ۴ recon</li>
+  <li><strong>Bug Test promotion</strong> — از Hunter Agent results</li>
+  <li><strong>دستی</strong> — از طریق UI</li>
+</ol>
+
+<h3>وضعیت‌های Finding</h3>
+<ul>
+  <li><code>open</code> — تازه ایجاد شده</li>
+  <li><code>confirmed</code> — توسط اپراتور تأیید</li>
+  <li><code>resolved</code> — برطرف شده</li>
+  <li><code>false_positive</code> — مثبت کاذب</li>
+  <li><code>accepted_risk</code> — پذیرفته شده به عنوان ریسک</li>
+</ul>
+
+<h3>عملیات</h3>
+<pre><code>GET    /api/findings                       # لیست همه
+GET    /api/targets/:id/findings            # لیست per target
+GET    /api/targets/:id/findings/stats      # آمار
+GET    /api/targets/:id/findings/export     # CSV export
+PATCH  /api/findings/:id/status            # تغییر status
+</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="agent-actions"><span class="step">13</span> Agent Actions (پیشنهاد/تأیید/اجرا)</h2>
+
+<p>سیستم Agent Actions یک <strong>approval gate</strong> برای اقدامات پرخطر است (معماری شبیه Hunter Approval اما در سطح target):</p>
+
+<div class="flow">
+  <span class="node">پیشنهاد (propose)</span>
+  <span class="arrow">→</span>
+  <span class="node">تأیید (approve)</span>
+  <span class="arrow">→</span>
+  <span class="node">رد (reject)</span>
+  <span class="arrow">+</span>
+  <span class="node">اجرا (dispatch)</span>
+</div>
+
+<h3>نحوه استفاده</h3>
+<ol>
+  <li>Operator یا AI یک action پیشنهاد می‌دهد (مثلن "Run sqlmap on /search?q=").</li>
+  <li>Action در حالت <code>proposed</code> ذخیره می‌شود.</li>
+  <li>Admin می‌تواند <code>approve</code> یا <code>reject</code> کند.</li>
+  <li>اگر approved، dispatcher آن را اجرا می‌کند.</li>
+</ol>
+
+<pre><code>GET    /api/targets/:id/agent-actions
+POST   /api/targets/:id/agent-actions/propose
+POST   /api/targets/:id/agent-actions/:action_id/approve
+POST   /api/targets/:id/agent-actions/:action_id/reject
+POST   /api/targets/:id/agent-actions/:action_id/dispatch
+DELETE /api/targets/:id/agent-actions/:action_id
+</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="agent-chat"><span class="step">14</span> Agent Chat (جلسات مکالمه)</h2>
+
+<p>Agent Chat یک کانال <strong>مکالمه عمومی با AI</strong> درباره تارگت است (متفاوت از Hunter). مثلن: "این endpoint چیه؟" "آیا این CVE روی ما اثر داره؟" "چه الگویی برای تست XSS پیشنهاد می‌کنی؟"</p>
+
+<h3>API</h3>
+<pre><code>GET    /api/targets/:id/agent-chat/sessions
+POST   /api/targets/:id/agent-chat/sessions
+GET    /api/targets/:id/agent-chat/sessions/:session_id/messages
+POST   /api/targets/:id/agent-chat/sessions/:session_id/messages
+DELETE /api/targets/:id/agent-chat/sessions/:session_id
+</code></pre>
+
+<p>UI: <code>/targets/:id</code> → تب Agent Chat.</p>
+
+<!-- ============================================================ -->
+<h2 id="memory"><span class="step">15</span> Target Memory و RAG</h2>
+
+<p>هر تارگت یک <strong>حافظه</strong> دارد که شامل یافته‌های قبلی، الگوها، و context است. AI Agents از این حافظه به عنوان RAG استفاده می‌کنند.</p>
+
+<h3>انواع Memory</h3>
+<table>
+  <tr><th>Type</th><th>توضیح</th></tr>
+  <tr><td><code>hunt_result</code></td><td>خلاصه Hunt های قبلی</td></tr>
+  <tr><td><code>learning</code></td><td>creative patterns (Hunter Learning Engine)</td></tr>
+  <tr><td><code>evidence</code></td><td>PoC ها و response ها</td></tr>
+  <tr><td><code>user_note</code></td><td>یادداشت دستی اپراتور</td></tr>
+</table>
+
+<h3>API</h3>
+<pre><code>GET    /api/targets/:id/memory
+POST   /api/targets/:id/memory                 # ایجاد
+POST   /api/targets/:id/memory/ingest          # bulk ingest
+GET    /api/targets/:id/memory/context         # context برای LLM
+GET    /api/targets/:id/memory/retrieve       # RAG query
+GET    /api/targets/:id/memory/:memory_id
+DELETE /api/targets/:id/memory/:memory_id
+</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="operator-skills"><span class="step">16</span> Operator Skills (مهارت‌های اپراتور)</h2>
+
+<p>اپراتور می‌تواند <strong>skill های سفارشی</strong> بسازد که در حین planning ایجنت استفاده شوند. هر skill یک فایل Markdown است با YAML frontmatter (نام، توضیح، trigger signals، الگو).</p>
+
+<h3>ایجاد Skill</h3>
+<ol>
+  <li>به <code>/operator-skills</code> بروید.</li>
+  <li>روی <span class="kbd">+ New Skill</span> کلیک کنید.</li>
+  <li>نام، توضیح، محتوای Markdown، trigger signals (مثلن: "jwt, token, auth") را وارد کنید.</li>
+  <li>ذخیره کنید.</li>
+</ol>
+
+<h3>استفاده در Target</h3>
+<p>در <code>/targets/:id</code> → تب <strong>Operator Skill Profile</strong> می‌توانید skill های مناسب این تارگت را فعال/غیرفعال کنید.</p>
+
+<pre><code>GET    /api/operator-skills
+POST   /api/operator-skills
+GET    /api/operator-skills/:slug
+PATCH  /api/operator-skills/:id
+DELETE /api/operator-skills/:id
+GET    /api/targets/:id/operator-skill-profile
+PUT    /api/targets/:id/operator-skill-profile
+</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="two-account"><span class="step">17</span> Two-Account Testing (IDOR/BOLA/BFLA)</h2>
+
+<p>این feature برای تست آسیب‌پذیری‌های <strong>کنترل دسترسی</strong> است: یک request با دو حساب مختلف (Account A و Account B) می‌فرستد و مقایسه می‌کند.</p>
+
+<h3>نحوه استفاده</h3>
+<ol>
+  <li>در <code>/account</code> → Auth Contexts → دو Auth Context (با credentials دو حساب مختلف) بسازید.</li>
+  <li>به <code>/targets/:id</code> → Two-Account Scanner بروید.</li>
+  <li>Account A و B را انتخاب کنید.</li>
+  <li>روی <span class="kbd">Start Session</span> کلیک کنید.</li>
+  <li>نتایج: status code, response size, sensitive keys exposed.</li>
+</ol>
+
+<div class="panel info">
+<strong>Jaccard similarity</strong> بین responses دو حساب محاسبه می‌شود. اگر similarity بالا ولی account_id متفاوت باشد → IDOR محتمل.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="policy"><span class="step">18</span> Target Policy</h2>
+
+<p>هر تارگت می‌تواند یک <strong>Policy</strong> داشته باشد که محدودیت‌های scope را مشخص می‌کند:</p>
+<ul>
+  <li><strong>scope_hosts</strong> — لیست دامنه‌های مجاز</li>
+  <li><strong>exclude_paths</strong> — مسیرهای ممنوعه (<code>/admin</code>, <code>/logout</code>, ...)</li>
+  <li><strong>max_request_per_minute</strong></li>
+  <li><strong>destructive_tests_enabled</strong> — false برای safe mode</li>
+  <li><strong>scope_owner_email</strong> — ایمیل صاحب (برای احراز)</li>
+</ul>
+
+<h3>نحوه تنظیم</h3>
+<ol>
+  <li>به <code>/targets/:id</code> → تب <strong>Policy</strong> بروید.</li>
+  <li>مقادیر را تنظیم کنید.</li>
+  <li>ذخیره.</li>
+</ol>
+
+<p>هیچ action خودکار destructive اجازه ندارد مگر اینکه policy صریحاً اجازه بدهد.</p>
+
+<!-- ============================================================ -->
+<h2 id="settings"><span class="step">19</span> تنظیمات (LLM / Telegram / VirusTotal / ...)</h2>
+
+<p>اکثر تنظیمات <strong>per-user</strong> هستند (در <code>/account</code>)، بعضی <strong>admin-only</strong> (در <code>/settings</code>).</p>
+
+<h3>Per-User (در /account)</h3>
+<table>
+  <tr><th>بخش</th><th>API</th><th>توضیح</th></tr>
+  <tr><td>LLM Providers</td><td><code>/me/llm-providers</code></td><td>OpenAI, Anthropic, OpenRouter, custom. <strong>provider label باید <code>custom</code> باشد</strong> (سفارش کاربر).</td></tr>
+  <tr><td>VirusTotal</td><td><code>/me/virustotal-config</code></td><td>API key برای enrichment IP/domain</td></tr>
+  <tr><td>PureDNS Resolvers</td><td><code>/me/puredns-resolvers</code></td><td>DNS server های قابل اعتماد</td></tr>
+  <tr><td>Telegram</td><td><code>/me/telegram-config</code></td><td>Bot token + chat_id برای notifications</td></tr>
+  <tr><td>Subfinder Providers</td><td><code>/me/subfinder/providers</code></td><td>API key برای منابع passive (SecurityTrails, Censys, ...)</td></tr>
+  <tr><td>Wordlists</td><td><code>/me/wordlists</code></td><td>Upload / Download wordlist های شخصی</td></tr>
+  <tr><td>Feature Flags</td><td><code>/me/feature-flags</code></td><td>فعال/غیرفعال کردن feature های beta</td></tr>
+</table>
+
+<h3>Admin-Only (در /settings)</h3>
+<table>
+  <tr><th>بخش</th><th>توضیح</th></tr>
+  <tr><td>Concurrency</td><td><code>max_concurrent_scans</code> — تعداد اسکن همزمان</td></tr>
+  <tr><td>Feature Flags (global)</td><td>feature.target_policy, feature.agent_runs, ...</td></tr>
+  <tr><td>User Management</td><td>ساخت/حذف کاربر، تغییر role</td></tr>
+  <tr><td>System Config</td><td><code>PUT /api/config/:key</code></td></tr>
+</table>
+
+<h3>تنظیم LLM Provider</h3>
+<ol>
+  <li>به <code>/account</code> → LLM Providers.</li>
+  <li>روی <span class="kbd">+ Add Provider</span>.</li>
+  <li>فرم:
+    <ul>
+      <li><strong>Provider</strong>: دقیقاً <code>custom</code> وارد کنید (این rule محکم است).</li>
+      <li><strong>Base URL</strong>: <code>https://openrouter.ai/api/v1</code></li>
+      <li><strong>API Key</strong>: کلید OpenRouter شما</li>
+      <li><strong>Model</strong>: <code>stealth/ox-alpha</code> (پیشنهادی) یا هر مدل دلخواه</li>
+    </ul>
+  </li>
+  <li>ذخیره. این provider به عنوان <strong>default</strong> برای Hunter Agent و سایر AI features استفاده می‌شود.</li>
+</ol>
+
+<div class="panel warn">
+<strong>قانون سخت:</strong> نام provider باید <code>custom</code> باشد. اگر "openrouter" بگذارید، agent کار نمی‌کند.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="monitoring"><span class="step">20</span> مانیتورینگ و لاگ‌ها</h2>
+
+<h3>Dashboard</h3>
+<p><code>/dashboard</code>:</p>
+<ul>
+  <li>تعداد targets, assets, findings</li>
+  <li>صف اسکن‌های فعال</li>
+  <li>Hunter runs اخیر</li>
+</ul>
+
+<h3>System Logs (WebSocket)</h3>
+<p>endpoint: <code>wss://&lt;host&gt;/api/monitor/logs</code> (admin-only).</p>
+<p>UI: از <code>/settings</code> یا <code>Monitoring</code> تب.</p>
+<p>لاگ‌های realtime از همه سرویس‌ها (backend, worker, dns, ...) با ANSI colors.</p>
+
+<h3>Audit Logs</h3>
+<p><code>GET /api/targets/:id/audit-logs</code> — تمام اقدامات روی تارگت (چه کسی، چه زمانی، چه کرد).</p>
+
+<!-- ============================================================ -->
+<h2 id="deployment-flow"><span class="step">21</span> فلو دیپلوی و URLs</h2>
+
+<h3>محیط‌ها</h3>
+<table>
+  <tr><th>محیط</th><th>Domain</th><th>Path</th><th>Container Prefix</th></tr>
+  <tr><td>Dev/Staging</td><td><code>stage.mustache-security.ir</code></td><td><code>/opt/hunt-engine/dev/app/</code></td><td><code>hunt-*</code></td></tr>
+  <tr><td>Production</td><td><code>mustache-security.ir</code></td><td><code>/opt/hunt-engine/prod/app/</code></td><td><code>hunt-engine-*</code></td></tr>
+</table>
+
+<h3>Nginx Routing</h3>
+<p>یک nginx container به هر دو stack متصل است (هر دو Docker network). بر اساس <code>server_name</code> routing می‌کند.</p>
+
+<h3>Git Workflow</h3>
+<ul>
+  <li><code>main</code> — production-ready</li>
+  <li><code>dev</code> — staging</li>
+  <li>CI: <code>.github/workflows/ci.yml</code> (test+build on push/PR)</li>
+  <li>Images: <code>.github/workflows/build-images.yml</code> (GHCR push on main/v*/sandbox*/develop)</li>
+  <li>Manual build: <code>.github/workflows/docker-build.yml</code></li>
+</ul>
+
+<p>deploy targets: <code>deploy/prod/</code> و <code>deploy/sandbox/</code> با pre-built GHCR images.</p>
+
+<!-- ============================================================ -->
+<h2 id="api"><span class="step">22</span> مرجع سریع API</h2>
+
+<p>اکثر endpoint ها در <code>backend/cmd/server/main.go</code> ثبت شده‌اند. در اینجا گروه‌بندی سریع:</p>
+
+<h3>Auth</h3>
+<pre><code>POST /api/auth/login           # {username, password} → {token, user}
+GET  /api/test-auth-debug      # debug route
+</code></pre>
+
+<h3>Targets</h3>
+<pre><code>GET    /api/targets                       # لیست
+POST   /api/targets                       # ساخت
+GET    /api/targets/:id                   # جزئیات
+PATCH  /api/targets/:id                   # ویرایش
+DELETE /api/targets/:id                   # حذف (cascade)
+POST   /api/targets/:id/discovery         # شروع recon
+POST   /api/targets/:id/probe             # شروع probing
+POST   /api/targets/:id/scan              # alias discovery
+POST   /api/targets/:id/resume
+POST   /api/targets/:id/restart
+POST   /api/targets/:id/stop
+GET    /api/targets/:id/assets
+GET    /api/targets/:id/assets/download
+GET    /api/targets/:id/urls
+GET    /api/targets/:id/ips
+GET    /api/targets/:id/scan-state
+GET    /api/targets/:id/report.pdf
+</code></pre>
+
+<h3>Hunter (v5.0.0)</h3>
+<pre><code>POST   /api/targets/:id/hunter/start                       # async
+GET    /api/targets/:id/hunter/sessions                    # لیست
+POST   /api/targets/:id/hunter/sessions/:sid/pause
+POST   /api/targets/:id/hunter/sessions/:sid/resume
+DELETE /api/targets/:id/hunter/sessions/:sid
+GET    /api/targets/:id/hunter/results
+GET    /api/targets/:id/hunter/evidence
+GET    /api/targets/:id/hunter/report
+GET    /api/targets/:id/hunter/report/download
+WS     /api/targets/:id/hunter/ws?token=...               # bidirectional
+</code></pre>
+
+<h3>AI Analysis</h3>
+<pre><code>GET    /api/targets/:id/ai/analyses
+POST   /api/targets/:id/ai/analyses/generate
+DELETE /api/targets/:id/ai/analyses/:analysis_id
+GET    /api/targets/:id/ai/recommendations
+POST   /api/targets/:id/ai/recommendations/generate
+DELETE /api/targets/:id/ai/recommendations/:recommendation_id
+</code></pre>
+
+<h3>Agent Runs (Triage / Summary / Report)</h3>
+<pre><code>GET    /api/targets/:id/agents/runs
+POST   /api/targets/:id/agents/triage/run
+POST   /api/targets/:id/agents/summary/run
+POST   /api/targets/:id/agents/report/run
+DELETE /api/targets/:id/agents/runs/:run_id
+</code></pre>
+
+<h3>Findings</h3>
+<pre><code>GET    /api/findings
+GET    /api/targets/:id/findings
+GET    /api/targets/:id/findings/stats
+GET    /api/targets/:id/findings/export
+PATCH  /api/findings/:id/status
+</code></pre>
+
+<h3>Bug Tests</h3>
+<pre><code>GET    /api/targets/:id/bug-tests/runs
+POST   /api/targets/:id/bug-tests/runs
+GET    /api/targets/:id/bug-tests/results
+PATCH  /api/targets/:id/bug-tests/results/:result_id/status
+POST   /api/targets/:id/bug-tests/results/:result_id/promote
+DELETE /api/targets/:id/bug-tests/runs/:run_id
+DELETE /api/targets/:id/bug-tests/results/:result_id
+</code></pre>
+
+<h3>Memory</h3>
+<pre><code>GET    /api/targets/:id/memory
+POST   /api/targets/:id/memory
+POST   /api/targets/:id/memory/ingest
+GET    /api/targets/:id/memory/context
+GET    /api/targets/:id/memory/retrieve
+GET    /api/targets/:id/memory/:memory_id
+DELETE /api/targets/:id/memory/:memory_id
+</code></pre>
+
+<h3>Settings (per-user)</h3>
+<pre><code>GET    /api/me
+PATCH  /api/me
+POST   /api/me/change-password
+GET    /api/me/llm-providers
+PUT    /api/me/llm-providers
+DELETE /api/me/llm-providers/:provider
+GET    /api/me/virustotal-config
+PUT    /api/me/virustotal-config
+GET    /api/me/puredns-resolvers
+PUT    /api/me/puredns-resolvers
+GET    /api/me/telegram-config
+PUT    /api/me/telegram-config
+GET    /api/me/feature-flags
+PUT    /api/me/feature-flags
+GET    /api/me/subfinder/providers
+PUT    /api/me/subfinder/providers
+GET    /api/me/wordlists
+POST   /api/me/wordlists/upload
+POST   /api/me/wordlists/upload-url
+</code></pre>
+
+<h3>Settings (admin-only)</h3>
+<pre><code>GET    /api/config
+PUT    /api/config/:key
+GET    /api/dashboard/stats
+GET    /api/monitor/stats
+WS     /api/monitor/logs
+GET    /api/queue
+DELETE /api/queue
+DELETE /api/queue/:index
+POST   /api/queue/:index/move-top
+POST   /api/queue/:index/move-bottom
+</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="security"><span class="step">23</span> نکات امنیتی و Scope</h2>
+
+<div class="panel danger">
+<p><strong>قوانین سخت — تخطی نکنید:</strong></p>
+<ol>
+  <li><strong>Authorization context</strong>: هر تارگت باید متعلق به شما باشد یا مجوز کتبی داشته باشید. در <code>/targets/:id</code> → Policy می‌توانید <code>scope_owner_email</code> را برای proof ذخیره کنید.</li>
+  <li><strong>در System Prompt ایجنت</strong> صریحاً نوشته شده: target in-scope است و نباید روی authorization grounds stall کند. اگر اپراتور واقعن مجوز ندارد، نباید از این پلتفرم استفاده کند.</li>
+  <li><strong>Human-in-the-loop</strong> برای tool های <code>risk:high</code> اجباری است (60s timeout = deny).</li>
+  <li><strong>Auto-probing</strong>: Hunter Agent اگر URL در DB نباشد، خودش common paths را probe می‌کند. این می‌تواند باعث false positive در SIEM تارگت شود — مسئولیت شماست.</li>
+  <li><strong>rate-limit</strong>: <code>PROBE_BATCH_SIZE</code> و <code>DNSX_BATCH_SIZE</code> در .env تنظیم کنید تا تارگت overload نشود.</li>
+  <li><strong>target policy</strong>: <code>destructive_tests_enabled=false</code> به صورت پیش‌فرض safe است.</li>
+  <li><strong>Audit logs</strong>: تمام اقدامات ثبت می‌شوند. <code>GET /targets/:id/audit-logs</code>.</li>
+</ol>
+</div>
+
+<h3>JWT_SECRET</h3>
+<ul>
+  <li>حداقل ۳۲ کاراکتر</li>
+  <li>هرگز commit نکنید</li>
+  <li>rotate کنید وقتی شک به泄露 دارید</li>
+</ul>
+
+<h3>Provider LLM</h3>
+<ul>
+  <li>label = <code>custom</code> (hard rule)</li>
+  <li>API key را در <code>user_llm_provider_configs</code> نگه دارید (DB-encrypted at rest)</li>
+  <li>می‌توانید provider های مختلف per user داشته باشید</li>
+</ul>
+
+<h3>Destructive Tests</h3>
+<p>ایجنت <strong>هیچ تست destructive خودکار</strong> انجام نمی‌دهد مگر اینکه:</p>
+<ol>
+  <li>در <code>/targets/:id/policy</code> صریحاً enable شده باشد</li>
+  <li>اپراتور در حین اجرا approve کند (modal)</li>
+  <li>timeout نشود (60s)</li>
+</ol>
+
+<h3>ردپا در تارگت</h3>
+<ul>
+  <li>User-Agent شناسایی‌پذیر: حاوی نام tool</li>
+  <li>Source IP همان IP سرور Hunt Engine</li>
+  <li>Rate بالا در مدت کوتاه</li>
+</ul>
+
+<p>این در SIEM تارگت قابل شناسایی است. هماهنگی با تیم امنیتی تارگت قبل از تست production-grade الزامی است.</p>
+
+<footer>
+  <p>Hunt Engine v5.0.0 — مستندات فارسی — ساخته شده در ۲۰۲۶-۰۸-۲۷</p>
+  <p>commit: <code>de5ca52</code> · branch: <code>feat/hunter-mid-run-steering</code> · tag: <code>v5.0.0</code></p>
+  <p>برای E2E خودکار: <code>scripts/smoke_steering_v5_0_0_rc1.sh</code></p>
+</footer>
+
+</div>
+</body>
+</html>
