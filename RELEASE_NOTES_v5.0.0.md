@@ -87,7 +87,7 @@ ok  internal/api/handlers   0.231s
 - **Approval policy per-target** — the policy is hard-coded in `tools.Policy`.
 - **Resumable across backend restarts** — the session registry is in-process. If the backend container restarts, all in-flight sessions are lost.
 - **Approval for non-tool actions** — only tool invocations are gated. Changing the objective or sending a chat message requires no approval.
-- **E2E on vulnapp** (T9) — separate follow-up.
+- **E2E on vulnapp** (T9) — script written: `scripts/smoke_steering_v5_0_0_rc1.sh` (syntax-validated, follows the existing `smoke_*.sh` pattern). The live run is the next deploy step — the hunt-backend container must first be rebuilt from a checkout that includes the v5.0.0-rc.1 steering commits; the current `hunt-backend` image is the v5.0.0 baseline and does not yet have the steering handlers.
 
 ## Security notes
 
