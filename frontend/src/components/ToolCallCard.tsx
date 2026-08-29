@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronRight, Copy, Eye, EyeOff } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, EyeOff } from "lucide-react";
 import type { AgentEvent } from "../api/hunter";
 
 interface ToolCallCardProps {
