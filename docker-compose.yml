@@ -58,7 +58,6 @@ services:
   nginx:
     container_name: ${CONTAINER_PREFIX:-hunt}-nginx
     image: nginx:alpine
-    network_mode: host
     ports:
       - "${NGINX_HTTP_PORT:-80}:80"
       - "${NGINX_HTTPS_PORT:-443}:443"
@@ -70,6 +69,8 @@ services:
     depends_on:
       - frontend
       - backend
+    networks:
+      - hunt-net
     restart: unless-stopped
 
   postgres:
