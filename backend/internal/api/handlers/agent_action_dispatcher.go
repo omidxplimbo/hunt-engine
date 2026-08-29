@@ -1,15 +1,19 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/ai/hunter"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/models"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/auditlog"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/database"
+	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/llmclient"
 	"github.com/omidxplimbo/hunt-engine/backend/internal/platform/redisq"
 	jsintelphase "github.com/omidxplimbo/hunt-engine/backend/internal/worker/phases/security/jsintel"
 )
@@ -314,6 +318,16 @@ func DispatchTargetAgentAction(c *fiber.Ctx) error {
 			bridgeOutput = dispatchInspectBugPayloads(target, row)
 		case models.AgentActionTypePromoteBugTestResults:
 			bridgeOutput = dispatchPromoteBugTestResults(target, row)
+		// T15: bridge Agent Actions to the Hunter Agent. The
+		// dispatcher starts a real Hunter session in single mode with
+		// a focused objective, and returns the new session_id so the
+		// chat panel can deep-link to the live stream.
+		case models.AgentActionTypeTestXSSOnTarget:
+			bridgeOutput = dispatchStartHunter(target, row, uid, "xss", hunterObjectiveForAction(row, "reflected XSS via http and browser, including WAF bypass via craft_payload, DOM sinks, and stored XSS via forms"))
+		case models.AgentActionTypeTestSQLiOnTarget:
+			bridgeOutput = dispatchStartHunter(target, row, uid, "sqli", hunterObjectiveForAction(row, "SQL injection via http: error-based, blind boolean, blind time-based, and union-based; use sqlmap via shell if approved"))
+		case models.AgentActionTypeTestIDOROnTarget:
+			bridgeOutput = dispatchStartHunter(target, row, uid, "idor", hunterObjectiveForAction(row, "horizontal IDOR/BOLA: enumerate endpoints that take user_id or resource_id, compare two accounts' responses, flag divergent Jaccard similarity"))
 		}
 
 		if bridgeOutput != nil {
@@ -873,5 +887,101 @@ func dispatchPromoteBugTestResults(target models.Target, action models.AgentActi
 			"manual validation remains required",
 			"automatic severity escalation is disabled",
 		},
+	}
+}
+
+// --- T15: Agent Action → Hunter Agent bridge ---
+
+// hunterObjectiveForAction returns the objective string the Hunter
+// session will run with, prefixed with the operator's own description
+// from the action row (so the chat context is preserved). If the
+// action has no description or title, returns the default suffix.
+func hunterObjectiveForAction(action models.AgentAction, defaultSuffix string) string {
+	desc := strings.TrimSpace(action.Description)
+	if desc == "" {
+		desc = strings.TrimSpace(action.Title)
+	}
+	if desc == "" {
+		return defaultSuffix
+	}
+	return desc + " — " + defaultSuffix
+}
+
+// dispatchStartHunter is the bridge function for the three new
+// "test_*_on_target" action types. It creates a HuntSession, registers
+// it with the global SessionStore, and starts the agent in a
+// background goroutine — same pattern as the v5.0.0 StartHunt
+// handler. The returned map includes the session_id so the chat
+// panel can deep-link to the live stream.
+//
+// The dispatch returns SYNCHRONOUSLY (within milliseconds) — the
+// operator's approve→dispatch click is instant. The hunt itself
+// runs in the background and writes evidence + emits WS events
+// through the existing infrastructure.
+func dispatchStartHunter(target models.Target, action models.AgentAction, uid uint, modeHint, objective string) map[string]interface{} {
+	llmCfg, _ := llmclient.ResolveDefault("")
+	if llmCfg == nil {
+		log.Printf("[agent-action] %s: no LLM config available; running in preview-only mode", action.ActionType)
+		return map[string]interface{}{
+			"handler":      "hunter_bridge_" + modeHint,
+			"target_id":    target.ID,
+			"action_id":    action.ID,
+			"status":       "no_llm_config",
+			"error":        "no LLM provider configured for the operator's owner scope; the Hunter cannot start. Configure one in /account → LLM Providers.",
+			"preview":      true,
+		}
+	}
+
+	sess := hunter.NewHuntSession(target.ID, uid, "", "single", objective)
+	huntCtx, cancel := context.WithCancel(context.Background())
+	sess.CancelFn = cancel
+	HuntSessions.Add(sess)
+
+	agent := hunter.NewHunterAgent(database.DB, target, llmCfg, uid, "")
+	progressFn := func(tid uint, ev hunter.AgentEvent) {
+		PublishHuntEvent(tid, ev)
+	}
+	tid := target.ID
+
+	go func() {
+		defer cancel()
+		defer HuntSessions.Remove(tid, sess.ID)
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[agent-action] %s session %s panicked: %v", action.ActionType, sess.ID, r)
+				sess.SetError("agent panic")
+				sess.MarkStatus("failed")
+			}
+		}()
+
+		_, runErr := agent.Hunt(huntCtx, objective,
+			hunter.WithProgress(tid, progressFn),
+			hunter.WithPersistence(database.DB, tid, uid, ""),
+			hunter.WithSession(sess),
+		)
+		if runErr != nil {
+			sess.SetError(runErr.Error())
+			sess.MarkStatus("failed")
+		} else {
+			sess.MarkStatus("completed")
+		}
+		PublishHuntEvent(tid, hunter.AgentEvent{
+			Type:      "session_done",
+			Detail:    sess.Snapshot().Status,
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		})
+	}()
+
+	return map[string]interface{}{
+		"handler":      "hunter_bridge_" + modeHint,
+		"target_id":    target.ID,
+		"action_id":    action.ID,
+		"session_id":   sess.ID,
+		"ws_path":      fmt.Sprintf("/api/targets/%d/hunter/ws", target.ID),
+		"objective":    objective,
+		"mode":         "single",
+		"status":       "started",
+		"note":         "Hunter session started in the background. Connect to ws_path to see the live stream. Per-tool human-approval gates still apply (e.g. shell).",
+		"real_execution": true,
 	}
 }
